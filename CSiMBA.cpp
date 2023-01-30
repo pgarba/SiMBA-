@@ -57,9 +57,11 @@ cl::opt<bool> UseSigned("signed", cl::Optional,
                         cl::desc("Evaluate as signed values (default true)"),
                         cl::value_desc("signed"), cl::init(true));
 
-cl::opt<bool> RunParallel("parallel", cl::Optional,
-                        cl::desc("Evaluate/Check MBA expressions in parallel, give a nice boost on MBA with > 3 vars (default true)"),
-                        cl::value_desc("parallel"), cl::init(true));
+cl::opt<bool>
+    RunParallel("parallel", cl::Optional,
+                cl::desc("Evaluate/Check MBA expressions in parallel, give a "
+                         "nice boost on MBA with > 3 vars (default true)"),
+                cl::value_desc("parallel"), cl::init(true));
 
 /*
  * This is the main function of the program. It is called when the program is
@@ -70,7 +72,7 @@ int main(int argc, char **argv) {
 
   llvm::cl::ParseCommandLineOptions(argc, argv);
 
-  printf("CSiMBA - SiMBA in C++\n\n");
+  printf("SiMBA++ - SiMBA ported to C/C++\n\n");
 
   if (StrMBA == "" && StrMBADB == "") {
     llvm::cl::PrintHelpMessage();
@@ -115,7 +117,8 @@ int main(int argc, char **argv) {
       Counter++;
 
       auto Result = LSiMBA::Simplifier::simplify_linear_mba(
-          UseSigned, MBA, SimpMBA, BitCount, UseZ3, CheckLinear, UseFastCheck, RunParallel);
+          UseSigned, MBA, SimpMBA, BitCount, UseZ3, CheckLinear, UseFastCheck,
+          RunParallel);
 
       // Check if valid replacement
       if (Result == true) {
@@ -140,7 +143,7 @@ int main(int argc, char **argv) {
     auto stop = high_resolution_clock::now();
     auto duration = duration_cast<milliseconds>(stop - start);
     printf("MBAs: %d -> Counter: %d Valid: %d time: %dms avg: %lfms\n", All,
-           Counter, Valid, (int) duration.count(),
+           Counter, Valid, (int)duration.count(),
            (double)duration.count() / (double)All);
   } else {
     // Run Simplifier
@@ -153,10 +156,10 @@ int main(int argc, char **argv) {
 
     if (Result == true) {
       printf("[Simplified MBA] '%s time: %dms'\n", SimpMBA.c_str(),
-             (int) duration.count());
+             (int)duration.count());
     } else {
       printf("[Simplified MBA] Not valid replacement! '%s time: %dms'\n",
-             SimpMBA.c_str(), (int) duration.count());
+             SimpMBA.c_str(), (int)duration.count());
     }
   }
 
