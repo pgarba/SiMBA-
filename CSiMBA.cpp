@@ -27,7 +27,7 @@ cl::opt<std::string>
              cl::value_desc("mbadb"), cl::init(""));
 
 cl::opt<int> StopN("stop", cl::Optional,
-                   cl::desc("Stop after N MBAs (Default 0)"),
+                   cl::desc("Stop after N MBAs are solved (Default 0)"),
                    cl::value_desc("stop"), cl::init(0));
 
 cl::opt<int> BitCount("bitcount", cl::Optional,
@@ -50,17 +50,22 @@ cl::opt<bool>
 
 cl::opt<bool>
     CheckLinear("checklinear", cl::Optional,
-                cl::desc("Check if MBA is a linear expresssion (default true)"),
+                cl::desc("Check if MBA is a linear expresssion (Default true)"),
                 cl::value_desc("checklinear"), cl::init(true));
 
+cl::opt<bool> SimplifyExpected(
+    "simplify-expected", cl::Optional,
+    cl::desc("Simplify the expected value to match it (Default false)"),
+    cl::value_desc("simplify-expected"), cl::init(false));
+
 cl::opt<bool> UseSigned("signed", cl::Optional,
-                        cl::desc("Evaluate as signed values (default true)"),
+                        cl::desc("Evaluate as signed values (Default true)"),
                         cl::value_desc("signed"), cl::init(true));
 
 cl::opt<bool>
     RunParallel("parallel", cl::Optional,
                 cl::desc("Evaluate/Check MBA expressions in parallel, give a "
-                         "nice boost on MBA with > 3 vars (default true)"),
+                         "nice boost on MBA with > 3 vars (Default true)"),
                 cl::value_desc("parallel"), cl::init(true));
 
 /*
@@ -116,9 +121,16 @@ int main(int argc, char **argv) {
       All++;
       Counter++;
 
+      // Simplify MBA
       auto Result = LSiMBA::Simplifier::simplify_linear_mba(
           UseSigned, MBA, SimpMBA, BitCount, UseZ3, CheckLinear, UseFastCheck,
           RunParallel);
+
+      // Simplify Groundtruth
+      if (IgnoreExpected == false && SimplifyExpected == true) {
+        LSiMBA::Simplifier::simplify_linear_mba(
+            UseSigned, MBA, ExpMBA, BitCount, false, false, false, RunParallel);
+      }
 
       // Check if valid replacement
       if (Result == true) {
