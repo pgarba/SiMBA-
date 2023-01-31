@@ -4,6 +4,7 @@
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Support/Regex.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/ADT/StringExtras.h"
 
 #include <filesystem>
 #include <fstream>
@@ -91,7 +92,6 @@ bool Simplifier::simplify(std::string &simp_exp, bool useZ3, bool fastCheck) {
   if (fastCheck) {
     if (!this->probably_equivalent(this->originalExpression, simpl)) {
       Result = false;
-      // outs() << "[probably_equivalent] Simplification failed!\n";
     }
   }
 
@@ -773,16 +773,22 @@ void Simplifier::parse_and_replace_variables() {
 
   // # Sort the constants by length in order not to replace substrings of
   // larger numbers.
-  std::sort(constants.begin(), constants.end());
+  std::sort(constants.begin(), constants.end(), std::greater<>());
 
   // Finally replace those numbers by their decimal equivalents.
   for (auto &c : constants) {
     if (c.size() <= 1)
       report_fatal_error("Constant is to small!");
 
-    // convert to int
-    int64_t n = std::atoll(c.c_str());
-    string strN = to_string(n);
+    // convert to decimal string
+    int64_t n = 0;
+    auto valid = llvm::to_integer(c,n);
+    if (!valid) {
+      report_fatal_error("Could not parse integer!");
+    }
+
+    // create a string
+    string strN = llvm::utostr(n);
 
     // replace all occurences
     replace_all(this->originalExpression, c, strN);
