@@ -16,6 +16,8 @@ https://github.com/DenuvoSoftwareSolutions/SiMBA
 
 MBA evaluation and verification will be run in parallel, if the MBA has more than 3 variables.
 
+Not supported in LLVM, as LLVM does not support multithreading!
+
 # General Options
 
 ```
