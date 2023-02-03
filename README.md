@@ -8,8 +8,11 @@
 °°SiMBA ported to C/C++/LLVM ~pgarba~
 ```
 
-**SiMBA** (Tool for the simplification of linear mixed Boolean-arithmetic expressions (MBAs)) ported to **C/C++** with some enhancements and multithreading support.
+**SiMBA** (Tool for the simplification of linear mixed Boolean-arithmetic expressions (MBAs)) ported to **C/C++** with some enhancements and multithreading support. 
 
+* **Able to directly work on LLVM IR!**
+
+Ported from:
 https://github.com/DenuvoSoftwareSolutions/SiMBA
 
 # Multithreading
