@@ -11,17 +11,20 @@ MBA evaluation and verification will be run in parallel, if the MBA has more tha
 # General Options
 
 ```
-  --bitcount=<BitCount> - Bitcount of the variables (Default 64)
-  --checklinear         - Check if MBA is a linear expresssion (Default true)
-  --fastcheck           - Verify MBA with random values (Default true)
-  --ignore-expected     - Ignores the expected string (Default false)
-  --mba=<mba>           - MBA that will be simplified
-  --mbadb=<mbadb>       - MBA database that will be verfied/simplified
-  --parallel            - Evaluate/Check MBA expressions in parallel, give a nice boost on MBA with > 3 vars (Default true)
-  --signed              - Evaluate as signed values (Default true)
-  --stop=<stop>         - Stop after N MBAs (Default 0)
+  --bitcount=<BitCount>                             - Bitcount of the variables (Default 64)
+  --checklinear                                     - Check if MBA is a linear expresssion (Default true)
+  --convert-to-llvm=<Database output name>          - Converts the MBA database to LLVM (Default)
+  --fastcheck                                       - Verify MBA with random values (Default true)
+  --ignore-expected                                 - Ignores the expected string (Default false)
+  --ir=<ir>                                         - LLVM Module that contains MBA functions that will be verfied/simplified
+  --mba=<mba>                                       - MBA that will be verfied/simplified
+  --mbadb=<mbadb>                                   - MBA database that will be verfied/simplified
+  --parallel                                        - Evaluate/Check MBA expressions in parallel, give a nice boost on MBA with > 3 vars (Default true)
+  --signed                                          - Evaluate as signed values (Default true)
+  --simplify-expected                               - Simplify the expected value to match it (Default false)
+  --stop=<stop>                                     - Stop after N MBAs are solved (Default 0)
+  --z3                                              - Verify MBA with Z3 (Default false)
 ```
-
 
 # Performance
 

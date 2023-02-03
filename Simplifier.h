@@ -13,6 +13,8 @@
 // LSimba namespace
 namespace LSiMBA {
 
+const std::string VarAndConstsRegEx = "[0]?[a-zA-Z][a-zA-Z0-9_]*";
+
 // Some helper
 std::string strip(const std::string &inpt);
 
@@ -20,6 +22,9 @@ class Simplifier {
 public:
   Simplifier(int bitCount, bool UseSigned, bool runParallel,
              const std::string &expr);
+
+  Simplifier(int bitCount, bool UseSigned, bool runParallel, int VNumber,
+             std::vector<int64_t> ResultVector);
 
   static bool simplify_linear_mba(bool UseSigned, std::string &expr,
                                   std::string &simp_expr, int bitCount = 64,
@@ -30,22 +35,11 @@ public:
   // Some helpers
   static std::string strip(const std::string &inpt);
 
+  static std::vector<std::string> getVariables(std::string &expr);
+
+  bool simplify(std::string &simp_exp, bool useZ3, bool fastCheck);
+
 private:
-  const std::string VarAndConstsRegEx = "[0]?[a-zA-Z][a-zA-Z0-9_]*";
-
-  const std::vector<std::string> Bitwise_List_1 = {"0", "X[0]"};
-
-  const std::vector<std::string> Bitwise_List_2 = {
-      "0",             // [0 0 0 0]
-      "(X[0]&~X[1])",  // [0 1 0 0]
-      "~(X[0]|~X[1])", // [0 0 1 0]
-      "(X[0]^X[1])",   // [0 1 1 0]
-      "(X[0]&X[1])",   // [0 0 0 1]
-      "X[0]",          // [0 1 0 1]
-      "X[1]",          // [0 0 1 1]
-      "(X[0]|X[1])"    // [0 1 1 1]
-  };
-
   bool RunParallel;
 
   bool UseSigned;
@@ -66,6 +60,10 @@ private:
 
   std::vector<int64_t> resultVector;
 
+  std::vector<int64_t> initialResultVector;
+
+  SplitMix64 SP64;
+
   void init(int bitCount, bool UseSigned, bool runParallel,
             const std::string &expr);
 
@@ -77,6 +75,8 @@ private:
   void parse_and_replace_variables();
 
   void init_groupsizes();
+
+  void set_initial_result_vector();
 
   void init_result_vector();
 
@@ -129,17 +129,11 @@ private:
 
   void get_variable_combinations(std::vector<std::vector<int>> &comb);
 
-  std::vector<std::string> rex(std::string &expr, const std::string &regex);
+  static std::vector<std::string> rex(std::string &expr,
+                                      const std::string &regex);
 
   void replace_all(std::string &str, const std::string &from,
                    const std::string &to);
-
-  bool simplify(std::string &simp_exp, bool useZ3, bool fastCheck);
-
-  // heuristic to check if MBA is equal
-  const int NUM_TEST_CASES = 256;
-
-  SplitMix64 SP64;
 
   bool probably_equivalent(std::string &expr0, std::string &expr1);
   bool probably_equivalent_parallel(std::string &expr0, std::string &expr1);

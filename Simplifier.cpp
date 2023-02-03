@@ -1,10 +1,10 @@
 #include "Simplifier.h"
 
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Support/Regex.h"
 #include "llvm/Support/raw_ostream.h"
-#include "llvm/ADT/StringExtras.h"
 
 #include <filesystem>
 #include <fstream>
@@ -15,12 +15,14 @@
 #include <thread>
 #include <vector>
 
+#include "BitwiseList.h"
+#include "CSiMBA.h"
+#include "MBAChecker.h"
 #include "ShuttingYard.h"
 #include "veque.h"
 
 using namespace llvm;
 using namespace std;
-#include "MBAChecker.h"
 
 namespace LSiMBA {
 Simplifier::Simplifier(int bitCount, bool UseSigned, bool runParallel,
@@ -29,6 +31,39 @@ Simplifier::Simplifier(int bitCount, bool UseSigned, bool runParallel,
 
   this->init(bitCount, UseSigned, runParallel, expr);
 };
+
+Simplifier::Simplifier(int bitCount, bool UseSigned, bool runParallel,
+                       int VNumber, std::vector<int64_t> ResultVector)
+    : bitCount(0), modulus(0), vnumber(0),
+      SP64(VNumber * bitCount * ResultVector.back()) {
+  this->groupsizes = {1};
+  this->bitCount = bitCount;
+  this->modulus = pow(2, bitCount);
+  this->originalVariables = {};
+  this->originalExpression = "";
+  this->vnumber = VNumber;
+
+  // fill result vector
+  for (auto v : ResultVector) {
+    this->resultVector.push_back(v);
+  }
+
+  this->RunParallel = runParallel;
+  this->UseSigned = UseSigned;
+  this->MaxThreadCount = thread::hardware_concurrency();
+
+  // create fake variables
+  for (int i = 0; i < this->vnumber; i++) {
+    char c = 'a' + i;
+    string strC = string(1, c);
+    this->originalVariables.push_back(strC);
+  }
+
+  // Store initial result vector for later use
+  this->initialResultVector = this->resultVector;
+
+  this->init_groupsizes();
+}
 
 void Simplifier::init(int bitCount, bool UseSigned, bool runParallel,
                       const std::string &expr) {
@@ -54,7 +89,7 @@ std::string &Simplifier::get_vname(int i) {
     return this->varMap.at(i);
   else
 
-  this->varMap[i] = "X[" + std::to_string(i) + "]";
+    this->varMap[i] = "X[" + std::to_string(i) + "]";
   return this->varMap[i];
 }
 
@@ -117,7 +152,8 @@ bool Simplifier::probably_equivalent(std::string &expr0, std::string &expr1) {
     return this->probably_equivalent_parallel(expr0, expr1);
   }
 
-  auto f = [&](std::string &expr, llvm::SmallVector<int64_t, 16> &par) -> int64_t {
+  auto f = [&](std::string &expr,
+               llvm::SmallVector<int64_t, 16> &par) -> int64_t {
     auto n = eval(expr, par);
     auto m = this->mod_red(n);
     return m;
@@ -155,7 +191,8 @@ bool Simplifier::probably_equivalent_parallel(std::string &expr0,
 
   bool IsValid = true;
 
-  auto f = [&](std::string &expr, llvm::SmallVector<int64_t, 16> &par) -> int64_t {
+  auto f = [&](std::string &expr,
+               llvm::SmallVector<int64_t, 16> &par) -> int64_t {
     auto n = eval(expr, par);
     auto m = this->mod_red(n);
     return m;
@@ -384,7 +421,8 @@ Simplifier::try_eliminate_unique_value(std::vector<int64_t> &uniqueValues,
 }
 
 void Simplifier::try_refine(std::string &expr) {
-  this->init_result_vector();
+  // Use inital result vector.
+  this->set_initial_result_vector();
 
   // The number of terms.
   int count = 1;
@@ -507,11 +545,11 @@ void Simplifier::try_refine(std::string &expr) {
     }
     expr = to_string(constant) + "+" + simpler;
     return;
-  }  
+  }
 }
 
 void Simplifier::append_conjunction(std::string &expr, int64_t coeff,
-                                           std::vector<int> &variables) {
+                                    std::vector<int> &variables) {
 
   if (variables.size() <= 0) {
     report_fatal_error("No variables in append_conjunction");
@@ -688,7 +726,8 @@ std::string Simplifier::simplify_one_value(std::set<int64_t> &resultSet) {
   return simExpre;
 }
 
-void Simplifier::get_variable_combinations(std::vector<std::vector<int>> &comb) {
+void Simplifier::get_variable_combinations(
+    std::vector<std::vector<int>> &comb) {
   for (int v = 0; v < this->vnumber; v++) {
     comb.push_back({v});
   }
@@ -708,6 +747,29 @@ void Simplifier::get_variable_combinations(std::vector<std::vector<int>> &comb) 
       New = nnew;
     }
   }
+}
+
+std::vector<std::string> Simplifier::getVariables(std::string &expr) {
+  std::vector<std::string> Variables;
+
+  auto varsAndConstants = rex(expr, VarAndConstsRegEx);
+
+  std::set<std::string> varSet;
+  for (auto &S : varsAndConstants) {
+    if (S.front() != '0')
+      varSet.insert(S);
+  }
+
+  // List of unique variables.
+  for (auto &S : varSet) {
+    Variables.push_back(S);
+  }
+
+  // # First sort in alphabetical order since it is nice to have, e.g., 'x'
+  // preceding 'y'.
+  std::sort(Variables.begin(), Variables.end());
+
+  return Variables;
 }
 
 std::vector<std::string> Simplifier::rex(std::string &expr,
@@ -782,7 +844,7 @@ void Simplifier::parse_and_replace_variables() {
 
     // convert to decimal string
     int64_t n = 0;
-    auto valid = llvm::to_integer(c,n);
+    auto valid = llvm::to_integer(c, n);
     if (!valid) {
       report_fatal_error("Could not parse integer!");
     }
@@ -807,6 +869,10 @@ void Simplifier::init_groupsizes() {
   for (int i = 1; i < this->vnumber; i++) {
     this->groupsizes.push_back(2 * this->groupsizes.back());
   }
+}
+
+void Simplifier::set_initial_result_vector() {
+  this->resultVector = this->initialResultVector;
 }
 
 /*
@@ -839,10 +905,14 @@ void Simplifier::init_result_vector() {
 
     this->resultVector.push_back(f(par));
   }
+
+  // Store initial result vector for later use
+  this->initialResultVector = this->resultVector;
 }
 
 void Simplifier::init_result_vector_parallel() {
-  auto f = [&](std::string expr, llvm::SmallVector<int64_t, 16> par) -> int64_t {
+  auto f = [&](std::string expr,
+               llvm::SmallVector<int64_t, 16> par) -> int64_t {
     auto n = eval(expr, par);
     auto m = this->mod_red(n);
     return m;
@@ -864,8 +934,9 @@ void Simplifier::init_result_vector_parallel() {
     threads.push_back(async(launch::async, f, this->originalExpression, par));
     CurThreadCount++;
 
-    // Wait for first thread to finish, should be ok as they all take the same expression
-    if (CurThreadCount == this->MaxThreadCount) {      
+    // Wait for first thread to finish, should be ok as they all take the same
+    // expression
+    if (CurThreadCount == this->MaxThreadCount) {
       this->resultVector.push_back(threads.front().get());
       threads.pop_front();
 
@@ -903,38 +974,18 @@ std::string Simplifier::strip(const std::string &inpt) {
 
 const std::vector<std::string> Simplifier::get_bitwise_list() {
   if (this->vnumber != 1 && this->vnumber != 2 && this->vnumber != 3) {
-    report_fatal_error("Error: Only 1, 2 or 3 variables are supported!");
+    report_fatal_error("[!] Error: Only 1, 2 or 3 variables are supported!");
   }
 
   if (this->vnumber == 1) {
     return Bitwise_List_1;
   } else if (this->vnumber == 2) {
     return Bitwise_List_2;
+  } else if (this->vnumber == 3) {
+    return Bitwise_List_3;
   }
 
-  // get current directory
-  auto currentDir = filesystem::current_path();
-  auto truthfile = currentDir / (string("bitwise_list_") +
-                                 to_string(this->vnumber) + "vars.txt");
-
-  // read lines from file
-  std::ifstream infile(truthfile.c_str());
-  if (infile.is_open() == false) {
-    report_fatal_error("Could not open bitwise_list file!\n", false);
-  }
-
-  std::string line;
-  std::vector<std::string> bitwiseExprList;
-
-  while (std::getline(infile, line)) {
-    // split line at '#' and strip whitespaces
-    line = line.substr(0, line.find('#'));
-    line = strip(line);
-
-    bitwiseExprList.push_back(line);
-  }
-
-  return bitwiseExprList;
+  return {};
 }
 
 int Simplifier::get_bitwise_index_for_vector(std::vector<int64_t> &vector,

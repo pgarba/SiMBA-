@@ -9,6 +9,12 @@
 #include <llvm/ADT/APInt.h>
 #include <llvm/ADT/SmallVector.h>
 #include <llvm/ADT/StringRef.h>
+#include <llvm/IR/Constants.h>
+#include <llvm/IR/Instructions.h>
+#include <llvm/IR/LLVMContext.h>
+#include <llvm/IR/Module.h>
+
+#include <llvm/IR/IRBuilder.h>
 
 #include "veque.h"
 
@@ -24,24 +30,55 @@ public:
     Operator,
     LeftParen,
     RightParen,
+    Variable
   };
 
   Token(Type type, const std::string &s, int precedence = -1,
         bool rightAssociative = false, bool unary = false)
       : type{type}, str(s), precedence{precedence},
-        rightAssociative{rightAssociative}, unary{unary} {}
+        rightAssociative{rightAssociative}, unary{unary}, ArgIndex{0} {}
 
   Type type;
+
   std::string str;
+
   int precedence;
+
   bool rightAssociative;
+
   bool unary;
+
+  // Arg Index if Variable type
+  int ArgIndex;
 };
 
-void exprToTokens(const std::string &expr, veque::veque<Token> &tokens) {
+int8_t isVariable(const char *c, std::vector<std::string> *VNames) {
+  if (VNames == nullptr)
+    report_fatal_error("VNames is nullptr");
+
+  for (int i = 0; i < VNames->size(); i++) {
+    if (strncmp(c, (*VNames)[i].c_str(), (*VNames)[i].size()) == 0)
+      return i;
+  }
+
+  return -1;
+}
+
+void exprToTokens(const std::string &expr, veque::veque<Token> &tokens,
+                  bool detectVariables = false,
+                  std::vector<std::string> *VNames = nullptr) {
+  int Index;
   for (const auto *p = expr.c_str(); *p; ++p) {
     if (isblank(*p)) {
       // do nothing
+    } else if (detectVariables && (Index = isVariable(p, VNames)) != -1) {
+      // detected a variable
+      auto t = Token{Token::Type::Variable, (*VNames)[Index]};
+      t.ArgIndex = Index;
+      tokens.push_back(t);
+
+      // skip the variable name
+      p += (*VNames)[Index].size() - 1;      
     } else if (isdigit(*p)) {
       const auto *b = p;
       while (isdigit(*p)) {
@@ -223,6 +260,9 @@ void shuntingYard(const veque::veque<Token> &tokens,
         stack.pop_back();
       }
       break;
+    case Token::Type::Variable: {
+      queue.push_back(token);
+    } break;
 
     default:
       printf("error (%s)\n", token.str.c_str());
@@ -247,12 +287,140 @@ void shuntingYard(const veque::veque<Token> &tokens,
 }
 
 void replace_all(std::string &str, const std::string &from,
-                             const std::string &to) {
+                 const std::string &to) {
   size_t start_pos = 0;
   while ((start_pos = str.find(from, start_pos)) != std::string::npos) {
     str.replace(start_pos, from.length(), to);
     start_pos += to.length();
   }
+}
+
+llvm::Function *createLLVMFunction(llvm::Module *M, llvm::Type *IntType,
+                                   std::string &expr,
+                                   std::vector<std::string> &VNames,
+                                   uint64_t Modulus) {
+  // Parse expressions and create token
+  veque::veque<Token> tokens;
+  exprToTokens(expr, tokens, true, &VNames);
+
+  // Create deque to parse the operations
+  veque::veque<Token> queue;
+  shuntingYard(tokens, queue);
+
+  // Create new function
+  std::vector<llvm::Type *> ArgsTy;
+  for (int i = 0; i < VNames.size(); i++) {
+    ArgsTy.push_back(IntType);
+  }
+
+  auto FTy = llvm::FunctionType::get(IntType, ArgsTy, false);
+  auto F = llvm::Function::Create(
+      FTy, llvm::GlobalValue::LinkageTypes::ExternalLinkage, "MBA_Simp", *M);
+
+  // Create new BB
+  auto *BB = llvm::BasicBlock::Create(M->getContext(), "MBA_BB", F);
+
+  // Create the builder to build
+  llvm::IRBuilder<> Builder(BB);
+
+  SmallVector<llvm::Value *, 32> stackAP;
+
+  while (!queue.empty()) {
+    const auto token = queue.front();
+    queue.pop_front();
+    switch (token.type) {
+    case Token::Type::Variable: {
+      auto ArgIndex = token.ArgIndex;
+      stackAP.push_back(F->getArg(ArgIndex));
+    } break;
+    case Token::Type::Number: {
+      APInt APV(64, token.str, 10);
+      auto CI = llvm::ConstantInt::get(IntType, APV);
+      stackAP.push_back(CI);
+    } break;
+
+    case Token::Type::Operator: {
+      if (token.unary) {
+        // unray operators
+        const auto rhsAP = stackAP.back();
+        stackAP.pop_back();
+
+        switch (token.str[0]) {
+        default:
+          printf("Operator error [%s]\n", token.str.c_str());
+          exit(0);
+          break;
+        case 'm': // Special operator name for unary '-'
+          // stackAP.push_back(-rhsAP);
+          stackAP.push_back(Builder.CreateNeg(rhsAP));
+          break;
+        case '~':
+          // stackAP.push_back(~rhsAP);
+          stackAP.push_back(Builder.CreateNot(rhsAP));
+          break;
+        case '!':
+          // stackAP.push_back(rhsAP);
+          printf("! operator not implemented\n");
+          exit(-1);
+          break;
+        }
+      } else {
+        // binary operators
+        const auto rhsAP = stackAP.back();
+        stackAP.pop_back();
+
+        const auto lhsAP = stackAP.back();
+        stackAP.pop_back();
+
+        switch (token.str[0]) {
+        default:
+          printf("Operator error [%s]\n", token.str.c_str());
+          exit(0);
+          break;
+        case '^':
+          // stackAP.push_back(lhsAP ^ rhsAP);
+          stackAP.push_back(Builder.CreateXor(lhsAP, rhsAP));
+          break;
+        case '*':
+          // stackAP.push_back(lhsAP * rhsAP);
+          stackAP.push_back(Builder.CreateMul(lhsAP, rhsAP));
+          break;
+        case '/':
+          // stackAP.push_back(lhsAP.sdiv(rhsAP));
+          stackAP.push_back(Builder.CreateSDiv(lhsAP, rhsAP));
+          break;
+        case '&':
+          // stackAP.push_back(lhsAP & rhsAP);
+          stackAP.push_back(Builder.CreateAnd(lhsAP, rhsAP));
+          break;
+        case '|':
+          // stackAP.push_back(lhsAP | rhsAP);
+          stackAP.push_back(Builder.CreateOr(lhsAP, rhsAP));
+          break;
+        case '+':
+          // stackAP.push_back(lhsAP + rhsAP);
+          stackAP.push_back(Builder.CreateAdd(lhsAP, rhsAP));
+          break;
+        case '-':
+          // stackAP.push_back(lhsAP - rhsAP);
+          stackAP.push_back(Builder.CreateSub(lhsAP, rhsAP));
+          break;
+        }
+      }
+    } break;
+
+    default:
+      printf("Token error\n");
+      exit(0);
+    }
+  }
+
+  // Create return value
+  auto &ModV = stackAP.back();
+
+  Builder.CreateRet(ModV);
+
+  return F;
 }
 
 int64_t eval(std::string expr, SmallVector<int64_t, 16> &par) {
@@ -263,11 +431,10 @@ int64_t eval(std::string expr, SmallVector<int64_t, 16> &par) {
 
     replace_all(expr, var, val);
   }
-  
-  veque::veque<Token> tokens;
 
+  veque::veque<Token> tokens;
   exprToTokens(expr, tokens);
-  
+
   veque::veque<Token> queue;
   shuntingYard(tokens, queue);
 
@@ -366,5 +533,5 @@ int64_t eval(std::string expr, SmallVector<int64_t, 16> &par) {
   // Dont trigger the assert in LLVM
   APInt APn = stackAP.back() & 0xFFFFFFFFFFFFFFFF;
 
-  return APn.getSExtValue();
+  return APn.getLimitedValue();
 }
