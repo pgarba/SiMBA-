@@ -36,7 +36,7 @@ cl::opt<std::string> StrIR("ir", cl::Optional,
 
 cl::opt<std::string>
     ConvertToLLVM("convert-to-llvm", cl::Optional,
-                  cl::desc("Converts the MBA database to LLVM (Default)"),
+                  cl::desc("Converts the MBA database to LLVM"),
                   cl::value_desc("Database output name"), cl::init(""));
 
 cl::opt<int> StopN("stop", cl::Optional,
