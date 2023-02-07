@@ -78,7 +78,7 @@ void exprToTokens(const std::string &expr, veque::veque<Token> &tokens,
       tokens.push_back(t);
 
       // skip the variable name
-      p += (*VNames)[Index].size() - 1;      
+      p += (*VNames)[Index].size() - 1;
     } else if (isdigit(*p)) {
       const auto *b = p;
       while (isdigit(*p)) {
@@ -295,6 +295,119 @@ void replace_all(std::string &str, const std::string &from,
   }
 }
 
+void createLLVMReplacement(llvm::Instruction *InsertionPoint,
+                           llvm::Type *IntType, std::string &expr,
+                           std::vector<std::string> &VNames,
+                           llvm::SmallVectorImpl<llvm::Value *> &Variables) {
+  // Parse expressions and create token
+  veque::veque<Token> tokens;
+  exprToTokens(expr, tokens, true, &VNames);
+
+  // Create deque to parse the operations
+  veque::veque<Token> queue;
+  shuntingYard(tokens, queue);
+
+  // Create the builder to build
+  llvm::IRBuilder<> Builder(InsertionPoint);
+
+  SmallVector<llvm::Value *, 32> stackAP;
+
+  while (!queue.empty()) {
+    const auto token = queue.front();
+    queue.pop_front();
+    switch (token.type) {
+    case Token::Type::Variable: {
+      auto ArgIndex = token.ArgIndex;
+      stackAP.push_back(Variables[ArgIndex]);
+    } break;
+    case Token::Type::Number: {
+      APInt APV(IntType->getIntegerBitWidth(), token.str, 10);
+      auto CI = llvm::ConstantInt::get(IntType, APV);
+      stackAP.push_back(CI);
+    } break;
+
+    case Token::Type::Operator: {
+      if (token.unary) {
+        // unray operators
+        const auto rhsAP = stackAP.back();
+        stackAP.pop_back();
+
+        switch (token.str[0]) {
+        default:
+          printf("Operator error [%s]\n", token.str.c_str());
+          exit(0);
+          break;
+        case 'm': // Special operator name for unary '-'
+          // stackAP.push_back(-rhsAP);
+          stackAP.push_back(Builder.CreateNeg(rhsAP));
+          break;
+        case '~':
+          // stackAP.push_back(~rhsAP);
+          stackAP.push_back(Builder.CreateNot(rhsAP));
+          break;
+        case '!':
+          // stackAP.push_back(rhsAP);
+          printf("! operator not implemented\n");
+          exit(-1);
+          break;
+        }
+      } else {
+        // binary operators
+        const auto rhsAP = stackAP.back();
+        stackAP.pop_back();
+
+        const auto lhsAP = stackAP.back();
+        stackAP.pop_back();
+
+        switch (token.str[0]) {
+        default:
+          printf("Operator error [%s]\n", token.str.c_str());
+          exit(0);
+          break;
+        case '^':
+          // stackAP.push_back(lhsAP ^ rhsAP);
+          stackAP.push_back(Builder.CreateXor(lhsAP, rhsAP));
+          break;
+        case '*':
+          // stackAP.push_back(lhsAP * rhsAP);
+          stackAP.push_back(Builder.CreateMul(lhsAP, rhsAP));
+          break;
+        case '/':
+          // stackAP.push_back(lhsAP.sdiv(rhsAP));
+          stackAP.push_back(Builder.CreateSDiv(lhsAP, rhsAP));
+          break;
+        case '&':
+          // stackAP.push_back(lhsAP & rhsAP);
+          stackAP.push_back(Builder.CreateAnd(lhsAP, rhsAP));
+          break;
+        case '|':
+          // stackAP.push_back(lhsAP | rhsAP);
+          stackAP.push_back(Builder.CreateOr(lhsAP, rhsAP));
+          break;
+        case '+':
+          // stackAP.push_back(lhsAP + rhsAP);
+          stackAP.push_back(Builder.CreateAdd(lhsAP, rhsAP));
+          break;
+        case '-':
+          // stackAP.push_back(lhsAP - rhsAP);
+          stackAP.push_back(Builder.CreateSub(lhsAP, rhsAP));
+          break;
+        }
+      }
+    } break;
+
+    default:
+      printf("Token error\n");
+      exit(0);
+    }
+  }
+
+  // Replace MBA
+  auto &ModV = stackAP.back();
+
+  InsertionPoint->replaceAllUsesWith(ModV);
+}
+
 llvm::Function *createLLVMFunction(llvm::Module *M, llvm::Type *IntType,
                                    std::string &expr,
                                    std::vector<std::string> &VNames,
@@ -334,7 +447,7 @@ llvm::Function *createLLVMFunction(llvm::Module *M, llvm::Type *IntType,
       stackAP.push_back(F->getArg(ArgIndex));
     } break;
     case Token::Type::Number: {
-      APInt APV(64, token.str, 10);
+      APInt APV(IntType->getIntegerBitWidth(), token.str, 10);
       auto CI = llvm::ConstantInt::get(IntType, APV);
       stackAP.push_back(CI);
     } break;

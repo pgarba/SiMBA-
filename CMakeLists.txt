@@ -23,7 +23,6 @@ LLVMTransformUtils
 LLVMAnalysis
 LLVMTarget
 LLVMOption
-LLVMMC
 LLVMObject 
 LLVMBitReader 
 LLVMCore

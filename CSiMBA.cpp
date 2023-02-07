@@ -1,11 +1,14 @@
+#include "CSiMBA.h"
+
+#include <chrono>
+#include <filesystem>
+#include <fstream>
+
 #include "llvm/IR/Module.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/InitLLVM.h"
 
-#include <chrono>
-#include <filesystem>
-#include <fstream>
 
 #include "CSiMBA.h"
 #include "LLVMParser.h"
@@ -39,6 +42,10 @@ cl::opt<std::string>
                   cl::desc("Converts the MBA database to LLVM"),
                   cl::value_desc("Database output name"), cl::init(""));
 
+cl::opt<std::string> Output("out", cl::Optional,
+                            cl::desc("Stores the output into this file"),
+                            cl::value_desc("out"), cl::init(""));
+
 cl::opt<int> StopN("stop", cl::Optional,
                    cl::desc("Stop after N MBAs are solved (Default 0)"),
                    cl::value_desc("stop"), cl::init(0));
@@ -46,6 +53,12 @@ cl::opt<int> StopN("stop", cl::Optional,
 cl::opt<int> BitCount("bitcount", cl::Optional,
                       cl::desc("Bitcount of the variables (Default 64)"),
                       cl::value_desc("BitCount"), cl::init(64));
+
+cl::opt<bool> DetectAndSimplify(
+    "detect-simplify", cl::Optional,
+    cl::desc(
+        "Search for MBAs in LLVM Module and try to simplify (Default false)"),
+    cl::value_desc("detect-simplify"), cl::init(false));
 
 cl::opt<bool> UseZ3("z3", cl::Optional,
                     cl::desc("Verify MBA with Z3 (Default false)"),
@@ -102,9 +115,9 @@ void SimplifyMBADatabase();
 void SimplifyLLVMModule();
 
 /**
- * @brief Convert a MBA database to LLVM module
+ * @brief Simplify a LLVM module with  MBA functions
  */
-void ConvertMBADatabaseToLLVM();
+void SimplifyLLVMDataBase();
 
 /**
  * @brief Run Simplifier
@@ -136,7 +149,9 @@ int main(int argc, char **argv) {
     return 0;
   }
 
-  if (StrIR != "") {
+  if (StrIR != "" && !DetectAndSimplify) {
+    SimplifyLLVMDataBase();
+  } else if (StrIR != "" && DetectAndSimplify) {
     SimplifyLLVMModule();
   } else if (StrMBADB != "") {
     SimplifyMBADatabase();
@@ -253,10 +268,27 @@ void SimplifyMBADatabase() {
   }
 }
 
+void SimplifyLLVMDataBase() {
+  outs() << "[+] Loading LLVM MBA Module: '" << StrIR << "'\n";
+
+  LSiMBA::LLVMParser Parser(StrIR, Output, BitCount, UseSigned, RunParallel,
+                            UseFastCheck, RunOptimizer);
+
+  auto start = high_resolution_clock::now();
+
+  int MBACount = Parser.simplifyMBAFunctionsOnly();
+
+  auto stop = high_resolution_clock::now();
+  auto duration = duration_cast<milliseconds>(stop - start);
+
+  outs() << "[+] MBAs: '" << MBACount << "' time: " << (int)duration.count()
+         << "ms\n";
+}
+
 void SimplifyLLVMModule() {
   outs() << "[+] Loading LLVM Module: '" << StrIR << "'\n";
 
-  LSiMBA::LLVMParser Parser(StrIR, BitCount, UseSigned, RunParallel,
+  LSiMBA::LLVMParser Parser(StrIR, Output, BitCount, UseSigned, RunParallel,
                             UseFastCheck, RunOptimizer);
 
   auto start = high_resolution_clock::now();
@@ -266,8 +298,8 @@ void SimplifyLLVMModule() {
   auto stop = high_resolution_clock::now();
   auto duration = duration_cast<milliseconds>(stop - start);
 
-  outs() << "[+] MBAs: '" << MBACount << "' time: " << (int)duration.count()
-         << "ms\n";
+  outs() << "[+] MBAs found and replaced: '" << MBACount
+         << "' time: " << (int)duration.count() << "ms\n";
 }
 
 void RunSimplifier(std::string &MBA, std::string &SimpMBA, std::string &ExpMBA,

@@ -573,7 +573,7 @@ void Simplifier::append_conjunction(std::string &expr, int64_t coeff,
   }
 
   // Get rid of last '&'.
-  expr = expr.substr(0, expr.size() - 1);
+  expr = expr.substr(0, expr.size() - 1);  
 
   if (variables.size() > 1) {
     expr += ")";
