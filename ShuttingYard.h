@@ -10,7 +10,8 @@ class Type;
 class Value;
 }; // namespace llvm
 
-int64_t eval(std::string expr, llvm::SmallVector<int64_t, 16> &par);
+int64_t eval(std::string expr, llvm::SmallVector<int64_t, 16> &par,
+             int *OperationCount = nullptr);
 
 llvm::Function *createLLVMFunction(llvm::Module *M, llvm::Type *IntType,
                                    std::string &expr,

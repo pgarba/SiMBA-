@@ -536,7 +536,8 @@ llvm::Function *createLLVMFunction(llvm::Module *M, llvm::Type *IntType,
   return F;
 }
 
-int64_t eval(std::string expr, SmallVector<int64_t, 16> &par) {
+int64_t eval(std::string expr, SmallVector<int64_t, 16> &par,
+             int *OperationCount) {
   // Replace variables with values in expression
   for (int i = 0; i < par.size(); i++) {
     std::string var = "X[" + std::to_string(i) + "]";
@@ -553,6 +554,8 @@ int64_t eval(std::string expr, SmallVector<int64_t, 16> &par) {
 
   SmallVector<APInt, 32> stackAP;
 
+  int Operations = 0;
+
   while (!queue.empty()) {
     const auto token = queue.front();
     queue.pop_front();
@@ -564,6 +567,8 @@ int64_t eval(std::string expr, SmallVector<int64_t, 16> &par) {
     } break;
 
     case Token::Type::Operator: {
+      Operations++;
+
       if (token.unary) {
         // unray operators
         const auto rhsAP = stackAP.back();
@@ -641,6 +646,11 @@ int64_t eval(std::string expr, SmallVector<int64_t, 16> &par) {
       printf("Token error\n");
       exit(0);
     }
+  }
+  
+  // Set operation count
+  if (OperationCount) {
+    *OperationCount = Operations;
   }
 
   // Dont trigger the assert in LLVM

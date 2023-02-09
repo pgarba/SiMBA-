@@ -14,6 +14,7 @@
 #include "llvm/Support/TargetSelect.h"
 #include "llvm/Support/Threading.h"
 #include "llvm/Transforms/IPO/PassManagerBuilder.h"
+#include "llvm/Transforms/Utils/Cloning.h"
 #include "llvm/Transforms/Utils/Evaluator.h"
 
 #include <memory>
@@ -26,7 +27,7 @@
 #include "Simplifier.h"
 #include "veque.h"
 
-#define DEBUG_SIMPLIFICATION
+// #define DEBUG_SIMPLIFICATION
 
 using namespace llvm;
 using namespace std;
@@ -39,11 +40,11 @@ llvm::LLVMContext LLVMParser::Context;
 LLVMParser::LLVMParser(const std::string &filename,
                        const std::string &OutputFile, int BitWidth, bool Signed,
                        bool Parallel, bool Verify, bool OptimizeBefore,
-                       bool OptimizeAfter)
+                       bool OptimizeAfter, bool Debug)
     : OutputFile(OutputFile), BitWidth(BitWidth), Signed(Signed),
       Parallel(Parallel), Verify(Verify), OptimizeBefore(OptimizeBefore),
-      OptimizeAfter(OptimizeAfter), SP64(filename.length()), TLII(nullptr),
-      TLI(nullptr) {
+      OptimizeAfter(OptimizeAfter), Debug(Debug), SP64(filename.length()),
+      TLII(nullptr), TLI(nullptr) {
   if (!this->parse(filename)) {
     llvm::errs() << "[!] Error: Could not parse file " << filename << "\n";
     return;
@@ -74,6 +75,8 @@ int LLVMParser::simplifyMBAFunctionsOnly() {
   if (this->OptimizeAfter) {
     runLLVMOptimizer();
   }
+
+  writeModule();
 
   return Count;
 }
@@ -187,11 +190,23 @@ int LLVMParser::extractAndSimplify() {
   }
 
   // Walk through all functions
-  outs() << "[+] Simplifying " << Functions.size() << " function(s) ...\t";
+  outs() << "[+] Simplifying " << Functions.size() << " function(s) ...\n";
+
   auto start = high_resolution_clock::now();
   for (auto F : Functions) {
+    if (F->getName().contains("_keep")) {
+      outs() << "[!] Skipping simplification of function: " << F->getName()
+             << "\n";
+      continue;
+    }
     int MBACount = 0;
+    bool Found = false;
+
     DominatorTree DT(*F);
+
+    // Clone function to compare
+    ValueToValueMapTy VMap;
+    auto FClone = CloneFunction(F, VMap);
 
     // Measure Time
     auto start = high_resolution_clock::now();
@@ -201,21 +216,20 @@ int LLVMParser::extractAndSimplify() {
     this->extractCandidates(*F, Candidates);
 
     // Find valid replacements for candidates
-    auto Found = this->findReplacements(&DT, Candidates);
-    if (!Found) {
-      continue;
-    }
+    Found = this->findReplacements(&DT, Candidates);
 
     // Apply replacements and optimize
     for (int i = 0; i < Candidates.size(); i++) {
       if (Candidates[i].isValid == false)
         continue;
 
+      if (this->Debug) {
+        outs() << "[!] Simplified to: " << Candidates[i].Replacement << "\n";
+      }
+
       std::vector<std::string> VNames;
-      SmallVector<llvm::Value *, 8> Variables;
       char ArgName = 'a';
       for (auto &Arg : F->args()) {
-        Variables.push_back(&Arg);
         VNames.push_back(std::string(1, ArgName++));
       }
 
@@ -226,11 +240,35 @@ int LLVMParser::extractAndSimplify() {
       MBASimplified++;
       MBACount++;
     }
+
+    if (Found) {
+      // Verify that the function is still behaving the same as before
+      uint64_t Modulus = pow(2, 32);
+      auto IsValid = verify(F, FClone, Modulus);
+      if (IsValid) {
+        outs() << "[!] Valid Function simplification for function: "
+               << F->getName() << "\n";
+
+        // Keep replacement
+        FClone->eraseFromParent();
+
+        MBASimplified++;
+        MBACount++;
+      } else {
+        outs() << "[!] Not Valid Function simplification for function: "
+               << F->getName() << "\n";
+
+        // Delete non valid function and keep original copy
+        auto OrgName = F->getName();
+        F->eraseFromParent();
+        FClone->setName(OrgName);
+      }
+    }
   }
 
   auto stop = high_resolution_clock::now();
   auto duration = duration_cast<milliseconds>(stop - start);
-  outs() << "Done! " << MBASimplified << " MBAs simplified ("
+  outs() << "[+] Done! " << MBASimplified << " MBAs simplified ("
          << duration.count() << " ms)\n";
 
   // Optimize if any replacements
@@ -258,7 +296,9 @@ int LLVMParser::simplifyMBAModule() {
 
   // Walk through all functions
   uint64_t Modulus = pow(2, this->BitWidth);
+
   outs() << "[+] Simplifying " << Functions.size() << " functions ...\t";
+
   auto start = high_resolution_clock::now();
   for (auto F : Functions) {
     // Get the terminator
@@ -294,6 +334,11 @@ int LLVMParser::simplifyMBAModule() {
     if (this->Verify && !this->verify(F, FSimp, Modulus)) {
       llvm::errs() << "[!] Error: Simplification is not valid for function "
                    << F->getName() << "\n";
+    }
+
+    // Debug out
+    if (this->Debug) {
+      outs() << "\n[*] Simplified Expression: " << SimpExpr << "\n";
     }
   }
 
@@ -331,9 +376,11 @@ bool LLVMParser::verify(llvm::Function *F0, llvm::Function *F1,
   // Run in parallel when user asked for it
   // WARINING: This is not working yet because LLVM does not support
   // multithreading
-  if (this->Parallel && 1 != 1) {
+  /*
+  if (this->Parallel) {
     return this->verify_parallel(F0, F1, Modulus);
   }
+  */
 
   auto RetTy = F0->getReturnType();
   auto RetVal0 = ConstantInt::get(RetTy, 0);
@@ -387,6 +434,9 @@ bool LLVMParser::verify(llvm::SmallVectorImpl<BFSEntry> &AST,
     replace_all(Expr1_replVar, StrVar, "X[" + std::to_string(i) + "]");
   }
 
+  // The number of operations in the new expressions
+  int Operations = 0;
+
   llvm::SmallVector<int64_t, 16> par;
   for (int i = 0; i < NUM_TEST_CASES; i++) {
     for (int j = 0; j < VNumber; j++) {
@@ -397,10 +447,7 @@ bool LLVMParser::verify(llvm::SmallVectorImpl<BFSEntry> &AST,
 
     // Eval AST
     auto R0 = this->evaluateAST(AST, Variables, par) % Modulus;
-    auto R1 = eval(Expr1_replVar, par) % Modulus;
-
-    // Eval->EvaluateFunction(F0, RetVal0, par);
-    // Eval->EvaluateFunction(F1, RetVal1, par);
+    auto R1 = eval(Expr1_replVar, par, &Operations) % Modulus;
 
     if (R0 != R1) {
       return false;
@@ -409,7 +456,13 @@ bool LLVMParser::verify(llvm::SmallVectorImpl<BFSEntry> &AST,
     par.clear();
   }
 
-  return true;
+  // Check if replacement is cheaper than original expression
+  if (AST.size() > Operations) {
+    return true;
+  }
+
+  // Otherwise don't apply this replacement
+  return false;
 }
 
 bool LLVMParser::verify_parallel(llvm::Function *F0, llvm::Function *F1,
@@ -581,11 +634,13 @@ bool LLVMParser::findReplacements(llvm::DominatorTree *DT,
 
 #ifdef DEBUG_SIMPLIFICATION
   // Debug out
-  Candidates.front().Candidate->getFunction()->dump();
+  Candidates.front().Candidate->getFunction()->print(outs());
 #endif
 
   // Search for replacements
-  for (auto &Cand : Candidates) {
+  std::vector<MBACandidate> SubASTCandidates;
+  for (int i = 0; i < Candidates.size(); i++) {
+    auto &Cand = Candidates[i];
     getAST(DT, Cand.Candidate, Cand.AST, Cand.Variables, true);
 
     if (Cand.AST.size() == 0 || Cand.AST.size() == 1) {
@@ -599,10 +654,12 @@ bool LLVMParser::findReplacements(llvm::DominatorTree *DT,
     // Debug print variables
     outs() << "[*] Variables:\n";
     for (auto Var : Cand.Variables) {
-      Var->dump();
+      Var->print(outs());
+      outs() << "\n";
     }
 #endif
 
+    // Try to simplify the whole AST
     uint64_t Modulus =
         pow(2, Cand.AST.front().I->getType()->getIntegerBitWidth());
 
@@ -615,21 +672,86 @@ bool LLVMParser::findReplacements(llvm::DominatorTree *DT,
 
     S.simplify(Cand.Replacement, false, false);
 
-    // Debug out
-#ifdef DEBUG_SIMPLIFICATION
-    outs() << "[*] Simplified Expression: " << Cand.Replacement << "\n";
-#endif
-
     // Verify is replacement is valid
     Cand.isValid = this->verify(Cand.AST, Cand.Replacement, Cand.Variables);
     if (Cand.isValid == false) {
-      outs() << "Invalid!\n";
-    }
+      // Could not simplify the whole AST so walk through SubASTs
+      ReplacementFound = walkSubAST(DT, Cand.AST, SubASTCandidates);
+    } else {
+      if (this->Debug) {
+        outs() << "[*] Full AST Simplified Expression: " << Cand.Replacement
+               << "\n";
+      }
 
-    ReplacementFound |= Cand.isValid;
+      ReplacementFound = true;
+    }
   }
 
+  // Clean up Candidates and keep only valid ones
+  std::vector<MBACandidate> ValidCandidates;
+
+  for (auto &C : Candidates) {
+    if (!C.isValid)
+      continue;
+
+    ValidCandidates.push_back(C);
+  }
+
+  // Merge candidates with new candidates
+  for (auto &C : SubASTCandidates) {
+    if (!C.isValid)
+      continue;
+
+    ValidCandidates.push_back(C);
+  }
+
+  Candidates = ValidCandidates;
+
   return ReplacementFound;
+}
+
+bool LLVMParser::walkSubAST(llvm::DominatorTree *DT,
+                            llvm::SmallVectorImpl<BFSEntry> &AST,
+                            std::vector<MBACandidate> &Candidates) {
+  bool Valid = false;
+
+  for (auto &E : AST) {
+    // Walk the operands
+    for (auto &Op : E.I->operands()) {
+      auto BinOp = dyn_cast<BinaryOperator>(Op);
+      if (!BinOp)
+        continue;
+
+      MBACandidate C;
+      C.Candidate = BinOp;
+      this->getAST(DT, BinOp, C.AST, C.Variables, true);
+
+      if (C.AST.size() < 2)
+        continue;
+
+      uint64_t Modulus =
+          pow(2, C.AST.front().I->getType()->getIntegerBitWidth());
+
+      std::vector<int64_t> ResultVector;
+      initResultVectorFromAST(C.AST, ResultVector, Modulus, C.Variables);
+
+      // Simplify MBA
+      Simplifier S(this->BitWidth, this->Signed, false, C.Variables.size(),
+                   ResultVector);
+
+      S.simplify(C.Replacement, false, false);
+
+      C.isValid = this->verify(C.AST, C.Replacement, C.Variables);
+      if (C.isValid) {
+        // Store valid replacement
+        Candidates.push_back(C);
+
+        Valid = true;
+      }
+    }
+  }
+
+  return Valid;
 }
 
 void LLVMParser::initResultVectorFromAST(
@@ -666,7 +788,8 @@ void LLVMParser::printAST(llvm::SmallVectorImpl<BFSEntry> &AST,
   }
   for (auto &e : AST) {
     outs() << e.Depth << ": ";
-    e.I->dump();
+    e.I->print(outs());
+    outs() << "\n";
   }
 }
 
@@ -684,7 +807,6 @@ void LLVMParser::getAST(llvm::DominatorTree *DT, llvm::Instruction *I,
   std::deque<llvm::Value *> Q;
   std::set<llvm::Value *> Dis;
   std::unordered_map<llvm::Value *, int> DepthMap;
-
   std::unordered_set<llvm::Value *> Vars;
 
   int Depth = 0;
@@ -738,7 +860,7 @@ void LLVMParser::getAST(llvm::DominatorTree *DT, llvm::Instruction *I,
         }
       } else {
         // Investigate
-        O->dump();
+        O->print(outs());
         report_fatal_error("Unknown Inst!", false);
       }
     }

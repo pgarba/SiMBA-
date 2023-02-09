@@ -47,9 +47,10 @@ typedef struct MBACandidate {
 
 class LLVMParser {
 public:
-  LLVMParser(const std::string &filename, const std::string &OutputFile, int BitWidth = 64, bool Signed = true,
-             bool Parallel = true, bool Verify = true,
-             bool OptimizeBefore = true, bool OptimizeAfter = true);
+  LLVMParser(const std::string &filename, const std::string &OutputFile,
+             int BitWidth = 64, bool Signed = true, bool Parallel = true,
+             bool Verify = true, bool OptimizeBefore = true,
+             bool OptimizeAfter = true, bool Debug = false);
   ~LLVMParser();
 
   /*
@@ -60,13 +61,13 @@ public:
   /*
     Interprets the function as one MBA and tries to simplify it
   */
-  int simplifyMBAFunctionsOnly();  
+  int simplifyMBAFunctionsOnly();
 
   static llvm::LLVMContext &getLLVMContext();
 
 private:
   std::string OutputFile = "";
-  
+
   int BitWidth;
 
   bool Signed;
@@ -78,6 +79,8 @@ private:
   bool OptimizeBefore;
 
   bool OptimizeAfter;
+
+  bool Debug;
 
   int MaxThreadCount;
 
@@ -127,6 +130,9 @@ private:
   void getAST(llvm::DominatorTree *DT, llvm::Instruction *I,
               llvm::SmallVectorImpl<BFSEntry> &AST,
               llvm::SmallVectorImpl<llvm::Value *> &Variables, bool KeepRoot);
+
+  bool walkSubAST(llvm::DominatorTree *DT, llvm::SmallVectorImpl<BFSEntry> &AST,
+                  std::vector<MBACandidate> &Candidates);
 
   void printAST(llvm::SmallVectorImpl<BFSEntry> &AST, bool isRootAST);
 

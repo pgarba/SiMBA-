@@ -29,4 +29,15 @@ LLVMCore
 LLVMSupport
 )
 
-install(TARGETS SiMBA++ DESTINATION out)
+# SiMBAPass
+add_library(SiMBAPass SHARED SiMBAPass.cpp)
+
+set_target_properties(SiMBAPass PROPERTIES
+    COMPILE_FLAGS "-fno-rtti"
+)
+
+set(PASS_LDFLAGS "-Wl,-undefined,dynamic_lookup -Wl,-no_pie")
+target_link_libraries(SiMBAPass ${PASS_LDFLAGS})
+
+# Install
+install(TARGETS SiMBA++ SiMBAPass DESTINATION out)
