@@ -30,14 +30,18 @@ LLVMSupport
 )
 
 # SiMBAPass
-add_library(SiMBAPass SHARED SiMBAPass.cpp)
+add_library(SiMBAPass SHARED SiMBAPass.cpp SiMBAPass.h LLVMParser.cpp LLVMParser.h Simplifier.h  Simplifier.cpp ShuttingYard.cpp MBAChecker.cpp MBAChecker.h)
 
 set_target_properties(SiMBAPass PROPERTIES
     COMPILE_FLAGS "-fno-rtti"
 )
 
+if (APPLE)
 set(PASS_LDFLAGS "-Wl,-undefined,dynamic_lookup -Wl,-no_pie")
+endif()
+
 target_link_libraries(SiMBAPass ${PASS_LDFLAGS})
+
 
 # Install
 install(TARGETS SiMBA++ SiMBAPass DESTINATION out)

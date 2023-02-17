@@ -51,6 +51,12 @@ public:
              int BitWidth = 64, bool Signed = true, bool Parallel = true,
              bool Verify = true, bool OptimizeBefore = true,
              bool OptimizeAfter = true, bool Debug = false);
+
+  LLVMParser(llvm::Module *M, int BitWidth = 64, bool Signed = true,
+             bool Parallel = true, bool Verify = true,
+             bool OptimizeBefore = true, bool OptimizeAfter = true,
+             bool Debug = false);
+
   ~LLVMParser();
 
   /*
@@ -90,7 +96,7 @@ private:
 
   std::unique_ptr<llvm::TargetLibraryInfo> TLI;
 
-  std::unique_ptr<llvm::Module> M;
+  llvm::Module *M;
 
   SplitMix64 SP64;
 
@@ -143,7 +149,8 @@ private:
 
   int64_t evaluateAST(llvm::SmallVectorImpl<BFSEntry> &AST,
                       llvm::SmallVectorImpl<llvm::Value *> &Variables,
-                      llvm::SmallVectorImpl<int64_t> &Par);
+                      llvm::SmallVectorImpl<int64_t> &Par,
+                      bool &Error);
 
   llvm::Constant *
   getVal(llvm::Value *V,

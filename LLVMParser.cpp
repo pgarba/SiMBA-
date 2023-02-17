@@ -20,6 +20,7 @@
 #include <memory>
 #include <mutex>
 #include <thread>
+#include <unordered_map>
 #include <unordered_set>
 
 #include "CSiMBA.h"
@@ -44,13 +45,29 @@ LLVMParser::LLVMParser(const std::string &filename,
     : OutputFile(OutputFile), BitWidth(BitWidth), Signed(Signed),
       Parallel(Parallel), Verify(Verify), OptimizeBefore(OptimizeBefore),
       OptimizeAfter(OptimizeAfter), Debug(Debug), SP64(filename.length()),
-      TLII(nullptr), TLI(nullptr) {
+      TLII(nullptr), TLI(nullptr), M(nullptr) {
   if (!this->parse(filename)) {
     llvm::errs() << "[!] Error: Could not parse file " << filename << "\n";
     return;
   }
 
   // Create evaluator
+  this->TLII = new TargetLibraryInfoImpl(Triple(M->getTargetTriple()));
+  this->TLI = std::make_unique<TargetLibraryInfo>(*TLII);
+  this->Eval = std::make_unique<Evaluator>(M->getDataLayout(), TLI.get());
+
+  this->MaxThreadCount = thread::hardware_concurrency();
+}
+
+LLVMParser::LLVMParser(llvm::Module *M, int BitWidth, bool Signed,
+                       bool Parallel, bool Verify, bool OptimizeBefore,
+                       bool OptimizeAfter, bool Debug)
+    : M(M), BitWidth(BitWidth), Signed(Signed), Parallel(Parallel),
+      Verify(Verify), OptimizeBefore(OptimizeBefore),
+      OptimizeAfter(OptimizeAfter), Debug(Debug),
+      SP64(M->getName().str().length()), TLII(nullptr), TLI(nullptr) {
+  // Create evaluator
+
   this->TLII = new TargetLibraryInfoImpl(Triple(M->getTargetTriple()));
   this->TLI = std::make_unique<TargetLibraryInfo>(*TLII);
   this->Eval = std::make_unique<Evaluator>(M->getDataLayout(), TLI.get());
@@ -163,7 +180,7 @@ llvm::Instruction *LLVMParser::getSingleTerminator(llvm::Function &F) {
 bool LLVMParser::parse(const std::string &filename) {
   SMDiagnostic Err;
 
-  M = llvm::parseIRFile(filename, Err, Context);
+  M = llvm::parseIRFile(filename, Err, Context).release();
   if (!M) {
     llvm::report_fatal_error("[!] Could not read llvm ir file!", false);
   }
@@ -194,11 +211,14 @@ int LLVMParser::extractAndSimplify() {
 
   auto start = high_resolution_clock::now();
   for (auto F : Functions) {
+    if (F->isDeclaration()) continue;
+
     if (F->getName().contains("_keep")) {
       outs() << "[!] Skipping simplification of function: " << F->getName()
              << "\n";
       continue;
     }
+
     int MBACount = 0;
     bool Found = false;
 
@@ -223,9 +243,10 @@ int LLVMParser::extractAndSimplify() {
       if (Candidates[i].isValid == false)
         continue;
 
-      if (this->Debug) {
+      //if (this->Debug) {
+        printAST(Candidates[i].AST, true);
         outs() << "[!] Simplified to: " << Candidates[i].Replacement << "\n";
-      }
+      //}
 
       std::vector<std::string> VNames;
       char ArgName = 'a';
@@ -272,7 +293,7 @@ int LLVMParser::extractAndSimplify() {
          << duration.count() << " ms)\n";
 
   // Optimize if any replacements
-  if (MBASimplified) {
+  if (MBASimplified && this->OptimizeBefore) {
     this->runLLVMOptimizer();
   }
 
@@ -327,8 +348,7 @@ int LLVMParser::simplifyMBAModule() {
     S.simplify(SimpExpr, false, false);
 
     // Convert simplified expression to LLVM IR
-    auto FSimp =
-        createLLVMFunction(this->M.get(), RetTy, SimpExpr, VNames, Modulus);
+    auto FSimp = createLLVMFunction(this->M, RetTy, SimpExpr, VNames, Modulus);
 
     // Verify if simplification is valid
     if (this->Verify && !this->verify(F, FSimp, Modulus)) {
@@ -443,10 +463,13 @@ bool LLVMParser::verify(llvm::SmallVectorImpl<BFSEntry> &AST,
       par.push_back(SP64.next());
     }
 
-    Modulus = pow(2, 32);
-
     // Eval AST
-    auto R0 = this->evaluateAST(AST, Variables, par) % Modulus;
+    bool Error = false;
+    auto R0 = this->evaluateAST(AST, Variables, par, Error) % Modulus;
+    if (Error) {
+      return false;
+    }
+
     auto R1 = eval(Expr1_replVar, par, &Operations) % Modulus;
 
     if (R0 != R1) {
@@ -554,7 +577,7 @@ bool LLVMParser::runLLVMOptimizer(bool Initial) {
 
   auto start = high_resolution_clock::now();
 
-  module_manager.run(*this->M.get());
+  module_manager.run(*this->M);
 
   auto stop = high_resolution_clock::now();
   auto duration = duration_cast<milliseconds>(stop - start);
@@ -567,7 +590,7 @@ bool LLVMParser::runLLVMOptimizer(bool Initial) {
 void LLVMParser::extractCandidates(llvm::Function &F,
                                    std::vector<MBACandidate> &Candidates) {
   // Instruction to look for 'store', 'select', 'gep', 'icmp', 'ret'
-  for (inst_iterator I = inst_begin(F), E = inst_end(F); I != E; ++I) {
+  for (inst_iterator I = inst_begin(F), E = inst_end(F); I != E; ++I) {  
     switch (I->getOpcode()) {
     case Instruction::Store: {
       // Check Candidate
@@ -597,7 +620,9 @@ void LLVMParser::extractCandidates(llvm::Function &F,
       }
     } break;
     case Instruction::Ret: {
-      auto RI = dyn_cast<ReturnInst>(&*I);
+      auto RI = dyn_cast<ReturnInst>(&*I);    
+      if (!RI->getReturnValue()) continue;
+
       auto BinOp =
           dyn_cast<BinaryOperator>(RI->getReturnValue()->stripPointerCasts());
       if (BinOp) {
@@ -643,7 +668,7 @@ bool LLVMParser::findReplacements(llvm::DominatorTree *DT,
     auto &Cand = Candidates[i];
     getAST(DT, Cand.Candidate, Cand.AST, Cand.Variables, true);
 
-    if (Cand.AST.size() == 0 || Cand.AST.size() == 1) {
+    if (Cand.AST.size() < 3) {
       continue;
     }
 
@@ -658,6 +683,12 @@ bool LLVMParser::findReplacements(llvm::DominatorTree *DT,
       outs() << "\n";
     }
 #endif
+
+    // Only handle max 6 Vars
+    if (Cand.Variables.size() > 6) {
+      Cand.isValid = false;
+      continue;
+    }
 
     // Try to simplify the whole AST
     uint64_t Modulus =
@@ -747,6 +778,9 @@ bool LLVMParser::walkSubAST(llvm::DominatorTree *DT,
         Candidates.push_back(C);
 
         Valid = true;
+
+        printAST(C.AST, true);
+        outs() << "[!] Simplified to: " << C.Replacement << "\n";
       }
     }
   }
@@ -769,7 +803,8 @@ void LLVMParser::initResultVectorFromAST(
     }
 
     // Evaluate function
-    auto v = evaluateAST(AST, Variables, Par);
+    bool Error = false;
+    auto v = evaluateAST(AST, Variables, Par, Error);
 
     // Store value mod modulus
     ResultVector.push_back(v % Modulus);
@@ -884,7 +919,8 @@ void LLVMParser::getAST(llvm::DominatorTree *DT, llvm::Instruction *I,
 
 int64_t LLVMParser::evaluateAST(llvm::SmallVectorImpl<BFSEntry> &AST,
                                 llvm::SmallVectorImpl<llvm::Value *> &Variables,
-                                llvm::SmallVectorImpl<int64_t> &Par) {
+                                llvm::SmallVectorImpl<int64_t> &Par,
+                                bool &Error) {
   Constant *InstResult = nullptr;
   llvm::DenseMap<llvm::Value *, llvm::Constant *> ValueStack;
 
@@ -902,7 +938,15 @@ int64_t LLVMParser::evaluateAST(llvm::SmallVectorImpl<BFSEntry> &AST,
     ValueStack[BO] = InstResult;
   }
 
-  return dyn_cast<ConstantInt>(InstResult)->getLimitedValue();
+  auto CI = dyn_cast<ConstantInt>(InstResult);
+  if (!CI) {
+    // Value might become poison so take care of this
+    Error = true;
+    return 0;
+  }
+
+  Error = false;
+  return CI->getLimitedValue();
 }
 
 llvm::Constant *
