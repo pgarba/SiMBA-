@@ -130,7 +130,7 @@ bool LLVMParser::hasLoadStores(llvm::Function &F) {
 
 void LLVMParser::initResultVector(llvm::Function &F,
                                   std::vector<int64_t> &ResultVector,
-                                  uint64_t Modulus, int VNumber,
+                                  int64_t Modulus, int VNumber,
                                   llvm::Type *IntType) {
 
   auto RetVal = ConstantInt::get(IntType, 0);
@@ -211,7 +211,8 @@ int LLVMParser::extractAndSimplify() {
 
   auto start = high_resolution_clock::now();
   for (auto F : Functions) {
-    if (F->isDeclaration()) continue;
+    if (F->isDeclaration())
+      continue;
 
     if (F->getName().contains("_keep")) {
       outs() << "[!] Skipping simplification of function: " << F->getName()
@@ -243,9 +244,9 @@ int LLVMParser::extractAndSimplify() {
       if (Candidates[i].isValid == false)
         continue;
 
-      //if (this->Debug) {
-        printAST(Candidates[i].AST, true);
-        outs() << "[!] Simplified to: " << Candidates[i].Replacement << "\n";
+      // if (this->Debug) {
+      printAST(Candidates[i].AST, true);
+      outs() << "[!] Simplified to: " << Candidates[i].Replacement << "\n";
       //}
 
       std::vector<std::string> VNames;
@@ -590,7 +591,7 @@ bool LLVMParser::runLLVMOptimizer(bool Initial) {
 void LLVMParser::extractCandidates(llvm::Function &F,
                                    std::vector<MBACandidate> &Candidates) {
   // Instruction to look for 'store', 'select', 'gep', 'icmp', 'ret'
-  for (inst_iterator I = inst_begin(F), E = inst_end(F); I != E; ++I) {  
+  for (inst_iterator I = inst_begin(F), E = inst_end(F); I != E; ++I) {
     switch (I->getOpcode()) {
     case Instruction::Store: {
       // Check Candidate
@@ -620,8 +621,9 @@ void LLVMParser::extractCandidates(llvm::Function &F,
       }
     } break;
     case Instruction::Ret: {
-      auto RI = dyn_cast<ReturnInst>(&*I);    
-      if (!RI->getReturnValue()) continue;
+      auto RI = dyn_cast<ReturnInst>(&*I);
+      if (!RI->getReturnValue())
+        continue;
 
       auto BinOp =
           dyn_cast<BinaryOperator>(RI->getReturnValue()->stripPointerCasts());

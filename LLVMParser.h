@@ -123,7 +123,7 @@ private:
   bool hasLoadStores(llvm::Function &F);
 
   void initResultVector(llvm::Function &F, std::vector<int64_t> &ResultVector,
-                        uint64_t Modulus, int VNumber, llvm::Type *IntType);
+                        int64_t Modulus, int VNumber, llvm::Type *IntType);
 
   bool runLLVMOptimizer(bool Initial = false);
 
@@ -149,8 +149,7 @@ private:
 
   int64_t evaluateAST(llvm::SmallVectorImpl<BFSEntry> &AST,
                       llvm::SmallVectorImpl<llvm::Value *> &Variables,
-                      llvm::SmallVectorImpl<int64_t> &Par,
-                      bool &Error);
+                      llvm::SmallVectorImpl<int64_t> &Par, bool &Error);
 
   llvm::Constant *
   getVal(llvm::Value *V,
