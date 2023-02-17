@@ -47,8 +47,12 @@ def main():
         global Signed
         Signed = int(sys.argv[2])
 
-    filenames = [f for f in os.listdir(
-        '../llvm') if re.match(r'^.*\.ll$', f)]
+    # add all files from llvm folder that contain the string "vars" in name
+    filenames = os.listdir("../llvm")
+
+    # remove files that do not contain vars
+
+    filenames = [f for f in filenames if re.match(r'^.*vars.*$', f)]
 
     # remove files that contain 6vars
     filenames = [f for f in filenames if not re.match(r'^.*6vars.*$', f)]
@@ -56,8 +60,11 @@ def main():
     # remove files that contain 6vars
     filenames = [f for f in filenames if not re.match(r'^.*5vars.*$', f)]
 
-    # remove files that contain poly
-    filenames = [f for f in filenames if not re.match(r'^.*poly.*$', f)]
+    # add file "pldi_dataset_linear_MBA.ll"
+    filenames.append("pldi_dataset_linear_MBA.ll")
+
+    # add file "test_data.ll"
+    filenames.append("test_data.ll")
 
     for filename in filenames:
         if PASSED == False:
