@@ -353,8 +353,8 @@ int LLVMParser::simplifyMBAModule() {
 
     // Verify if simplification is valid
     if (this->Verify && !this->verify(F, FSimp, Modulus)) {
-      llvm::errs() << "[!] Error: Simplification is not valid for function "
-                   << F->getName() << "\n";
+      outs() << "[!] Error: Simplification is not valid for function "
+             << F->getName() << "\n";
     }
 
     // Debug out

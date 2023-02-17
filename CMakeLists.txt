@@ -31,13 +31,20 @@ target_link_libraries(SiMBA++
     LLVMSupport
 )
 
-# tests
+# SiMBA++ tests
 ENABLE_TESTING()
 include(FindPythonInterp)
 
-# test 100 mba expressions from data directory for each txt and csv file (linear mba only)
+add_test(NAME Convert_DATA_to_LLVM
+    COMMAND ${PYTHON_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/scripts/convert_data_to_llvm.py
+    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/scripts)
+
 add_test(NAME MBAs_Linear_64bit_unsigned
     COMMAND ${PYTHON_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/run_tests.py "64" "0"
+    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/tests)
+
+add_test(NAME MBAs_Linear_64bit_unsigned_llvm
+    COMMAND ${PYTHON_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/run_tests_llvm.py "64" "0"
     WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/tests)
 
 # SiMBAPass

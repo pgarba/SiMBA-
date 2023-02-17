@@ -3,6 +3,7 @@
 import sys
 import os
 import re
+import time
 
 
 class bcolors:
@@ -68,6 +69,9 @@ def main():
         # Get filename without extension
         filename_without_extension = os.path.splitext(filename)[0]
 
+        # measure time
+        start = time.time()
+
         i = 1
         with open('../data/' + filename, 'r') as file:
             for line in file:
@@ -88,6 +92,7 @@ def main():
                     str(BitCount) + \
                     ' -checklinear=true -signed=' + \
                     str(Signed) + ' -mba \"' + mba + "\""
+
                 output = os.popen(cmd).read()
 
                 # Check if output contains the string "Not Valid Transformation!"
@@ -106,7 +111,11 @@ def main():
                 if (i > MaxTestCount):
                     break
 
-        print("")
+        # measure time
+        end = time.time()
+
+        print("[*] Testing " + filename +
+              " (" + "{:.2f}".format(end - start) + "s)")
 
     if (PASSED):
         print(bcolors.OKGREEN + "[*] All tests passed!" + bcolors.ENDC)
