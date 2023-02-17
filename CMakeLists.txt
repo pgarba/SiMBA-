@@ -39,6 +39,10 @@ add_test(NAME Convert_DATA_to_LLVM
     COMMAND ${PYTHON_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/scripts/convert_data_to_llvm.py
     WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/scripts)
 
+add_test(NAME MBAs_Linear_64bit_unsigned_llvm_detect_and_simplify
+    COMMAND ${PYTHON_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/run_tests_llvm_simplify.py "64" "0"
+    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/tests)
+
 add_test(NAME MBAs_Linear_64bit_unsigned
     COMMAND ${PYTHON_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/run_tests.py "64" "0"
     WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/tests)
