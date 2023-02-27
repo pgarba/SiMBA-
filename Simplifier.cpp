@@ -110,7 +110,7 @@ void Simplifier::fillResultSet(std::vector<llvm::APInt> &resultSet,
   }
 }
 
-llvm::APInt Simplifier::mod_red(llvm::APInt n, bool Signed) {
+llvm::APInt Simplifier::mod_red(const llvm::APInt &n, bool Signed) {
   if (Signed) {
     return n.srem(this->modulus);
   } else {
@@ -269,14 +269,14 @@ bool Simplifier::probably_equivalent_parallel(std::string &expr0,
   return IsValid;
 }
 
-bool Simplifier::is_double_modulo(llvm::APInt a, llvm::APInt b) {
+bool Simplifier::is_double_modulo(llvm::APInt &a, llvm::APInt &b) {
   return ((2 * b) == a) || ((2 * b) == (a + this->modulus));
 }
 
 std::string
 Simplifier::append_term_refinement(std::string &expr,
                                    const std::vector<std::string> &bitwiseList,
-                                   APInt r1, bool IsrAlt, APInt rAlt) {
+                                   const APInt &r1, bool IsrAlt, const APInt &rAlt) {
   std::vector<APInt> t;
   for (auto &r2 : this->resultVector) {
     if (r2 == r1 || (IsrAlt && (r2 == rAlt))) {
@@ -323,10 +323,8 @@ std::string Simplifier::try_find_negated_single_expression(
     llvm::report_fatal_error("resultSet.size() != 2");
   }
 
-  auto it = resultSet.begin();
-  auto a = *it;
-  ++it;
-  auto b = *it;
+  auto a = resultSet[0];
+  auto b = resultSet[1];
 
   auto aDouble = this->is_double_modulo(a, b);
   auto bDouble = this->is_double_modulo(b, a);
@@ -413,7 +411,6 @@ std::string Simplifier::try_eliminate_unique_value(
 
             while (resultSet.size() > 0) {
               auto r1 = *resultSet.begin();
-              // resultSet.erase(r1);
               It = std::remove(resultSet.begin(), resultSet.end(), r1);
               resultSet.erase(It);
 
@@ -595,7 +592,7 @@ void Simplifier::try_refine(std::string &expr) {
   }
 }
 
-void Simplifier::append_conjunction(std::string &expr, llvm::APInt coeff,
+void Simplifier::append_conjunction(std::string &expr, const llvm::APInt &coeff,
                                     std::vector<int> &variables) {
 
   if (variables.size() <= 0) {
@@ -646,7 +643,7 @@ bool Simplifier::are_variables_true(int n, std::vector<int> &variables,
   return true;
 }
 
-void Simplifier::subtract_coefficient(llvm::APInt coeff, int firstStart,
+void Simplifier::subtract_coefficient(const llvm::APInt &coeff, int firstStart,
                                       std::vector<int> &variables) {
   auto groupsize1 = this->groupsizes[variables[0]];
   auto period1 = 2 * groupsize1;
@@ -768,7 +765,6 @@ std::string
 Simplifier::simplify_one_value(std::vector<llvm::APInt> &resultSet) {
   auto coefficient = *resultSet.begin();
 
-  // resultSet.erase(coefficient);
   auto It = std::remove(resultSet.begin(), resultSet.end(), coefficient);
   resultSet.erase(It);
 
@@ -1029,7 +1025,7 @@ std::string Simplifier::strip(const std::string &inpt) {
   return std::string(start_it, end_it.base());
 }
 
-const std::vector<std::string> Simplifier::get_bitwise_list() {
+const std::vector<std::string> &Simplifier::get_bitwise_list() {
   if (this->vnumber != 1 && this->vnumber != 2 && this->vnumber != 3) {
     report_fatal_error("[!] Error: Only 1, 2 or 3 variables are supported!");
   }
@@ -1064,7 +1060,8 @@ int Simplifier::get_bitwise_index(int offset) {
   return this->get_bitwise_index_for_vector(this->resultVector, offset);
 }
 
-bool Simplifier::is_sum_modulo(llvm::APInt s1, llvm::APInt s2, llvm::APInt a) {
+bool Simplifier::is_sum_modulo(const llvm::APInt &s1, const llvm::APInt &s2,
+                               const llvm::APInt &a) {
   return ((s1 + s2) == a) || ((s1 + s2) == (a + this->modulus));
 }
 

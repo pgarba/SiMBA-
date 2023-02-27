@@ -49,7 +49,6 @@ private:
 
   int bitCount;
 
-  // int64_t modulus;
   llvm::APInt modulus;
 
   std::vector<std::string> originalVariables;
@@ -72,7 +71,7 @@ private:
   void fillResultSet(std::vector<llvm::APInt> &resultSet,
                      std::vector<llvm::APInt> &inputVector);
 
-  llvm::APInt mod_red(llvm::APInt n, bool Signed = false);
+  llvm::APInt mod_red(const llvm::APInt &n, bool Signed = false);
 
   void parse_and_replace_variables();
 
@@ -86,22 +85,23 @@ private:
 
   void replace_variables_back(std::string &expr);
 
-  const std::vector<std::string> get_bitwise_list();
+  const std::vector<std::string> &get_bitwise_list();
 
   int get_bitwise_index_for_vector(std::vector<llvm::APInt> &vector,
                                    int offset);
 
   int get_bitwise_index(int offset);
 
-  bool is_sum_modulo(llvm::APInt s1, llvm::APInt s2, llvm::APInt a);
+  bool is_sum_modulo(const llvm::APInt &s1, const llvm::APInt &s2,
+                     const llvm::APInt &a);
 
-  bool is_double_modulo(llvm::APInt a, llvm::APInt b);
+  bool is_double_modulo(llvm::APInt &a, llvm::APInt &b);
 
   // replacing string here leads to a bug
   std::string
   append_term_refinement(std::string &expr,
                          const std::vector<std::string> &bitwiseList,
-                         llvm::APInt r1, bool IsrAlt, llvm::APInt rAlt);
+                         const llvm::APInt &r1, bool IsrAlt, const llvm::APInt &rAlt);
 
   std::string
   expression_for_each_unique_value(std::vector<llvm::APInt> &resultSet,
@@ -117,12 +117,12 @@ private:
 
   void try_refine(std::string &expr);
 
-  void append_conjunction(std::string &expr, llvm::APInt coeff,
+  void append_conjunction(std::string &expr, const llvm::APInt &coeff,
                           std::vector<int> &variables);
 
   bool are_variables_true(int n, std::vector<int> &variables, int start = 0);
 
-  void subtract_coefficient(llvm::APInt coeff, int firstStart,
+  void subtract_coefficient(const llvm::APInt &coeff, int firstStart,
                             std::vector<int> &variables);
 
   std::string simplify_generic();

@@ -17,10 +17,6 @@ using namespace std;
 using namespace llvm;
 using namespace std::chrono;
 
-cl::opt<bool> UseSigned("signed", cl::Optional,
-                        cl::desc("Evaluate as signed values (Default true)"),
-                        cl::value_desc("signed"), cl::init(true));
-
 cl::opt<bool>
     UseFastCheck("fastcheck", cl::Optional,
                  cl::desc("Verify MBA with random values (Default true)"),
@@ -34,7 +30,7 @@ cl::opt<bool> RunOptimizer(
 bool SiMBAPass::runOnModule(Module &M) {
   outs() << "[+] Loading LLVM Module: '" << M.getName() << "'\n";
 
-  LSiMBA::LLVMParser Parser(&M, 64, UseSigned, false, UseFastCheck, false);
+  LSiMBA::LLVMParser Parser(&M, false, UseFastCheck, false);
 
   auto start = high_resolution_clock::now();
 
@@ -52,7 +48,7 @@ bool SiMBAPass::runOnModule(Module &M) {
 bool SiMBAPass::runOnModuleStatic(Module &M) {
   outs() << "[+] Loading LLVM Module: '" << M.getName() << "'\n";
 
-  LSiMBA::LLVMParser Parser(&M, 64, false, UseFastCheck, false, true, true);
+  LSiMBA::LLVMParser Parser(&M, false, UseFastCheck, false, true, true);
 
   auto start = high_resolution_clock::now();
 

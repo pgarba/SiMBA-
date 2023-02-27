@@ -40,13 +40,13 @@ namespace LSiMBA {
 llvm::LLVMContext LLVMParser::Context;
 
 LLVMParser::LLVMParser(const std::string &filename,
-                       const std::string &OutputFile, int BitWidth,
-                       bool Parallel, bool Verify, bool OptimizeBefore,
-                       bool OptimizeAfter, bool Debug)
-    : OutputFile(OutputFile), BitWidth(BitWidth), Parallel(Parallel),
-      Verify(Verify), OptimizeBefore(OptimizeBefore),
-      OptimizeAfter(OptimizeAfter), Debug(Debug), SP64(filename.length()),
-      TLII(nullptr), TLI(nullptr), M(nullptr) {
+                       const std::string &OutputFile, bool Parallel,
+                       bool Verify, bool OptimizeBefore, bool OptimizeAfter,
+                       bool Debug)
+    : OutputFile(OutputFile), Parallel(Parallel), Verify(Verify),
+      OptimizeBefore(OptimizeBefore), OptimizeAfter(OptimizeAfter),
+      Debug(Debug), SP64(filename.length()), TLII(nullptr), TLI(nullptr),
+      M(nullptr) {
   if (!this->parse(filename)) {
     llvm::errs() << "[!] Error: Could not parse file " << filename << "\n";
     return;
@@ -60,13 +60,11 @@ LLVMParser::LLVMParser(const std::string &filename,
   this->MaxThreadCount = thread::hardware_concurrency();
 }
 
-LLVMParser::LLVMParser(llvm::Module *M, int BitWidth, bool Parallel,
-                       bool Verify, bool OptimizeBefore, bool OptimizeAfter,
-                       bool Debug)
-    : M(M), BitWidth(BitWidth), Parallel(Parallel), Verify(Verify),
-      OptimizeBefore(OptimizeBefore), OptimizeAfter(OptimizeAfter),
-      Debug(Debug), SP64(M->getName().str().length()), TLII(nullptr),
-      TLI(nullptr) {
+LLVMParser::LLVMParser(llvm::Module *M, bool Parallel, bool Verify,
+                       bool OptimizeBefore, bool OptimizeAfter, bool Debug)
+    : M(M), Parallel(Parallel), Verify(Verify), OptimizeBefore(OptimizeBefore),
+      OptimizeAfter(OptimizeAfter), Debug(Debug),
+      SP64(M->getName().str().length()), TLII(nullptr), TLI(nullptr) {
   // Create evaluator
 
   this->TLII = new TargetLibraryInfoImpl(Triple(M->getTargetTriple()));
@@ -131,7 +129,7 @@ bool LLVMParser::hasLoadStores(llvm::Function &F) {
 
 void LLVMParser::initResultVector(llvm::Function &F,
                                   std::vector<llvm::APInt> &ResultVector,
-                                  llvm::APInt &Modulus, int VNumber,
+                                  const llvm::APInt &Modulus, int VNumber,
                                   llvm::Type *IntType) {
 
   auto RetVal = ConstantInt::get(IntType, 0);
@@ -303,14 +301,16 @@ int LLVMParser::simplifyMBAModule() {
   }
 
   // Walk through all functions
-  auto Modulus = getModulus(this->BitWidth);
-
   outs() << "[+] Simplifying " << Functions.size() << " functions ...\t";
 
   auto start = high_resolution_clock::now();
   for (auto F : Functions) {
     // Get the terminator
-    auto Terminator = getSingleTerminator(*F);
+    auto Terminator = getSingleTerminator(*F);    
+
+    int BitWidth = Terminator->getOperand(0)->getType()->getIntegerBitWidth();
+
+    auto Modulus = getModulus(BitWidth);
 
     // Collect the arguments
     std::vector<std::string> VNames;
@@ -329,7 +329,7 @@ int LLVMParser::simplifyMBAModule() {
     this->initResultVector(*F, ResultVector, Modulus, VNumber, RetTy);
 
     // Simpify MBA
-    Simplifier S(this->BitWidth, false, VNumber, ResultVector);
+    Simplifier S(BitWidth, false, VNumber, ResultVector);
 
     std::string SimpExpr;
     S.simplify(SimpExpr, false, false);
@@ -379,15 +379,6 @@ bool LLVMParser::verify(llvm::Function *F0, llvm::Function *F1,
       return false;
     }
   }
-
-  // Run in parallel when user asked for it
-  // WARINING: This is not working yet because LLVM does not support
-  // multithreading
-  /*
-  if (this->Parallel) {
-    return this->verify_parallel(F0, F1, Modulus);
-  }
-  */
 
   auto RetTy = F0->getReturnType();
   auto RetVal0 = ConstantInt::get(RetTy, 0);
@@ -495,71 +486,6 @@ bool LLVMParser::verify(llvm::SmallVectorImpl<BFSEntry> &AST,
 
   // Otherwise don't apply this replacement
   return false;
-}
-
-bool LLVMParser::verify_parallel(llvm::Function *F0, llvm::Function *F1,
-                                 uint64_t Modulus) {
-  bool IsValid = true;
-
-  auto RetTy = F0->getReturnType();
-  auto vnumber = F0->arg_size();
-
-  int CurThreadCount = 0;
-  veque::veque<thread> threads;
-
-  mutex m;
-
-  auto fcomp = [&](llvm::Function *F0, llvm::Function *F1) -> void {
-    llvm::SmallVector<Constant *, 16> par;
-
-    m.lock();
-    auto RetVal0 = ConstantInt::get(RetTy, 0);
-    auto RetVal1 = ConstantInt::get(RetTy, 0);
-
-    for (int j = 0; j < vnumber; j++) {
-      auto C = ConstantInt::get(RetTy, SP64.next());
-      par.push_back(C);
-    }
-    m.unlock();
-
-    Eval->EvaluateFunction(F0, RetVal0, par);
-    Eval->EvaluateFunction(F1, RetVal1, par);
-
-    m.lock();
-    int64_t R0 = dyn_cast<ConstantInt>(RetVal0)->getZExtValue() % Modulus;
-    int64_t R1 = dyn_cast<ConstantInt>(RetVal1)->getZExtValue() % Modulus;
-    if (R0 != R1) {
-      IsValid = false;
-    }
-
-    m.unlock();
-  };
-
-  // Run in parallel
-  for (int i = 0; i < NUM_TEST_CASES; i++) {
-    threads.push_back(thread(fcomp, F0, F1));
-
-    CurThreadCount++;
-
-    // Wait for one thread to finish
-    if (CurThreadCount == this->MaxThreadCount) {
-      threads.front().join();
-      threads.pop_front();
-
-      --CurThreadCount;
-    }
-
-    if (!IsValid)
-      break;
-  }
-
-  // Wait for threads to finish
-  for (auto &t : threads) {
-    if (t.joinable())
-      t.join();
-  }
-
-  return true;
 }
 
 bool LLVMParser::runLLVMOptimizer(bool Initial) {
@@ -707,14 +633,14 @@ bool LLVMParser::findReplacements(llvm::DominatorTree *DT,
     }
 
     // Try to simplify the whole AST
-    auto Modulus =
-        getModulus(Cand.AST.front().I->getType()->getIntegerBitWidth());
+    int BitWidth = Cand.AST.front().I->getType()->getIntegerBitWidth();
+    auto Modulus = getModulus(BitWidth);
 
     std::vector<APInt> ResultVector;
     initResultVectorFromAST(Cand.AST, ResultVector, Modulus, Cand.Variables);
 
     // Simpify MBA
-    Simplifier S(this->BitWidth, false, Cand.Variables.size(), ResultVector);
+    Simplifier S(BitWidth, false, Cand.Variables.size(), ResultVector);
 
     S.simplify(Cand.Replacement, false, false);
 
@@ -775,14 +701,15 @@ bool LLVMParser::walkSubAST(llvm::DominatorTree *DT,
       if (C.AST.size() < 2)
         continue;
 
-      auto Modulus =
-          getModulus(C.AST.front().I->getType()->getIntegerBitWidth());
+      int BitWidth = C.AST.front().I->getType()->getIntegerBitWidth();
+
+      auto Modulus = getModulus(BitWidth);
 
       std::vector<APInt> ResultVector;
       initResultVectorFromAST(C.AST, ResultVector, Modulus, C.Variables);
 
       // Simplify MBA
-      Simplifier S(this->BitWidth, false, C.Variables.size(), ResultVector);
+      Simplifier S(BitWidth, false, C.Variables.size(), ResultVector);
 
       S.simplify(C.Replacement, false, false);
 
@@ -804,7 +731,7 @@ bool LLVMParser::walkSubAST(llvm::DominatorTree *DT,
 
 void LLVMParser::initResultVectorFromAST(
     llvm::SmallVectorImpl<BFSEntry> &AST,
-    std::vector<llvm::APInt> &ResultVector, llvm::APInt &Modulus,
+    std::vector<llvm::APInt> &ResultVector, const llvm::APInt &Modulus,
     llvm::SmallVectorImpl<llvm::Value *> &Variables) {
   // Evalute AST
   int VNumber = Variables.size();

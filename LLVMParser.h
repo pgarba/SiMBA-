@@ -48,13 +48,13 @@ typedef struct MBACandidate {
 class LLVMParser {
 public:
   LLVMParser(const std::string &filename, const std::string &OutputFile,
-             int BitWidth = 64, bool Parallel = true, bool Verify = true,
+             bool Parallel = true, bool Verify = true,
              bool OptimizeBefore = true, bool OptimizeAfter = true,
              bool Debug = false);
 
-  LLVMParser(llvm::Module *M, int BitWidth = 64, bool Parallel = true,
-             bool Verify = true, bool OptimizeBefore = true,
-             bool OptimizeAfter = true, bool Debug = false);
+  LLVMParser(llvm::Module *M, bool Parallel = true, bool Verify = true,
+             bool OptimizeBefore = true, bool OptimizeAfter = true,
+             bool Debug = false);
 
   ~LLVMParser();
 
@@ -72,8 +72,6 @@ public:
 
 private:
   std::string OutputFile = "";
-
-  int BitWidth;
 
   bool Parallel;
 
@@ -112,16 +110,13 @@ private:
   bool verify(llvm::SmallVectorImpl<BFSEntry> &AST, std::string &SimpExpr,
               llvm::SmallVectorImpl<llvm::Value *> &Variables);
 
-  bool verify_parallel(llvm::Function *F0, llvm::Function *F1,
-                       uint64_t Modulus);
-
   llvm::Instruction *getSingleTerminator(llvm::Function &F);
 
   bool hasLoadStores(llvm::Function &F);
 
   void initResultVector(llvm::Function &F,
                         std::vector<llvm::APInt> &ResultVector,
-                        llvm::APInt &Modulus, int VNumber, llvm::Type *IntType);
+                        const llvm::APInt &Modulus, int VNumber, llvm::Type *IntType);
 
   bool runLLVMOptimizer(bool Initial = false);
 
@@ -142,7 +137,7 @@ private:
 
   void initResultVectorFromAST(llvm::SmallVectorImpl<BFSEntry> &AST,
                                std::vector<llvm::APInt> &ResultVector,
-                               llvm::APInt &Modulus,
+                               const llvm::APInt &Modulus,
                                llvm::SmallVectorImpl<llvm::Value *> &Variables);
 
   llvm::APInt evaluateAST(llvm::SmallVectorImpl<BFSEntry> &AST,

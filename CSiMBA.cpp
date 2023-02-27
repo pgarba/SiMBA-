@@ -269,7 +269,7 @@ void SimplifyMBADatabase() {
 void SimplifyLLVMDataBase() {
   outs() << "[+] Loading LLVM MBA Module: '" << StrIR << "'\n";
 
-  LSiMBA::LLVMParser Parser(StrIR, Output, BitCount, RunParallel, UseFastCheck,
+  LSiMBA::LLVMParser Parser(StrIR, Output, RunParallel, UseFastCheck,
                             RunOptimizer, RunOptimizer, Debug);
 
   auto start = high_resolution_clock::now();
