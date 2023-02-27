@@ -31,7 +31,8 @@ Signed = 0
 PASSED = True
 
 # List of all files to test
-filenames = ["MBA_OP.ll", "mba_comb.ll", "mbas.ll"]
+filenames = ["MBA_OP.ll", "mba_comb.ll", "mbas.ll",
+             "vm_obf.ll", "scramble4.ll", "xor_op_pred.ll"]
 
 # Main function
 

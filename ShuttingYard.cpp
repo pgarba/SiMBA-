@@ -18,8 +18,6 @@
 
 #include "veque.h"
 
-#define Use_APINT true
-
 using namespace llvm;
 
 class Token {
@@ -410,8 +408,7 @@ void createLLVMReplacement(llvm::Instruction *InsertionPoint,
 
 llvm::Function *createLLVMFunction(llvm::Module *M, llvm::Type *IntType,
                                    std::string &expr,
-                                   std::vector<std::string> &VNames,
-                                   uint64_t Modulus) {
+                                   std::vector<std::string> &VNames) {
   // Parse expressions and create token
   veque::veque<Token> tokens;
   exprToTokens(expr, tokens, true, &VNames);
@@ -536,12 +533,12 @@ llvm::Function *createLLVMFunction(llvm::Module *M, llvm::Type *IntType,
   return F;
 }
 
-int64_t eval(std::string expr, SmallVector<int64_t, 16> &par,
-             int *OperationCount) {
+APInt eval(std::string expr, SmallVector<APInt, 16> &par, int BitWidth,
+           int *OperationCount) {
   // Replace variables with values in expression
   for (int i = 0; i < par.size(); i++) {
     std::string var = "X[" + std::to_string(i) + "]";
-    std::string val = std::to_string(par[i]);
+    std::string val = std::to_string(par[i].getZExtValue());
 
     replace_all(expr, var, val);
   }
@@ -561,7 +558,7 @@ int64_t eval(std::string expr, SmallVector<int64_t, 16> &par,
     queue.pop_front();
     switch (token.type) {
     case Token::Type::Number: {
-      APInt APV(128, token.str, 10);
+      APInt APV(BitWidth, token.str, 10);
       stackAP.push_back(APV);
 
     } break;
@@ -588,10 +585,6 @@ int64_t eval(std::string expr, SmallVector<int64_t, 16> &par,
 
           break;
         case '!':
-#ifdef Use_APINT
-#else
-          stack.push_back(!rhs);
-#endif
           // stackAP.push_back(rhsAP);
           printf("! operator not implemented\n");
           exit(-1);
@@ -647,14 +640,11 @@ int64_t eval(std::string expr, SmallVector<int64_t, 16> &par,
       exit(0);
     }
   }
-  
+
   // Set operation count
   if (OperationCount) {
     *OperationCount = Operations;
   }
 
-  // Dont trigger the assert in LLVM
-  APInt APn = stackAP.back() & 0xFFFFFFFFFFFFFFFF;
-
-  return APn.getLimitedValue();
+  return stackAP.back();
 }

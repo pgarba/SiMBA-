@@ -83,9 +83,10 @@ cl::opt<bool> SimplifyExpected(
     cl::desc("Simplify the expected value to match it (Default false)"),
     cl::value_desc("simplify-expected"), cl::init(false));
 
+// TODO: Can be removed when APINT conversion is done
 cl::opt<bool> UseSigned("signed", cl::Optional,
-                        cl::desc("Evaluate as signed values (Default true)"),
-                        cl::value_desc("signed"), cl::init(true));
+                        cl::desc("Evaluate as signed values (Default false)"),
+                        cl::value_desc("signed"), cl::init(false));
 
 cl::opt<bool>
     RunParallel("parallel", cl::Optional,
@@ -174,22 +175,21 @@ void SimplifySingleMBA() {
   auto duration = duration_cast<milliseconds>(stop - start);
 
   if (Result == true) {
-    printf("[+] [Simplified MBA] '%s time: %dms'\n", SimpMBA.c_str(),
+    printf("[+] [Simplified MBA] '%s' time: %dms\n", SimpMBA.c_str(),
            (int)duration.count());
   } else {
-    printf("[!] [Simplified MBA] Not valid replacement! '%s time: %dms'\n",
+    printf("[!] [Simplified MBA] Not valid replacement! '%s' time: %dms\n",
            SimpMBA.c_str(), (int)duration.count());
   }
 }
 
 void ConvertToLLVMFunction(llvm::Module *M, std::string &StrMBA) {
-  uint64_t Modulus = pow(2, (int)BitCount);
   auto IntTy =
       llvm::Type::getIntNTy(LSiMBA::LLVMParser::getLLVMContext(), BitCount);
   auto Vars = LSiMBA::Simplifier::getVariables(StrMBA);
 
   // Create LLVM Function
-  auto F = createLLVMFunction(M, IntTy, StrMBA, Vars, Modulus);
+  auto F = createLLVMFunction(M, IntTy, StrMBA, Vars);
 
   // Set name
   F->setName("MBA");

@@ -24,6 +24,7 @@
 #include <unordered_set>
 
 #include "CSiMBA.h"
+#include "Modulo.h"
 #include "ShuttingYard.h"
 #include "Simplifier.h"
 #include "veque.h"
@@ -129,8 +130,8 @@ bool LLVMParser::hasLoadStores(llvm::Function &F) {
 }
 
 void LLVMParser::initResultVector(llvm::Function &F,
-                                  std::vector<int64_t> &ResultVector,
-                                  int64_t Modulus, int VNumber,
+                                  std::vector<llvm::APInt> &ResultVector,
+                                  llvm::APInt &Modulus, int VNumber,
                                   llvm::Type *IntType) {
 
   auto RetVal = ConstantInt::get(IntType, 0);
@@ -149,10 +150,16 @@ void LLVMParser::initResultVector(llvm::Function &F,
 
     // Get Result and store in result vector
     auto CIRetVal = dyn_cast<ConstantInt>(RetVal);
-    auto v = dyn_cast<ConstantInt>(CIRetVal)->getLimitedValue();
+    APInt v = dyn_cast<ConstantInt>(CIRetVal)->getValue();
+
+    if (v.isSignBitSet()) {
+      v = v.srem(Modulus);
+    } else {
+      v = v.urem(Modulus);
+    }
 
     // Store value mod modulus
-    ResultVector.push_back(v % Modulus);
+    ResultVector.push_back(v);
 
     par.clear();
   }
@@ -251,7 +258,7 @@ int LLVMParser::extractAndSimplify() {
 
       std::vector<std::string> VNames;
       char ArgName = 'a';
-      for (auto &Arg : F->args()) {
+      for (int i = 0; i < Candidates[i].Variables.size(); i++) {
         VNames.push_back(std::string(1, ArgName++));
       }
 
@@ -263,29 +270,8 @@ int LLVMParser::extractAndSimplify() {
       MBACount++;
     }
 
-    if (Found) {
-      // Verify that the function is still behaving the same as before
-      uint64_t Modulus = pow(2, 32);
-      auto IsValid = verify(F, FClone, Modulus);
-      if (IsValid) {
-        outs() << "[!] Valid Function simplification for function: "
-               << F->getName() << "\n";
-
-        // Keep replacement
-        FClone->eraseFromParent();
-
-        MBASimplified++;
-        MBACount++;
-      } else {
-        outs() << "[!] Not Valid Function simplification for function: "
-               << F->getName() << "\n";
-
-        // Delete non valid function and keep original copy
-        auto OrgName = F->getName();
-        F->eraseFromParent();
-        FClone->setName(OrgName);
-      }
-    }
+    // When we reach this here, replacements are valid
+    FClone->eraseFromParent();
   }
 
   auto stop = high_resolution_clock::now();
@@ -317,7 +303,7 @@ int LLVMParser::simplifyMBAModule() {
   }
 
   // Walk through all functions
-  uint64_t Modulus = pow(2, this->BitWidth);
+  auto Modulus = getModulus(this->BitWidth);
 
   outs() << "[+] Simplifying " << Functions.size() << " functions ...\t";
 
@@ -339,7 +325,7 @@ int LLVMParser::simplifyMBAModule() {
     auto VNumber = Variables.size();
 
     // Calc the result vector
-    std::vector<int64_t> ResultVector;
+    std::vector<APInt> ResultVector;
     this->initResultVector(*F, ResultVector, Modulus, VNumber, RetTy);
 
     // Simpify MBA
@@ -349,7 +335,7 @@ int LLVMParser::simplifyMBAModule() {
     S.simplify(SimpExpr, false, false);
 
     // Convert simplified expression to LLVM IR
-    auto FSimp = createLLVMFunction(this->M, RetTy, SimpExpr, VNames, Modulus);
+    auto FSimp = createLLVMFunction(this->M, RetTy, SimpExpr, VNames);
 
     // Verify if simplification is valid
     if (this->Verify && !this->verify(F, FSimp, Modulus)) {
@@ -372,7 +358,7 @@ int LLVMParser::simplifyMBAModule() {
 }
 
 bool LLVMParser::verify(llvm::Function *F0, llvm::Function *F1,
-                        uint64_t Modulus) {
+                        llvm::APInt &Modulus) {
   // Check functions have the same amount of arguments
   if (F0->arg_size() != F1->arg_size()) {
     return false;
@@ -418,8 +404,14 @@ bool LLVMParser::verify(llvm::Function *F0, llvm::Function *F1,
     Eval->EvaluateFunction(F0, RetVal0, par);
     Eval->EvaluateFunction(F1, RetVal1, par);
 
-    int64_t R0 = dyn_cast<ConstantInt>(RetVal0)->getSExtValue() % Modulus;
-    int64_t R1 = dyn_cast<ConstantInt>(RetVal1)->getSExtValue() % Modulus;
+    auto R0 = dyn_cast<ConstantInt>(RetVal0)
+                  ->getValue()
+                  .urem(Modulus)
+                  .getLimitedValue();
+    auto R1 = dyn_cast<ConstantInt>(RetVal1)
+                  ->getValue()
+                  .urem(Modulus)
+                  .getLimitedValue();
 
     if (R0 != R1) {
       return false;
@@ -444,8 +436,8 @@ bool LLVMParser::verify(llvm::SmallVectorImpl<BFSEntry> &AST,
                         std::string &SimpExpr,
                         llvm::SmallVectorImpl<llvm::Value *> &Variables) {
   int VNumber = Variables.size();
-
-  uint64_t Modulus = pow(2, AST.front().I->getType()->getIntegerBitWidth());
+  int BitWidth = AST.front().I->getType()->getIntegerBitWidth();
+  auto Modulus = getModulus(BitWidth);
 
   std::string Expr1_replVar = SimpExpr;
   for (int i = 0; i < Variables.size(); i++) {
@@ -458,22 +450,38 @@ bool LLVMParser::verify(llvm::SmallVectorImpl<BFSEntry> &AST,
   // The number of operations in the new expressions
   int Operations = 0;
 
-  llvm::SmallVector<int64_t, 16> par;
+  llvm::SmallVector<APInt, 16> par;
+  llvm::SmallVector<int64_t, 16> parInt;
   for (int i = 0; i < NUM_TEST_CASES; i++) {
     for (int j = 0; j < VNumber; j++) {
-      par.push_back(SP64.next());
+      auto v = SP64.next();
+      par.push_back(APInt(BitWidth, v));
+      parInt.push_back(v);
     }
 
     // Eval AST
     bool Error = false;
-    auto R0 = this->evaluateAST(AST, Variables, par, Error) % Modulus;
+    auto AP_R0 = this->evaluateAST(AST, Variables, par, Error);
     if (Error) {
       return false;
     }
 
-    auto R1 = eval(Expr1_replVar, par, &Operations) % Modulus;
+    // Mod
+    if (AP_R0.isSignBitSet()) {
+      AP_R0 = AP_R0.srem(Modulus);
+    } else {
+      AP_R0 = AP_R0.urem(Modulus);
+    }
 
-    if (R0 != R1) {
+    // Eval replacement
+    auto AP_R1 = eval(Expr1_replVar, par, BitWidth, &Operations);
+    if (AP_R1.isSignBitSet()) {
+      AP_R1 = AP_R1.srem(Modulus);
+    } else {
+      AP_R1 = AP_R1.urem(Modulus);
+    }
+
+    if (AP_R0.getSExtValue() != AP_R1.getSExtValue()) {
       return false;
     }
 
@@ -518,8 +526,8 @@ bool LLVMParser::verify_parallel(llvm::Function *F0, llvm::Function *F1,
     Eval->EvaluateFunction(F1, RetVal1, par);
 
     m.lock();
-    int64_t R0 = dyn_cast<ConstantInt>(RetVal0)->getSExtValue() % Modulus;
-    int64_t R1 = dyn_cast<ConstantInt>(RetVal1)->getSExtValue() % Modulus;
+    int64_t R0 = dyn_cast<ConstantInt>(RetVal0)->getZExtValue() % Modulus;
+    int64_t R1 = dyn_cast<ConstantInt>(RetVal1)->getZExtValue() % Modulus;
     if (R0 != R1) {
       IsValid = false;
     }
@@ -597,10 +605,16 @@ void LLVMParser::extractCandidates(llvm::Function &F,
       // Check Candidate
       auto SI = dyn_cast<StoreInst>(&*I);
       auto Op = SI->getValueOperand();
+      auto BinOp = dyn_cast<BinaryOperator>(Op);
+      if (BinOp) {
+        MBACandidate Cand;
+        Cand.Candidate = BinOp;
+        Candidates.push_back(Cand);
+      }
     } break;
     case Instruction::ICmp:
     case Instruction::Select: {
-      for (int i = 0; i < I->getNumOperands(); i++) {
+      for (unsigned int i = 0; i < I->getNumOperands(); i++) {
         auto BinOp =
             dyn_cast<BinaryOperator>(I->getOperand(i)->stripPointerCasts());
         if (BinOp) {
@@ -693,10 +707,10 @@ bool LLVMParser::findReplacements(llvm::DominatorTree *DT,
     }
 
     // Try to simplify the whole AST
-    uint64_t Modulus =
-        pow(2, Cand.AST.front().I->getType()->getIntegerBitWidth());
+    auto Modulus =
+        getModulus(Cand.AST.front().I->getType()->getIntegerBitWidth());
 
-    std::vector<int64_t> ResultVector;
+    std::vector<APInt> ResultVector;
     initResultVectorFromAST(Cand.AST, ResultVector, Modulus, Cand.Variables);
 
     // Simpify MBA
@@ -762,10 +776,10 @@ bool LLVMParser::walkSubAST(llvm::DominatorTree *DT,
       if (C.AST.size() < 2)
         continue;
 
-      uint64_t Modulus =
-          pow(2, C.AST.front().I->getType()->getIntegerBitWidth());
+      auto Modulus =
+          getModulus(C.AST.front().I->getType()->getIntegerBitWidth());
 
-      std::vector<int64_t> ResultVector;
+      std::vector<APInt> ResultVector;
       initResultVectorFromAST(C.AST, ResultVector, Modulus, C.Variables);
 
       // Simplify MBA
@@ -791,16 +805,18 @@ bool LLVMParser::walkSubAST(llvm::DominatorTree *DT,
 }
 
 void LLVMParser::initResultVectorFromAST(
-    llvm::SmallVectorImpl<BFSEntry> &AST, std::vector<int64_t> &ResultVector,
-    uint64_t Modulus, llvm::SmallVectorImpl<llvm::Value *> &Variables) {
+    llvm::SmallVectorImpl<BFSEntry> &AST,
+    std::vector<llvm::APInt> &ResultVector, llvm::APInt &Modulus,
+    llvm::SmallVectorImpl<llvm::Value *> &Variables) {
   // Evalute AST
   int VNumber = Variables.size();
+  auto BitWidth = AST.front().I->getType()->getIntegerBitWidth();
 
-  SmallVector<int64_t, 16> Par;
+  SmallVector<APInt, 16> Par;
   for (int i = 0; i < pow(2, Variables.size()); i++) {
     int n = i;
     for (int j = 0; j < VNumber; j++) {
-      Par.push_back(n & 1);
+      Par.push_back(APInt(BitWidth, n & 1));
       n = n >> 1;
     }
 
@@ -808,8 +824,14 @@ void LLVMParser::initResultVectorFromAST(
     bool Error = false;
     auto v = evaluateAST(AST, Variables, Par, Error);
 
+    if (v.isSignBitSet()) {
+      v = v.srem(Modulus);
+    } else {
+      v = v.urem(Modulus);
+    }
+
     // Store value mod modulus
-    ResultVector.push_back(v % Modulus);
+    ResultVector.push_back(v);
 
     // Clear par again
     Par.clear();
@@ -919,10 +941,10 @@ void LLVMParser::getAST(llvm::DominatorTree *DT, llvm::Instruction *I,
   std::sort(Variables.begin(), Variables.end());
 }
 
-int64_t LLVMParser::evaluateAST(llvm::SmallVectorImpl<BFSEntry> &AST,
-                                llvm::SmallVectorImpl<llvm::Value *> &Variables,
-                                llvm::SmallVectorImpl<int64_t> &Par,
-                                bool &Error) {
+llvm::APInt
+LLVMParser::evaluateAST(llvm::SmallVectorImpl<BFSEntry> &AST,
+                        llvm::SmallVectorImpl<llvm::Value *> &Variables,
+                        llvm::SmallVectorImpl<APInt> &Par, bool &Error) {
   Constant *InstResult = nullptr;
   llvm::DenseMap<llvm::Value *, llvm::Constant *> ValueStack;
 
@@ -944,18 +966,18 @@ int64_t LLVMParser::evaluateAST(llvm::SmallVectorImpl<BFSEntry> &AST,
   if (!CI) {
     // Value might become poison so take care of this
     Error = true;
-    return 0;
+    return APInt(1, 0);
   }
 
   Error = false;
-  return CI->getLimitedValue();
+  return CI->getValue();
 }
 
 llvm::Constant *
 LLVMParser::getVal(llvm::Value *V,
                    llvm::DenseMap<llvm::Value *, llvm::Constant *> &ValueStack,
                    llvm::SmallVectorImpl<llvm::Value *> &Variables,
-                   llvm::SmallVectorImpl<int64_t> &Par) {
+                   llvm::SmallVectorImpl<llvm::APInt> &Par) {
   if (Constant *CV = dyn_cast<Constant>(V))
     return CV;
 

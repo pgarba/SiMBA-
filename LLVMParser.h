@@ -110,7 +110,7 @@ private:
 
   bool parse(const std::string &filename);
 
-  bool verify(llvm::Function *F0, llvm::Function *F1, uint64_t Modulus);
+  bool verify(llvm::Function *F0, llvm::Function *F1, llvm::APInt &Modulus);
 
   bool verify(llvm::SmallVectorImpl<BFSEntry> &AST, std::string &SimpExpr,
               llvm::SmallVectorImpl<llvm::Value *> &Variables);
@@ -122,8 +122,9 @@ private:
 
   bool hasLoadStores(llvm::Function &F);
 
-  void initResultVector(llvm::Function &F, std::vector<int64_t> &ResultVector,
-                        int64_t Modulus, int VNumber, llvm::Type *IntType);
+  void initResultVector(llvm::Function &F,
+                        std::vector<llvm::APInt> &ResultVector,
+                        llvm::APInt &Modulus, int VNumber, llvm::Type *IntType);
 
   bool runLLVMOptimizer(bool Initial = false);
 
@@ -143,19 +144,19 @@ private:
   void printAST(llvm::SmallVectorImpl<BFSEntry> &AST, bool isRootAST);
 
   void initResultVectorFromAST(llvm::SmallVectorImpl<BFSEntry> &AST,
-                               std::vector<int64_t> &ResultVector,
-                               uint64_t Modulus,
+                               std::vector<llvm::APInt> &ResultVector,
+                               llvm::APInt &Modulus,
                                llvm::SmallVectorImpl<llvm::Value *> &Variables);
 
-  int64_t evaluateAST(llvm::SmallVectorImpl<BFSEntry> &AST,
-                      llvm::SmallVectorImpl<llvm::Value *> &Variables,
-                      llvm::SmallVectorImpl<int64_t> &Par, bool &Error);
+  llvm::APInt evaluateAST(llvm::SmallVectorImpl<BFSEntry> &AST,
+                          llvm::SmallVectorImpl<llvm::Value *> &Variables,
+                          llvm::SmallVectorImpl<llvm::APInt> &Par, bool &Error);
 
   llvm::Constant *
   getVal(llvm::Value *V,
          llvm::DenseMap<llvm::Value *, llvm::Constant *> &ValueStack,
          llvm::SmallVectorImpl<llvm::Value *> &Variables,
-         llvm::SmallVectorImpl<int64_t> &Par);
+         llvm::SmallVectorImpl<llvm::APInt> &Par);
 
   bool doesDominateInst(llvm::DominatorTree *DT, const llvm::Instruction *InstA,
                         const llvm::Instruction *InstB);

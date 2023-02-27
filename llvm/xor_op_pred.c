@@ -1,6 +1,8 @@
 #include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
 
-int MBAFunc(int argc, char* argv[])
+int main(int argc, char* argv[])
 {
   uint8_t x, y, z;
   x = (uint8_t) atoi (argv[1]);

@@ -8,6 +8,8 @@
 
 #include <cstdint>
 
+#include <llvm/ADT/APInt.h>
+
 #include "splitmix64.h"
 
 // LSimba namespace
@@ -24,7 +26,7 @@ public:
              const std::string &expr);
 
   Simplifier(int bitCount, bool UseSigned, bool runParallel, int VNumber,
-             std::vector<int64_t> ResultVector);
+             std::vector<llvm::APInt> ResultVector);
 
   static bool simplify_linear_mba(bool UseSigned, std::string &expr,
                                   std::string &simp_expr, int bitCount = 64,
@@ -50,7 +52,8 @@ private:
 
   int bitCount;
 
-  int64_t modulus;
+  // int64_t modulus;
+  llvm::APInt modulus;
 
   std::vector<std::string> originalVariables;
 
@@ -58,9 +61,9 @@ private:
 
   int vnumber;
 
-  std::vector<int64_t> resultVector;
+  std::vector<llvm::APInt> resultVector;
 
-  std::vector<int64_t> initialResultVector;
+  std::vector<llvm::APInt> initialResultVector;
 
   SplitMix64 SP64;
 
@@ -70,7 +73,10 @@ private:
   std::map<int64_t, std::string> varMap;
   std::string &get_vname(int i);
 
-  int64_t mod_red(int64_t n);
+  void fillResultSet(std::vector<llvm::APInt> &resultSet,
+                     std::vector<llvm::APInt> &inputVector);
+
+  llvm::APInt mod_red(llvm::APInt n, bool Signed = false);
 
   void parse_and_replace_variables();
 
@@ -86,46 +92,48 @@ private:
 
   const std::vector<std::string> get_bitwise_list();
 
-  int get_bitwise_index_for_vector(std::vector<int64_t> &vector, int offset);
+  int get_bitwise_index_for_vector(std::vector<llvm::APInt> &vector,
+                                   int offset);
 
   int get_bitwise_index(int offset);
 
-  bool is_sum_modulo(int64_t s1, int64_t s2, int64_t a);
+  bool is_sum_modulo(llvm::APInt s1, llvm::APInt s2, llvm::APInt a);
 
-  bool is_double_modulo(int64_t a, int64_t b);
+  bool is_double_modulo(llvm::APInt a, llvm::APInt b);
 
   // replacing string here leads to a bug
-  std::string append_term_refinement(std::string &expr,
-                                     std::vector<std::string> &bitwiseList,
-                                     int64_t r1, bool IsrAlt = false,
-                                     int64_t rAlt = 0);
+  std::string
+  append_term_refinement(std::string &expr,
+                         const std::vector<std::string> &bitwiseList,
+                         llvm::APInt r1, bool IsrAlt, llvm::APInt rAlt);
 
   std::string
-  expression_for_each_unique_value(std::set<int64_t> &resultSet,
-                                   std::vector<std::string> &bitwiseList);
+  expression_for_each_unique_value(std::vector<llvm::APInt> &resultSet,
+                                   const std::vector<std::string> &bitwiseList);
+
+  std::string try_find_negated_single_expression(
+      std::vector<llvm::APInt> &resultSet,
+      const std::vector<std::string> &bitwiseList);
 
   std::string
-  try_find_negated_single_expression(std::set<int64_t> &resultSet,
-                                     std::vector<std::string> &bitwiseList);
-
-  std::string try_eliminate_unique_value(std::vector<int64_t> &uniqueValues,
-                                         std::vector<std::string> &bitwiseList);
+  try_eliminate_unique_value(std::vector<llvm::APInt> &uniqueValues,
+                             const std::vector<std::string> &bitwiseList);
 
   void try_refine(std::string &expr);
 
-  void append_conjunction(std::string &expr, int64_t coeff,
+  void append_conjunction(std::string &expr, llvm::APInt coeff,
                           std::vector<int> &variables);
 
   bool are_variables_true(int n, std::vector<int> &variables, int start = 0);
 
-  void subtract_coefficient(int64_t coeff, int firstStart,
+  void subtract_coefficient(llvm::APInt coeff, int firstStart,
                             std::vector<int> &variables);
 
   std::string simplify_generic();
 
   void try_simplify_fewer_variables(std::string &expr);
 
-  std::string simplify_one_value(std::set<int64_t> &resultSet);
+  std::string simplify_one_value(std::vector<llvm::APInt> &resultSet);
 
   void get_variable_combinations(std::vector<std::vector<int>> &comb);
 
