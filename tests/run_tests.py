@@ -84,6 +84,10 @@ def main():
                     str(BitCount) + \
                     ' -checklinear=true -mba \"' + mba + "\""
 
+                # On non Windows replace \ with /
+                if os.name != 'nt':
+                    cmd = cmd.replace("\\", "/")
+
                 output = os.popen(cmd).read()
 
                 # Check if output contains the string "Not Valid Transformation!"

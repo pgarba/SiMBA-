@@ -68,6 +68,10 @@ def main():
         cmd = '..\\build\\SiMBA++ --simplify-expected -fastcheck -bitcount=' + \
             str(BitCount) + \
             ' -checklinear=true -optimize=false -ir ..\llvm\\' + filename + ""
+        
+        # On non Windows replace \ with /
+        if os.name != 'nt':
+            cmd = cmd.replace("\\", "/")
 
         # measure time
         start = time.time()

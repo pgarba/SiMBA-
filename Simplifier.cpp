@@ -1038,7 +1038,8 @@ const std::vector<std::string> &Simplifier::get_bitwise_list() {
     return Bitwise_List_3;
   }
 
-  return {};
+  // unreachable
+  report_fatal_error("");
 }
 
 int Simplifier::get_bitwise_index_for_vector(std::vector<llvm::APInt> &vector,

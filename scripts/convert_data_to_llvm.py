@@ -18,8 +18,14 @@ def main():
 
         # Remove the file extension from the filename
         filename_out = filename.split('.')[0]
-        os.system('..\\build\\SiMBA++ --mbadb=..\\data\\' + filename +
-                  " --convert-to-llvm=..\\llvm\\" + filename_out + ".ll")
+        cmd = '..\\build\\SiMBA++ --mbadb=..\\data\\' + filename + \
+            " --convert-to-llvm=..\\llvm\\" + filename_out + ".ll"
+
+        # On non Windows replace \ with /
+        if os.name != 'nt':
+            cmd = cmd.replace("\\", "/")
+
+        os.system(cmd)
 
         filesnames_out.append(filename_out)
 

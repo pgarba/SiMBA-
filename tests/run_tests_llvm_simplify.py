@@ -52,12 +52,20 @@ def main():
         # remove .ll from filename
         filename_no_extension = filename[:-3]
 
+        # On non Windows replace \ with /
+        if os.name != 'nt':
+            filename_no_extension = filename_no_extension.replace("\\", "/")
+
         # Get actual output from SiMBA++
         cmd = '..\\build\\SiMBA++ -fastcheck -bitcount=' + \
             str(BitCount) + \
             ' -optimize=true -detect-simplify -ir ..\llvm\\' + \
             filename + " -out " + filename_no_extension + ".simplify.ll"
 
+        # On non Windows replace \ with /
+        if os.name != 'nt':
+            cmd = cmd.replace("\\", "/")
+        
         # measure time
         start = time.time()
 
@@ -79,7 +87,15 @@ def main():
             break
 
         # Check if output files are smaller than original ones
-        if os.path.getsize(filename_no_extension + ".simplify.ll") > os.path.getsize('..\llvm\\' + filename):
+        SimpFilePath = filename_no_extension + ".simplify.ll"
+        OrgFilePath = "..\llvm\\" + filename
+
+        # On non Windows replace \ with /
+        if os.name != 'nt':
+            SimpFilePath = SimpFilePath.replace("\\", "/")
+            OrgFilePath = OrgFilePath.replace("\\", "/")
+
+        if os.path.getsize(SimpFilePath) > os.path.getsize(OrgFilePath):
             print(bcolors.FAIL + "[E] Test " +
                   filename + " failed!" + bcolors.ENDC)
             print(bcolors.FAIL + "Command: " + cmd + bcolors.ENDC)
@@ -122,6 +138,10 @@ def main():
     for filename in filenames:
         # remove .ll from filename
         filename_no_extension = filename[:-3]
+
+        # On non Windows replace \ with /
+        if os.name != 'nt':
+            filename_no_extension = filename_no_extension.replace("\\", "/")
 
         # remove output file
         if os.path.exists(filename_no_extension + ".simplify.ll"):
