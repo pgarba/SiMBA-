@@ -83,11 +83,6 @@ cl::opt<bool> SimplifyExpected(
     cl::desc("Simplify the expected value to match it (Default false)"),
     cl::value_desc("simplify-expected"), cl::init(false));
 
-// TODO: Can be removed when APINT conversion is done
-cl::opt<bool> UseSigned("signed", cl::Optional,
-                        cl::desc("Evaluate as signed values (Default false)"),
-                        cl::value_desc("signed"), cl::init(false));
-
 cl::opt<bool>
     RunParallel("parallel", cl::Optional,
                 cl::desc("Evaluate/Check MBA expressions in parallel, give a "
@@ -170,7 +165,7 @@ void SimplifySingleMBA() {
   std::string SimpMBA = "";
   auto start = high_resolution_clock::now();
   auto Result = LSiMBA::Simplifier::simplify_linear_mba(
-      UseSigned, StrMBA, SimpMBA, BitCount, UseZ3, CheckLinear);
+      StrMBA, SimpMBA, BitCount, UseZ3, CheckLinear);
   auto stop = high_resolution_clock::now();
   auto duration = duration_cast<milliseconds>(stop - start);
 
@@ -274,8 +269,8 @@ void SimplifyMBADatabase() {
 void SimplifyLLVMDataBase() {
   outs() << "[+] Loading LLVM MBA Module: '" << StrIR << "'\n";
 
-  LSiMBA::LLVMParser Parser(StrIR, Output, BitCount, UseSigned, RunParallel,
-                            UseFastCheck, RunOptimizer, RunOptimizer, Debug);
+  LSiMBA::LLVMParser Parser(StrIR, Output, BitCount, RunParallel, UseFastCheck,
+                            RunOptimizer, RunOptimizer, Debug);
 
   auto start = high_resolution_clock::now();
 
@@ -291,8 +286,8 @@ void SimplifyLLVMDataBase() {
 void SimplifyLLVMModule() {
   outs() << "[+] Loading LLVM Module: '" << StrIR << "'\n";
 
-  LSiMBA::LLVMParser Parser(StrIR, Output, BitCount, UseSigned, RunParallel,
-                            UseFastCheck, RunOptimizer);
+  LSiMBA::LLVMParser Parser(StrIR, Output, BitCount, RunParallel, UseFastCheck,
+                            RunOptimizer);
 
   auto start = high_resolution_clock::now();
 
@@ -309,13 +304,12 @@ void RunSimplifier(std::string &MBA, std::string &SimpMBA, std::string &ExpMBA,
                    int &Counter, int &Valid) {
   // Simplify MBA
   auto Result = LSiMBA::Simplifier::simplify_linear_mba(
-      UseSigned, MBA, SimpMBA, BitCount, UseZ3, CheckLinear, UseFastCheck,
-      RunParallel);
+      MBA, SimpMBA, BitCount, UseZ3, CheckLinear, UseFastCheck, RunParallel);
 
   // Simplify Groundtruth
   if (IgnoreExpected == false && SimplifyExpected == true) {
-    LSiMBA::Simplifier::simplify_linear_mba(UseSigned, MBA, ExpMBA, BitCount,
-                                            false, false, false, RunParallel);
+    LSiMBA::Simplifier::simplify_linear_mba(MBA, ExpMBA, BitCount, false, false,
+                                            false, RunParallel);
   }
 
   // Check if valid replacement

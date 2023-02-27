@@ -52,8 +52,7 @@ bool SiMBAPass::runOnModule(Module &M) {
 bool SiMBAPass::runOnModuleStatic(Module &M) {
   outs() << "[+] Loading LLVM Module: '" << M.getName() << "'\n";
 
-  LSiMBA::LLVMParser Parser(&M, 64, UseSigned, false, UseFastCheck, false, true,
-                            true);
+  LSiMBA::LLVMParser Parser(&M, 64, false, UseFastCheck, false, true, true);
 
   auto start = high_resolution_clock::now();
 

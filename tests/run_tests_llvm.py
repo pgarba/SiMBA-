@@ -24,9 +24,6 @@ MaxTestCount = 50
 # Bitcount to use for SiMBA++
 BitCount = 64
 
-# Signed or unsigned
-Signed = 0
-
 # Global variable to check if all tests passed
 PASSED = True
 
@@ -41,11 +38,6 @@ def main():
     if (len(sys.argv) > 1):
         global BitCount
         BitCount = int(sys.argv[1])
-
-    # Read signed argument from commandline
-    if (len(sys.argv) > 2):
-        global Signed
-        Signed = int(sys.argv[2])
 
     # add all files from llvm folder that contain the string "vars" in name
     filenames = os.listdir("../llvm")
@@ -75,8 +67,7 @@ def main():
         # Get actual output from SiMBA++
         cmd = '..\\build\\SiMBA++ --simplify-expected -fastcheck -bitcount=' + \
             str(BitCount) + \
-            ' -checklinear=true -optimize=false -signed=' + \
-            str(Signed) + ' -ir ..\llvm\\' + filename + ""
+            ' -checklinear=true -optimize=false -ir ..\llvm\\' + filename + ""
 
         # measure time
         start = time.time()

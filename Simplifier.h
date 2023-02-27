@@ -22,15 +22,14 @@ std::string strip(const std::string &inpt);
 
 class Simplifier {
 public:
-  Simplifier(int bitCount, bool UseSigned, bool runParallel,
-             const std::string &expr);
+  Simplifier(int bitCount, bool runParallel, const std::string &expr);
 
-  Simplifier(int bitCount, bool UseSigned, bool runParallel, int VNumber,
+  Simplifier(int bitCount, bool runParallel, int VNumber,
              std::vector<llvm::APInt> ResultVector);
 
-  static bool simplify_linear_mba(bool UseSigned, std::string &expr,
-                                  std::string &simp_expr, int bitCount = 64,
-                                  bool useZ3 = false, bool checkLinear = false,
+  static bool simplify_linear_mba(std::string &expr, std::string &simp_expr,
+                                  int bitCount = 64, bool useZ3 = false,
+                                  bool checkLinear = false,
                                   bool fastCheck = true,
                                   bool runParallel = true);
 
@@ -43,8 +42,6 @@ public:
 
 private:
   bool RunParallel;
-
-  bool UseSigned;
 
   int MaxThreadCount;
 
@@ -67,8 +64,7 @@ private:
 
   SplitMix64 SP64;
 
-  void init(int bitCount, bool UseSigned, bool runParallel,
-            const std::string &expr);
+  void init(int bitCount, bool runParallel, const std::string &expr);
 
   std::map<int64_t, std::string> varMap;
   std::string &get_vname(int i);

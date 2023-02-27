@@ -24,9 +24,6 @@ MaxTestCount = 50
 # Bitcount to use for SiMBA++
 BitCount = 64
 
-# Signed or unsigned
-Signed = 0
-
 # Global variable to check if all tests passed
 PASSED = True
 
@@ -46,11 +43,6 @@ def main():
         global BitCount
         BitCount = int(sys.argv[1])
 
-    # Read signed argument from commandline
-    if (len(sys.argv) > 2):
-        global Signed
-        Signed = int(sys.argv[2])
-
     for filename in filenames:
         if PASSED == False:
             break
@@ -63,8 +55,7 @@ def main():
         # Get actual output from SiMBA++
         cmd = '..\\build\\SiMBA++ -fastcheck -bitcount=' + \
             str(BitCount) + \
-            ' -optimize=true -detect-simplify -signed=' + \
-            str(Signed) + ' -ir ..\llvm\\' + \
+            ' -optimize=true -detect-simplify -ir ..\llvm\\' + \
             filename + " -out " + filename_no_extension + ".simplify.ll"
 
         # measure time

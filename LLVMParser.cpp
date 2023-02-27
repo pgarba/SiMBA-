@@ -40,11 +40,11 @@ namespace LSiMBA {
 llvm::LLVMContext LLVMParser::Context;
 
 LLVMParser::LLVMParser(const std::string &filename,
-                       const std::string &OutputFile, int BitWidth, bool Signed,
+                       const std::string &OutputFile, int BitWidth,
                        bool Parallel, bool Verify, bool OptimizeBefore,
                        bool OptimizeAfter, bool Debug)
-    : OutputFile(OutputFile), BitWidth(BitWidth), Signed(Signed),
-      Parallel(Parallel), Verify(Verify), OptimizeBefore(OptimizeBefore),
+    : OutputFile(OutputFile), BitWidth(BitWidth), Parallel(Parallel),
+      Verify(Verify), OptimizeBefore(OptimizeBefore),
       OptimizeAfter(OptimizeAfter), Debug(Debug), SP64(filename.length()),
       TLII(nullptr), TLI(nullptr), M(nullptr) {
   if (!this->parse(filename)) {
@@ -60,13 +60,13 @@ LLVMParser::LLVMParser(const std::string &filename,
   this->MaxThreadCount = thread::hardware_concurrency();
 }
 
-LLVMParser::LLVMParser(llvm::Module *M, int BitWidth, bool Signed,
-                       bool Parallel, bool Verify, bool OptimizeBefore,
-                       bool OptimizeAfter, bool Debug)
-    : M(M), BitWidth(BitWidth), Signed(Signed), Parallel(Parallel),
-      Verify(Verify), OptimizeBefore(OptimizeBefore),
-      OptimizeAfter(OptimizeAfter), Debug(Debug),
-      SP64(M->getName().str().length()), TLII(nullptr), TLI(nullptr) {
+LLVMParser::LLVMParser(llvm::Module *M, int BitWidth, bool Parallel,
+                       bool Verify, bool OptimizeBefore, bool OptimizeAfter,
+                       bool Debug)
+    : M(M), BitWidth(BitWidth), Parallel(Parallel), Verify(Verify),
+      OptimizeBefore(OptimizeBefore), OptimizeAfter(OptimizeAfter),
+      Debug(Debug), SP64(M->getName().str().length()), TLII(nullptr),
+      TLI(nullptr) {
   // Create evaluator
 
   this->TLII = new TargetLibraryInfoImpl(Triple(M->getTargetTriple()));
@@ -329,7 +329,7 @@ int LLVMParser::simplifyMBAModule() {
     this->initResultVector(*F, ResultVector, Modulus, VNumber, RetTy);
 
     // Simpify MBA
-    Simplifier S(this->BitWidth, this->Signed, false, VNumber, ResultVector);
+    Simplifier S(this->BitWidth, false, VNumber, ResultVector);
 
     std::string SimpExpr;
     S.simplify(SimpExpr, false, false);
@@ -714,8 +714,7 @@ bool LLVMParser::findReplacements(llvm::DominatorTree *DT,
     initResultVectorFromAST(Cand.AST, ResultVector, Modulus, Cand.Variables);
 
     // Simpify MBA
-    Simplifier S(this->BitWidth, this->Signed, false, Cand.Variables.size(),
-                 ResultVector);
+    Simplifier S(this->BitWidth, false, Cand.Variables.size(), ResultVector);
 
     S.simplify(Cand.Replacement, false, false);
 
@@ -783,8 +782,7 @@ bool LLVMParser::walkSubAST(llvm::DominatorTree *DT,
       initResultVectorFromAST(C.AST, ResultVector, Modulus, C.Variables);
 
       // Simplify MBA
-      Simplifier S(this->BitWidth, this->Signed, false, C.Variables.size(),
-                   ResultVector);
+      Simplifier S(this->BitWidth, false, C.Variables.size(), ResultVector);
 
       S.simplify(C.Replacement, false, false);
 

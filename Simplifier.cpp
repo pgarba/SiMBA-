@@ -28,15 +28,14 @@ using namespace llvm;
 using namespace std;
 
 namespace LSiMBA {
-Simplifier::Simplifier(int bitCount, bool UseSigned, bool runParallel,
-                       const std::string &expr)
+Simplifier::Simplifier(int bitCount, bool runParallel, const std::string &expr)
     : bitCount(0), vnumber(0), SP64(expr.at(0)) {
 
-  this->init(bitCount, UseSigned, runParallel, expr);
+  this->init(bitCount, runParallel, expr);
 };
 
-Simplifier::Simplifier(int bitCount, bool UseSigned, bool runParallel,
-                       int VNumber, std::vector<llvm::APInt> ResultVector)
+Simplifier::Simplifier(int bitCount, bool runParallel, int VNumber,
+                       std::vector<llvm::APInt> ResultVector)
     : bitCount(0), vnumber(0), SP64(VNumber * bitCount) {
   this->groupsizes = {1};
   this->bitCount = bitCount;
@@ -51,7 +50,6 @@ Simplifier::Simplifier(int bitCount, bool UseSigned, bool runParallel,
   }
 
   this->RunParallel = runParallel;
-  this->UseSigned = UseSigned;
   this->MaxThreadCount = thread::hardware_concurrency();
 
   // create fake variables
@@ -67,8 +65,7 @@ Simplifier::Simplifier(int bitCount, bool UseSigned, bool runParallel,
   this->init_groupsizes();
 }
 
-void Simplifier::init(int bitCount, bool UseSigned, bool runParallel,
-                      const std::string &expr) {
+void Simplifier::init(int bitCount, bool runParallel, const std::string &expr) {
   this->groupsizes = {1};
   this->bitCount = bitCount;
   this->modulus = getModulus(bitCount);
@@ -78,7 +75,6 @@ void Simplifier::init(int bitCount, bool UseSigned, bool runParallel,
   this->resultVector = {};
 
   this->RunParallel = runParallel;
-  this->UseSigned = UseSigned;
   this->MaxThreadCount = thread::hardware_concurrency();
 
   this->parse_and_replace_variables();
@@ -751,8 +747,7 @@ void Simplifier::try_simplify_fewer_variables(std::string &expr) {
     }
   }
 
-  auto innerSimplifier =
-      Simplifier(this->bitCount, this->UseSigned, this->RunParallel, expr);
+  auto innerSimplifier = Simplifier(this->bitCount, this->RunParallel, expr);
 
   // Maybe not needed to set ""
   // expr = "";
@@ -1082,9 +1077,8 @@ void Simplifier::replace_all(std::string &str, const std::string &from,
   }
 }
 
-bool Simplifier::simplify_linear_mba(bool UseSigned, std::string &expr,
-                                     std::string &simp_expr, int bitCount,
-                                     bool useZ3, bool checkLinear,
+bool Simplifier::simplify_linear_mba(std::string &expr, std::string &simp_expr,
+                                     int bitCount, bool useZ3, bool checkLinear,
                                      bool fastCheck, bool runParallel) {
   MBAChecker C;
   if (checkLinear && !C.check_expression(expr)) {
@@ -1092,7 +1086,7 @@ bool Simplifier::simplify_linear_mba(bool UseSigned, std::string &expr,
     return "";
   }
 
-  Simplifier S(bitCount, UseSigned, runParallel, expr);
+  Simplifier S(bitCount, runParallel, expr);
   auto R = S.simplify(simp_expr, useZ3, fastCheck);
   return R;
 }

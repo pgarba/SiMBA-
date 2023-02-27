@@ -48,14 +48,13 @@ typedef struct MBACandidate {
 class LLVMParser {
 public:
   LLVMParser(const std::string &filename, const std::string &OutputFile,
-             int BitWidth = 64, bool Signed = true, bool Parallel = true,
-             bool Verify = true, bool OptimizeBefore = true,
-             bool OptimizeAfter = true, bool Debug = false);
-
-  LLVMParser(llvm::Module *M, int BitWidth = 64, bool Signed = true,
-             bool Parallel = true, bool Verify = true,
+             int BitWidth = 64, bool Parallel = true, bool Verify = true,
              bool OptimizeBefore = true, bool OptimizeAfter = true,
              bool Debug = false);
+
+  LLVMParser(llvm::Module *M, int BitWidth = 64, bool Parallel = true,
+             bool Verify = true, bool OptimizeBefore = true,
+             bool OptimizeAfter = true, bool Debug = false);
 
   ~LLVMParser();
 
@@ -75,8 +74,6 @@ private:
   std::string OutputFile = "";
 
   int BitWidth;
-
-  bool Signed;
 
   bool Parallel;
 
