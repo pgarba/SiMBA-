@@ -116,7 +116,8 @@ private:
 
   void initResultVector(llvm::Function &F,
                         std::vector<llvm::APInt> &ResultVector,
-                        const llvm::APInt &Modulus, int VNumber, llvm::Type *IntType);
+                        const llvm::APInt &Modulus, int VNumber,
+                        llvm::Type *IntType);
 
   bool runLLVMOptimizer(bool Initial = false);
 
@@ -133,7 +134,7 @@ private:
   bool walkSubAST(llvm::DominatorTree *DT, llvm::SmallVectorImpl<BFSEntry> &AST,
                   std::vector<MBACandidate> &Candidates);
 
-  void printAST(llvm::SmallVectorImpl<BFSEntry> &AST, bool isRootAST);
+  void printAST(llvm::SmallVectorImpl<BFSEntry> &AST);
 
   void initResultVectorFromAST(llvm::SmallVectorImpl<BFSEntry> &AST,
                                std::vector<llvm::APInt> &ResultVector,

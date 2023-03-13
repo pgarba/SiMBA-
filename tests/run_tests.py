@@ -27,8 +27,8 @@ BitCount = 64
 # Global variable to check if all tests passed
 PASSED = True
 
-# Main function
 
+# Main function
 
 def main():
     # Get all filenames from data folder that end with .csv or .txt
@@ -87,7 +87,7 @@ def main():
                 # On non Windows replace \ with /
                 if os.name != 'nt':
                     cmd = cmd.replace("\\", "/")
-
+                
                 output = os.popen(cmd).read()
 
                 # Check if output contains the string "Not Valid Transformation!"
@@ -108,7 +108,7 @@ def main():
 
         # measure time
         end = time.time()
-
+                
         print("[*] Testing " + filename +
               " (" + "{:.2f}".format(end - start) + "s)")
 

@@ -11,9 +11,13 @@ class Type;
 class Value;
 }; // namespace llvm
 
+/*
+    Get the count of operators
+*/
+int countOperators(std::string &expr);
+
 llvm::APInt eval(std::string expr, llvm::SmallVector<llvm::APInt, 16> &par,
-                 int BitWidth,
-                 int *OperationCount = nullptr);
+                 int BitWidth, int *OperationCount = nullptr);
 
 llvm::Function *createLLVMFunction(llvm::Module *M, llvm::Type *IntType,
                                    std::string &expr,

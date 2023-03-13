@@ -62,6 +62,44 @@ int8_t isVariable(const char *c, std::vector<std::string> *VNames) {
   return -1;
 }
 
+int countOperators(std::string &expr) {
+  int OpCount = 0;
+  for (const auto *p = expr.c_str(); *p; ++p) {
+    switch (*p) {
+    case '*':
+      OpCount++;
+      break;
+    case '/':
+      OpCount++;
+      break;
+    case '&':
+      OpCount++;
+      break;
+    case '|':
+      OpCount++;
+      break;
+    case '^':
+      OpCount++;
+      break;
+    case '+':
+      OpCount++;
+      break;
+    case '~':
+      OpCount++;
+      break;
+    case '!':
+      OpCount++;
+      break;
+    case '-':
+      OpCount++;
+      break;
+    default:
+      break;
+    }
+  }
+  return OpCount;
+}
+
 void exprToTokens(const std::string &expr, veque::veque<Token> &tokens,
                   bool detectVariables = false,
                   std::vector<std::string> *VNames = nullptr) {
@@ -93,6 +131,8 @@ void exprToTokens(const std::string &expr, veque::veque<Token> &tokens,
       char c = *p;
       switch (c) {
       default:
+        llvm::outs() << "[exprToTokens]: Unkown Token '" << c << "'\n";
+        report_fatal_error("", false);
         break;
       case '(':
         t = Token::Type::LeftParen;

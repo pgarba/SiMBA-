@@ -273,10 +273,9 @@ bool Simplifier::is_double_modulo(llvm::APInt &a, llvm::APInt &b) {
   return ((2 * b) == a) || ((2 * b) == (a + this->modulus));
 }
 
-std::string
-Simplifier::append_term_refinement(std::string &expr,
-                                   const std::vector<std::string> &bitwiseList,
-                                   const APInt &r1, bool IsrAlt, const APInt &rAlt) {
+std::string Simplifier::append_term_refinement(
+    std::string &expr, const std::vector<std::string> &bitwiseList,
+    const APInt &r1, bool IsrAlt, const APInt &rAlt) {
   std::vector<APInt> t;
   for (auto &r2 : this->resultVector) {
     if (r2 == r1 || (IsrAlt && (r2 == rAlt))) {
@@ -526,7 +525,6 @@ void Simplifier::try_refine(std::string &expr) {
   }
 
   resultSet.clear();
-  // resultSet.insert(this->resultVector.begin(), this->resultVector.end());
   fillResultSet(resultSet, this->resultVector);
 
   l = resultSet.size();
@@ -551,8 +549,9 @@ void Simplifier::try_refine(std::string &expr) {
       uniqueValues.push_back(r);
     }
   }
+  outs() << "Sort 1 uniqueValues: " << uniqueValues.size();
   std::sort(uniqueValues.begin(), uniqueValues.end(),
-            [](APInt &L, APInt &R) { return L.ule(R); });
+            [](APInt &L, APInt &R) { return !R.ule(L); });
 
   if (l == 4 && constant == 0) {
     // (6) We can still come down to 2 expressions if we can express one

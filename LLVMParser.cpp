@@ -249,14 +249,16 @@ int LLVMParser::extractAndSimplify() {
       if (Candidates[i].isValid == false)
         continue;
 
-      // if (this->Debug) {
-      printAST(Candidates[i].AST, true);
-      outs() << "[!] Simplified to: " << Candidates[i].Replacement << "\n";
-      //}
+      if (this->Debug) {
+        printAST(Candidates[i].AST);
+        outs() << "[!] Simplification: '" << Candidates[i].Replacement
+               << " with " << countOperators(Candidates[i].Replacement)
+               << " operators!\n";
+      }
 
       std::vector<std::string> VNames;
       char ArgName = 'a';
-      for (int i = 0; i < Candidates[i].Variables.size(); i++) {
+      for (int j = 0; j < Candidates[i].Variables.size(); j++) {
         VNames.push_back(std::string(1, ArgName++));
       }
 
@@ -306,7 +308,7 @@ int LLVMParser::simplifyMBAModule() {
   auto start = high_resolution_clock::now();
   for (auto F : Functions) {
     // Get the terminator
-    auto Terminator = getSingleTerminator(*F);    
+    auto Terminator = getSingleTerminator(*F);
 
     int BitWidth = Terminator->getOperand(0)->getType()->getIntegerBitWidth();
 
@@ -616,7 +618,7 @@ bool LLVMParser::findReplacements(llvm::DominatorTree *DT,
 
 #ifdef DEBUG_SIMPLIFICATION
     // Debug out
-    printAST(Cand.AST, true);
+    printAST(Cand.AST);
 
     // Debug print variables
     outs() << "[*] Variables:\n";
@@ -634,6 +636,10 @@ bool LLVMParser::findReplacements(llvm::DominatorTree *DT,
 
     // Try to simplify the whole AST
     int BitWidth = Cand.AST.front().I->getType()->getIntegerBitWidth();
+    if (BitWidth == 0) {
+      // If BitWidth is zero then stop here
+      return false;
+    }
     auto Modulus = getModulus(BitWidth);
 
     std::vector<APInt> ResultVector;
@@ -719,9 +725,6 @@ bool LLVMParser::walkSubAST(llvm::DominatorTree *DT,
         Candidates.push_back(C);
 
         Valid = true;
-
-        printAST(C.AST, true);
-        outs() << "[!] Simplified to: " << C.Replacement << "\n";
       }
     }
   }
@@ -763,13 +766,9 @@ void LLVMParser::initResultVectorFromAST(
   }
 }
 
-void LLVMParser::printAST(llvm::SmallVectorImpl<BFSEntry> &AST,
-                          bool isRootAST) {
-  if (isRootAST) {
-    outs() << "[*] Root AST:\n";
-  } else {
-    outs() << "[*] AST:\n";
-  }
+void LLVMParser::printAST(llvm::SmallVectorImpl<BFSEntry> &AST) {
+  outs() << "[*] AST (Operators: " << AST.size() << "):\n";
+
   for (auto &e : AST) {
     outs() << e.Depth << ": ";
     e.I->print(outs());
