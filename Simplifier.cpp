@@ -144,19 +144,24 @@ bool Simplifier::simplify(std::string &simp_exp, bool useZ3, bool fastCheck) {
     }
   }
 
-  /*
-    if (useZ3 && this->verify_mba_unsat(simpl)) {
-      printf("Error in simplification! Simplified expression is not equivalent "
-             "to original one!");
-      return "";
-    }
-    */
-
+  // Replace variables back
   this->replace_variables_back(simpl);
+  this->replace_variables_back(originalExpression);
+
+  if (Result && useZ3 &&
+      this->verify_mba_unsat(simpl, this->originalExpression)) {
+    printf("[Error] Simplified expression is not equivalent "
+           "to original one!");
+    Result = false;
+  }
 
   simp_exp = simpl;
 
   return Result;
+}
+
+bool Simplifier::verify_mba_unsat(std::string &expr0, std::string &expr1) {
+  return !proveReplacement(expr0, expr1, this->bitCount, this->originalVariables);
 }
 
 bool Simplifier::probably_equivalent(std::string &expr0, std::string &expr1) {
@@ -1085,6 +1090,7 @@ bool Simplifier::simplify_linear_mba(std::string &expr, std::string &simp_expr,
 
   Simplifier S(bitCount, runParallel, expr);
   auto R = S.simplify(simp_expr, useZ3, fastCheck);
+
   return R;
 }
 

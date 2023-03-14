@@ -1,4 +1,5 @@
 #include <iostream>
+#include <map>
 #include <math.h>
 #include <sstream>
 #include <stdio.h>
@@ -15,6 +16,8 @@
 #include <llvm/IR/Module.h>
 
 #include <llvm/IR/IRBuilder.h>
+
+#include <z3++.h>
 
 #include "veque.h"
 
@@ -687,4 +690,162 @@ APInt eval(std::string expr, SmallVector<APInt, 16> &par, int BitWidth,
   }
 
   return stackAP.back();
+}
+
+z3::expr getZ3ExprFromString(z3::context &Z3Ctx, std::string &expr,
+                             int BitWidth, std::vector<std::string> &Variables,
+                             std::map<std::string, z3::expr *> &VarMap) {
+  veque::veque<Token> tokens;
+
+  exprToTokens(expr, tokens, true, &Variables);
+
+  veque::veque<Token> queue;
+  shuntingYard(tokens, queue);
+
+  // Create Variables
+  for (auto &Var : Variables) {
+    if (VarMap.find(Var) != VarMap.end())
+      continue;
+
+    auto expr = Z3Ctx.bv_const(Var.c_str(), BitWidth);
+    VarMap[Var] = new z3::expr(expr);
+  }
+
+  SmallVector<z3::expr, 32> stackAP;
+
+  while (!queue.empty()) {
+    const auto token = queue.front();
+    queue.pop_front();
+    switch (token.type) {
+    case Token::Type::Variable: {
+      auto c = token.str.c_str();
+      auto expr = VarMap[token.str.c_str()];
+      stackAP.push_back(*expr);
+    } break;
+    case Token::Type::Number: {
+      // APInt APV(BitWidth, token.str, 10);
+      auto ConstExpr = Z3Ctx.bv_val(token.str.c_str(), BitWidth);
+      stackAP.push_back(ConstExpr);
+    } break;
+    case Token::Type::Operator: {
+      if (token.unary) {
+        // unray operators
+        const auto rhsAP = stackAP.back();
+        stackAP.pop_back();
+
+        switch (token.str[0]) {
+        default: {
+          printf("Operator error [%s]\n", token.str.c_str());
+          exit(0);
+        } break;
+        case 'm': // Special operator name for unary '-'
+        {
+          auto NegExpr = -rhsAP;
+          stackAP.push_back(NegExpr);
+        } break;
+        case '~': {
+          auto CompExpr = ~rhsAP;
+          stackAP.push_back(CompExpr);
+        } break;
+        case '!':
+          // stackAP.push_back(rhsAP);
+          printf("! operator not implemented\n");
+          exit(-1);
+          break;
+        }
+      } else {
+        // binary operators
+        const auto rhsAP = stackAP.back();
+        stackAP.pop_back();
+
+        const auto lhsAP = stackAP.back();
+        stackAP.pop_back();
+
+        switch (token.str[0]) {
+        default: {
+          printf("Operator error [%s]\n", token.str.c_str());
+          exit(0);
+        } break;
+        case '^': {
+          auto XorExpr = lhsAP ^ rhsAP;
+          stackAP.push_back(XorExpr);
+        } break;
+        case '*': {
+          auto MulExpr = lhsAP * rhsAP;
+          stackAP.push_back(MulExpr);
+        } break;
+        case '/': {
+          auto DivExpr = lhsAP / rhsAP;
+          stackAP.push_back(DivExpr);
+        } break;
+        case '&': {
+          auto AndExpr = lhsAP & rhsAP;
+          stackAP.push_back(AndExpr);
+        } break;
+        case '|': {
+          auto OrExpr = lhsAP | rhsAP;
+          stackAP.push_back(OrExpr);
+        } break;
+        case '+': {
+          auto AddExpr = lhsAP + rhsAP;
+          stackAP.push_back(AddExpr);
+        } break;
+        case '-': {
+          auto SubExpr = lhsAP - rhsAP;
+          stackAP.push_back(SubExpr);
+        } break;
+        }
+      }
+    } break;
+
+    default:
+      printf("Token error\n");
+      exit(0);
+    }
+  }
+
+  return stackAP.back();
+}
+
+bool prove(z3::expr conjecture) {
+  z3::context &c = conjecture.ctx();
+  
+  //z3::solver s(c);
+
+  z3::tactic t(c, "qflia");
+  auto s = t.mk_solver();
+
+  s.add(!conjecture);
+
+  if (s.check() == z3::unsat) {
+    std::cout << "[Z3] Proved!"
+              << "\n";
+
+    return true;
+  } else {
+    std::cout << "[Z3] Failed to prove! Counter example:\n" << s.get_model() << "\n";
+
+    return false;
+  }
+}
+
+bool proveReplacement(std::string &expr0, std::string &expr1, int BitWidth,
+                      std::vector<std::string> &Variables) {
+  z3::context Z3Ctx;
+
+  // Get Expressions
+  std::map<std::string, z3::expr *> VarMap;
+
+  auto Z3Exp0 = getZ3ExprFromString(Z3Ctx, expr0, BitWidth, Variables, VarMap);
+  auto Z3Exp1 = getZ3ExprFromString(Z3Ctx, expr1, BitWidth, Variables, VarMap);
+
+  // Prove
+  auto Result = prove(((Z3Exp0 == Z3Exp1)));
+
+  // Clean up variables
+  for (auto v : VarMap) {
+    delete v.second;
+  }
+
+  return Result;
 }

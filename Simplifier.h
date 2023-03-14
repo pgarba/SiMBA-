@@ -98,10 +98,9 @@ private:
   bool is_double_modulo(llvm::APInt &a, llvm::APInt &b);
 
   // replacing string here leads to a bug
-  std::string
-  append_term_refinement(std::string &expr,
-                         const std::vector<std::string> &bitwiseList,
-                         const llvm::APInt &r1, bool IsrAlt, const llvm::APInt &rAlt);
+  std::string append_term_refinement(
+      std::string &expr, const std::vector<std::string> &bitwiseList,
+      const llvm::APInt &r1, bool IsrAlt, const llvm::APInt &rAlt);
 
   std::string
   expression_for_each_unique_value(std::vector<llvm::APInt> &resultSet,
@@ -141,6 +140,8 @@ private:
 
   bool probably_equivalent(std::string &expr0, std::string &expr1);
   bool probably_equivalent_parallel(std::string &expr0, std::string &expr1);
+
+  bool verify_mba_unsat(std::string &expr0, std::string &expr1);
 };
 } // namespace LSiMBA
 

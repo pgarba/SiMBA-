@@ -11,6 +11,10 @@
  */
 const llvm::APInt Modulus_1(128, 2);
 
+const llvm::APInt Modulus_2(128, 4);
+
+const llvm::APInt Modulus_4(128, 16);
+
 const llvm::APInt Modulus_8(128, 256);
 
 const llvm::APInt Modules_16(128, 65536);
@@ -31,6 +35,10 @@ const llvm::APInt LSiMBA::getModulus(int BitWidth) {
   switch (BitWidth) {
   case 1:
     return Modulus_1;
+  case 2:
+    return Modulus_2;
+  case 4:
+    return Modulus_4;
   case 8:
     return Modulus_8;
   case 16:

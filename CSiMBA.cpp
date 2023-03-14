@@ -59,10 +59,6 @@ cl::opt<bool> DetectAndSimplify(
         "Search for MBAs in LLVM Module and try to simplify (Default false)"),
     cl::value_desc("detect-simplify"), cl::init(false));
 
-cl::opt<bool> UseZ3("z3", cl::Optional,
-                    cl::desc("Verify MBA with Z3 (Default false)"),
-                    cl::value_desc("UseZ3"), cl::init(false));
-
 cl::opt<bool>
     UseFastCheck("fastcheck", cl::Optional,
                  cl::desc("Verify MBA with random values (Default true)"),
@@ -88,6 +84,11 @@ cl::opt<bool>
                 cl::desc("Evaluate/Check MBA expressions in parallel, give a "
                          "nice boost on MBA with > 3 vars (Default true)"),
                 cl::value_desc("parallel"), cl::init(true));
+
+cl::opt<bool>
+    ProveZ3("prove", cl::Optional,
+                cl::desc("Prove with Z3 that the MBA is correct (Default false)"),
+                cl::value_desc("prove"), cl::init(false));
 
 cl::opt<bool> RunOptimizer(
     "optimize", cl::Optional,
@@ -165,7 +166,7 @@ void SimplifySingleMBA() {
   std::string SimpMBA = "";
   auto start = high_resolution_clock::now();
   auto Result = LSiMBA::Simplifier::simplify_linear_mba(
-      StrMBA, SimpMBA, BitCount, UseZ3, CheckLinear);
+      StrMBA, SimpMBA, BitCount, ProveZ3, CheckLinear);
   auto stop = high_resolution_clock::now();
   auto duration = duration_cast<milliseconds>(stop - start);
 
@@ -304,7 +305,7 @@ void RunSimplifier(std::string &MBA, std::string &SimpMBA, std::string &ExpMBA,
                    int &Counter, int &Valid) {
   // Simplify MBA
   auto Result = LSiMBA::Simplifier::simplify_linear_mba(
-      MBA, SimpMBA, BitCount, UseZ3, CheckLinear, UseFastCheck, RunParallel);
+      MBA, SimpMBA, BitCount, ProveZ3, CheckLinear, UseFastCheck, RunParallel);
 
   // Simplify Groundtruth
   if (IgnoreExpected == false && SimplifyExpected == true) {

@@ -6,7 +6,13 @@ set(CMAKE_CXX_STANDARD 17)
 
 # set(LLVM_DIR "c:/libs/lib/cmake/llvm")
 find_package(LLVM REQUIRED CONFIG)
-message(STATUS ${LLVM_TOOLS_BINARY_DIR})
+message(STATUS "LLVM binary directory: " ${LLVM_TOOLS_BINARY_DIR})
+
+# z3
+find_package(Z3 REQUIRED CONFIG)
+
+message(STATUS "Z3 include directory: " ${Z3_CXX_INCLUDE_DIRS})
+include_directories(${Z3_CXX_INCLUDE_DIRS} "include")
 
 # Disable some LLVM warnings for Visual Studio
 if(WIN32)
@@ -58,11 +64,11 @@ add_test(NAME MBAs_Linear_64bit_unsigned_llvm
 add_library(SiMBAPass SHARED SiMBAPass.cpp SiMBAPass.h LLVMParser.cpp LLVMParser.h Simplifier.h Simplifier.cpp ShuttingYard.cpp MBAChecker.cpp MBAChecker.h Modulo.cpp Modulo.h)
 
 set_target_properties(SiMBAPass PROPERTIES
-    COMPILE_FLAGS " -fno-rtti "
+    COMPILE_FLAGS " -fno-rtti"
 )
 
 if(APPLE)
-    set(PASS_LDFLAGS " -Wl,-undefined,dynamic_lookup -Wl,-no_pie ")
+    set(PASS_LDFLAGS "-Wl,-undefined,dynamic_lookup -Wl,-no_pie")
 elseif(WIN32)
     target_link_libraries(SiMBAPass
         LLVMipo

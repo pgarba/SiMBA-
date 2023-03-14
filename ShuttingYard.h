@@ -28,4 +28,10 @@ void createLLVMReplacement(llvm::Instruction *InsertionPoint,
                            std::vector<std::string> &VNames,
                            llvm::SmallVectorImpl<llvm::Value *> &Variables);
 
+/*
+  Prove with Z3 that expr0 == expr1 (expensive!)
+*/
+bool proveReplacement(std::string &expr0, std::string &expr1, int BitWidth,
+                      std::vector<std::string> &Variables);
+
 #endif
