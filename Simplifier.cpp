@@ -22,6 +22,7 @@
 #include "MBAChecker.h"
 #include "Modulo.h"
 #include "ShuttingYard.h"
+#include "Z3Prover.h"
 #include "veque.h"
 
 using namespace llvm;
@@ -161,7 +162,8 @@ bool Simplifier::simplify(std::string &simp_exp, bool useZ3, bool fastCheck) {
 }
 
 bool Simplifier::verify_mba_unsat(std::string &expr0, std::string &expr1) {
-  return !proveReplacement(expr0, expr1, this->bitCount, this->originalVariables);
+  return !proveReplacement(expr0, expr1, this->bitCount,
+                           this->originalVariables);
 }
 
 bool Simplifier::probably_equivalent(std::string &expr0, std::string &expr1) {
@@ -437,16 +439,22 @@ std::string Simplifier::try_eliminate_unique_value(
   // Finally, if we have more than 3 values, try to express one of them as
   // a sum of all others.
   auto sum = [](std::vector<APInt> &uniqueValues) -> APInt {
-    APInt sum(64, 0);
+    llvm::APInt Sum(128, 0);
     for (auto &v : uniqueValues) {
-      sum += v;
+      Sum += v.getZExtValue();
     }
-    return sum;
+    return Sum;
+  };
+
+  auto double128 = [](APInt &Value) -> APInt {
+    llvm::APInt V128(128, Value.getZExtValue());
+    V128 += V128;
+    return V128;
   };
 
   auto SumUniqueValues = sum(uniqueValues);
   for (int i = 0; i < l; i++) {
-    if (!(2 * uniqueValues[i] == SumUniqueValues))
+    if (!(double128(uniqueValues[i]) == SumUniqueValues))
       continue;
 
     std::string simpler = "";
@@ -456,6 +464,9 @@ std::string Simplifier::try_eliminate_unique_value(
 
       simpler = this->append_term_refinement(
           simpler, bitwiseList, uniqueValues[j], true, uniqueValues[i]);
+
+      // Get rid of '+' at the end.
+      simpler = simpler.substr(0, simpler.size() - 1);
 
       return simpler;
     }
@@ -554,7 +565,6 @@ void Simplifier::try_refine(std::string &expr) {
       uniqueValues.push_back(r);
     }
   }
-  outs() << "Sort 1 uniqueValues: " << uniqueValues.size();
   std::sort(uniqueValues.begin(), uniqueValues.end(),
             [](APInt &L, APInt &R) { return !R.ule(L); });
 
