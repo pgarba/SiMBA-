@@ -27,9 +27,10 @@
 #include "Modulo.h"
 #include "ShuttingYard.h"
 #include "Simplifier.h"
+#include "Z3Prover.h"
 #include "veque.h"
 
-// #define DEBUG_SIMPLIFICATION
+//#define DEBUG_SIMPLIFICATION
 
 using namespace llvm;
 using namespace std;
@@ -42,11 +43,11 @@ llvm::LLVMContext LLVMParser::Context;
 LLVMParser::LLVMParser(const std::string &filename,
                        const std::string &OutputFile, bool Parallel,
                        bool Verify, bool OptimizeBefore, bool OptimizeAfter,
-                       bool Debug)
+                       bool Debug, bool Prove)
     : OutputFile(OutputFile), Parallel(Parallel), Verify(Verify),
       OptimizeBefore(OptimizeBefore), OptimizeAfter(OptimizeAfter),
-      Debug(Debug), SP64(filename.length()), TLII(nullptr), TLI(nullptr),
-      M(nullptr) {
+      Debug(Debug), Prove(Prove), SP64(filename.length()), TLII(nullptr),
+      TLI(nullptr), M(nullptr) {
   if (!this->parse(filename)) {
     llvm::errs() << "[!] Error: Could not parse file " << filename << "\n";
     return;
@@ -61,9 +62,10 @@ LLVMParser::LLVMParser(const std::string &filename,
 }
 
 LLVMParser::LLVMParser(llvm::Module *M, bool Parallel, bool Verify,
-                       bool OptimizeBefore, bool OptimizeAfter, bool Debug)
+                       bool OptimizeBefore, bool OptimizeAfter, bool Debug,
+                       bool Prove)
     : M(M), Parallel(Parallel), Verify(Verify), OptimizeBefore(OptimizeBefore),
-      OptimizeAfter(OptimizeAfter), Debug(Debug),
+      OptimizeAfter(OptimizeAfter), Debug(Debug), Prove(Prove),
       SP64(M->getName().str().length()), TLII(nullptr), TLI(nullptr) {
   // Create evaluator
 
@@ -482,12 +484,53 @@ bool LLVMParser::verify(llvm::SmallVectorImpl<BFSEntry> &AST,
   }
 
   // Check if replacement is cheaper than original expression
-  if (AST.size() > Operations) {
-    return true;
+  if (AST.size() <= Operations) {
+    return false;
+  }
+
+  // Prove with z3
+  if (this->Prove) {
+    z3::context Z3Ctx;
+
+    // Build Variable replacements
+    std::vector<std::string> Vars;
+    for (int i = 0; i < Variables.size(); i++) {
+      char c = 'a' + i;
+      string strC = string(1, c);
+      Vars.push_back(strC);
+    }
+
+    // Lower BitWidth for faster results ...
+    int BitWidth = 8;
+    if (this->Debug) {
+      outs() << "[Z3] Proving with 8Bits only ...\n";
+    }
+
+    // Get Z3 expressions
+    auto Z3Exp0 = getZ3ExpressionFromAST(Z3Ctx, AST, Variables, BitWidth);
+
+    std::map<std::string, z3::expr *> VarMap;
+    auto Z3Exp1 = getZ3ExprFromString(Z3Ctx, SimpExpr, BitWidth, Vars, VarMap);
+
+    // Prove expressions
+    auto start = high_resolution_clock::now();
+
+    auto Result = prove(((Z3Exp0 == Z3Exp1)));
+
+    auto stop = high_resolution_clock::now();
+
+    if (this->Debug) {
+      auto duration = duration_cast<milliseconds>(stop - start);
+
+      outs() << "[Z3] Proved in " << duration.count()
+             << " ms Result: " << Result << "\n";
+    }
+
+    return Result;
   }
 
   // Otherwise don't apply this replacement
-  return false;
+  return true;
 }
 
 bool LLVMParser::runLLVMOptimizer(bool Initial) {
@@ -716,8 +759,13 @@ bool LLVMParser::walkSubAST(llvm::DominatorTree *DT,
 
       // Simplify MBA
       Simplifier S(BitWidth, false, C.Variables.size(), ResultVector);
-
       S.simplify(C.Replacement, false, false);
+
+#ifdef DEBUG_SIMPLIFICATION
+      // Debug out
+      printAST(C.AST);
+      outs() << "[*] Simplified Expression: " << C.Replacement << "\n";
+#endif
 
       C.isValid = this->verify(C.AST, C.Replacement, C.Variables);
       if (C.isValid) {
@@ -933,6 +981,143 @@ bool LLVMParser::doesDominateInst(DominatorTree *DT, const Instruction *InstA,
   DomTreeNode *DA = DT->getNode(InstA->getParent());
   DomTreeNode *DB = DT->getNode(InstB->getParent());
   return DA->getLevel() < DB->getLevel();
+}
+
+z3::expr LLVMParser::getZ3ExpressionFromAST(
+    z3::context &Z3Ctx, llvm::SmallVectorImpl<BFSEntry> &AST,
+    llvm::SmallVectorImpl<llvm::Value *> &Variables, int OverrideBitWidth) {
+  llvm::DenseMap<llvm::Value *, z3::expr *> ValueMAP;
+
+  // Create Variables
+  char Var = 'a';
+  for (auto V : Variables) {
+    string VarStr = string(1, Var);
+
+    int BitWidth = 0;
+    if (OverrideBitWidth) {
+      BitWidth = OverrideBitWidth;
+    } else {
+      BitWidth = V->getType()->getIntegerBitWidth();
+    }
+
+    auto VExpr = Z3Ctx.bv_const(VarStr.c_str(), BitWidth);
+
+    ValueMAP[V] = new z3::expr(VExpr);
+
+    Var++;
+  }
+
+  // Loop over BinOps
+  z3::expr *LastInst = nullptr;
+  for (auto E = AST.rbegin(); E != AST.rend(); ++E) {
+    auto CurInst = E->I;
+
+    auto BO = dyn_cast<BinaryOperator>(CurInst);
+    if (!BO)
+      report_fatal_error("[!] Not an binary operator!", false);
+
+    switch (BO->getOpcode()) {
+    case Instruction::BinaryOps::Add: {
+      auto exp =
+          *getZ3Val(Z3Ctx, BO->getOperand(0), ValueMAP, OverrideBitWidth) +
+          *getZ3Val(Z3Ctx, BO->getOperand(1), ValueMAP, OverrideBitWidth);
+      ValueMAP[BO] = new z3::expr(exp);
+    } break;
+    case Instruction::BinaryOps::Sub: {
+      auto exp =
+          *getZ3Val(Z3Ctx, BO->getOperand(0), ValueMAP, OverrideBitWidth) -
+          *getZ3Val(Z3Ctx, BO->getOperand(1), ValueMAP, OverrideBitWidth);
+      ValueMAP[BO] = new z3::expr(exp);
+    } break;
+    case Instruction::BinaryOps::Mul: {
+      auto exp =
+          *getZ3Val(Z3Ctx, BO->getOperand(0), ValueMAP, OverrideBitWidth) *
+          *getZ3Val(Z3Ctx, BO->getOperand(1), ValueMAP, OverrideBitWidth);
+      ValueMAP[BO] = new z3::expr(exp);
+    } break;
+    case Instruction::BinaryOps::SDiv: {
+      auto exp =
+          *getZ3Val(Z3Ctx, BO->getOperand(0), ValueMAP, OverrideBitWidth) /
+          *getZ3Val(Z3Ctx, BO->getOperand(1), ValueMAP, OverrideBitWidth);
+      ValueMAP[BO] = new z3::expr(exp);
+    } break;
+    case Instruction::BinaryOps::Xor: {
+      auto exp =
+          *getZ3Val(Z3Ctx, BO->getOperand(0), ValueMAP, OverrideBitWidth) ^
+          *getZ3Val(Z3Ctx, BO->getOperand(1), ValueMAP, OverrideBitWidth);
+      ValueMAP[BO] = new z3::expr(exp);
+    } break;
+    case Instruction::BinaryOps::And: {
+      auto exp =
+          *getZ3Val(Z3Ctx, BO->getOperand(0), ValueMAP, OverrideBitWidth) &
+          *getZ3Val(Z3Ctx, BO->getOperand(1), ValueMAP, OverrideBitWidth);
+      ValueMAP[BO] = new z3::expr(exp);
+    } break;
+    case Instruction::BinaryOps::Or: {
+      auto exp =
+          *getZ3Val(Z3Ctx, BO->getOperand(0), ValueMAP, OverrideBitWidth) |
+          *getZ3Val(Z3Ctx, BO->getOperand(1), ValueMAP, OverrideBitWidth);
+      ValueMAP[BO] = new z3::expr(exp);
+    } break;
+    case Instruction::BinaryOps::Shl: {
+      auto exp = z3::shl(
+          *getZ3Val(Z3Ctx, BO->getOperand(0), ValueMAP, OverrideBitWidth),
+          *getZ3Val(Z3Ctx, BO->getOperand(1), ValueMAP, OverrideBitWidth));
+      ValueMAP[BO] = new z3::expr(exp);
+    } break;
+    case Instruction::BinaryOps::LShr: {
+      auto exp = z3::lshr(
+          *getZ3Val(Z3Ctx, BO->getOperand(0), ValueMAP, OverrideBitWidth),
+          *getZ3Val(Z3Ctx, BO->getOperand(1), ValueMAP, OverrideBitWidth));
+      ValueMAP[BO] = new z3::expr(exp);
+    } break;
+    case Instruction::BinaryOps::AShr: {
+      auto exp = z3::ashr(
+          *getZ3Val(Z3Ctx, BO->getOperand(0), ValueMAP, OverrideBitWidth),
+          *getZ3Val(Z3Ctx, BO->getOperand(1), ValueMAP, OverrideBitWidth));
+      ValueMAP[BO] = new z3::expr(exp);
+    } break;
+    default: {
+      BO->print(outs());
+      report_fatal_error("Unknown opcode!");
+    }
+    }
+
+    LastInst = ValueMAP[BO];
+  }
+
+  z3::expr Result = *LastInst;
+
+  // Clean up
+  for (auto V : ValueMAP) {
+    delete V.second;
+  }
+
+  return Result;
+}
+
+z3::expr *
+LLVMParser::getZ3Val(z3::context &Z3Ctx, llvm::Value *V,
+                     llvm::DenseMap<llvm::Value *, z3::expr *> &ValueMap,
+                     int OverrideBitWidth) {
+  if (ConstantInt *CV = dyn_cast<ConstantInt>(V)) {
+    int BitWidth = 0;
+    if (OverrideBitWidth) {
+      BitWidth = OverrideBitWidth;
+    } else {
+      BitWidth = CV->getBitWidth();
+    }
+    auto ConstExpr = Z3Ctx.bv_val(CV->getZExtValue(), BitWidth);
+
+    ValueMap[V] = new z3::expr(ConstExpr);
+    return ValueMap[V];
+  }
+
+  if (ValueMap.count(V) == 0) {
+    report_fatal_error("V not found!");
+  }
+
+  return ValueMap[V];
 }
 
 } // namespace LSiMBA

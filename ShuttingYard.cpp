@@ -576,7 +576,7 @@ llvm::Function *createLLVMFunction(llvm::Module *M, llvm::Type *IntType,
   return F;
 }
 
-APInt eval(std::string expr, SmallVector<APInt, 16> &par, int BitWidth,
+APInt eval(std::string expr, llvm::SmallVectorImpl<APInt> &par, int BitWidth,
            int *OperationCount) {
   // Replace variables with values in expression
   for (int i = 0; i < par.size(); i++) {
@@ -805,47 +805,4 @@ z3::expr getZ3ExprFromString(z3::context &Z3Ctx, std::string &expr,
   }
 
   return stackAP.back();
-}
-
-bool prove(z3::expr conjecture) {
-  z3::context &c = conjecture.ctx();
-  
-  //z3::solver s(c);
-
-  z3::tactic t(c, "qflia");
-  auto s = t.mk_solver();
-
-  s.add(!conjecture);
-
-  if (s.check() == z3::unsat) {
-    std::cout << "[Z3] Proved!"
-              << "\n";
-
-    return true;
-  } else {
-    std::cout << "[Z3] Failed to prove! Counter example:\n" << s.get_model() << "\n";
-
-    return false;
-  }
-}
-
-bool proveReplacement(std::string &expr0, std::string &expr1, int BitWidth,
-                      std::vector<std::string> &Variables) {
-  z3::context Z3Ctx;
-
-  // Get Expressions
-  std::map<std::string, z3::expr *> VarMap;
-
-  auto Z3Exp0 = getZ3ExprFromString(Z3Ctx, expr0, BitWidth, Variables, VarMap);
-  auto Z3Exp1 = getZ3ExprFromString(Z3Ctx, expr1, BitWidth, Variables, VarMap);
-
-  // Prove
-  auto Result = prove(((Z3Exp0 == Z3Exp1)));
-
-  // Clean up variables
-  for (auto v : VarMap) {
-    delete v.second;
-  }
-
-  return Result;
 }

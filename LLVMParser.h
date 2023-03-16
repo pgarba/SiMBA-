@@ -9,7 +9,9 @@
 
 #include <unordered_set>
 
-#include "llvm/IR/Instructions.h"
+#include <llvm/IR/Instructions.h>
+
+#include <z3++.h>
 
 #include "splitmix64.h"
 
@@ -50,11 +52,11 @@ public:
   LLVMParser(const std::string &filename, const std::string &OutputFile,
              bool Parallel = true, bool Verify = true,
              bool OptimizeBefore = true, bool OptimizeAfter = true,
-             bool Debug = false);
+             bool Debug = false, bool Prove = false);
 
   LLVMParser(llvm::Module *M, bool Parallel = true, bool Verify = true,
              bool OptimizeBefore = true, bool OptimizeAfter = true,
-             bool Debug = false);
+             bool Debug = false, bool Prove = false);
 
   ~LLVMParser();
 
@@ -76,6 +78,8 @@ private:
   bool Parallel;
 
   bool Verify;
+
+  bool Prove;
 
   bool OptimizeBefore;
 
@@ -153,6 +157,16 @@ private:
 
   bool doesDominateInst(llvm::DominatorTree *DT, const llvm::Instruction *InstA,
                         const llvm::Instruction *InstB);
+
+  z3::expr
+  getZ3ExpressionFromAST(z3::context &Z3Ctx,
+                         llvm::SmallVectorImpl<BFSEntry> &AST,
+                         llvm::SmallVectorImpl<llvm::Value *> &Variables,
+                         int OverrideBitWidth = 0);
+
+  z3::expr *getZ3Val(z3::context &Z3Ctx, llvm::Value *V,
+                     llvm::DenseMap<llvm::Value *, z3::expr *> &ValueMap,
+                     int OverrideBitWidth = 0);
 };
 
 } // namespace LSiMBA
