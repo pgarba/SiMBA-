@@ -501,9 +501,9 @@ bool LLVMParser::verify(llvm::SmallVectorImpl<BFSEntry> &AST,
     }
 
     // Lower BitWidth for faster results ...
-    int BitWidth = 8;
+    int BitWidth = 4;
     if (this->Debug) {
-      outs() << "[Z3] Proving with 8Bits only ...\n";
+      outs() << "[Z3] Proving with " << BitWidth << "Bits only ...\n";
     }
 
     // Get Z3 expressions
