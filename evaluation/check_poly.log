@@ -1,0 +1,12 @@
+[+] Loading LLVM Module: 'check_poly.ll'
+[+] Running LLVM optimizer (Some MBAs might already be simplified by that!) ...		 Done! (1 ms)
+[+] Simplifying 4 function(s) ...
+[+] Done! 0 MBAs simplified (0 ms)
+[+] Wrote LLVM Module to: 'check_poly_simp.ll'
+[+] MBAs found and replaced: '0' time: 0ms
+   _____ __  ______  ___    __    __ 
+  / __(_)  |/  / _ )/ _ |__/ /___/ /_
+ _\ \/ / /|_/ / _  / __ /_  __/_  __/
+/___/_/_/  /_/____/_/ |_|/_/   /_/1.0
+°°SiMBA ported to C/C++/LLVM ~pgarba~
+

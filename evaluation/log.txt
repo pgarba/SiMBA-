@@ -1,0 +1,40 @@
+[+] Loading LLVM Module: 'check_oc.ll'
+[+] Running LLVM optimizer (Some MBAs might already be simplified by that!) ...		 Done! (8 ms)
+[+] Simplifying 3 function(s) ...
+[*] Full AST Simplified Expression: 123
+[*] AST (Operators: 24):
+0:   %32 = and i32 %31, 255
+1:   %31 = add nuw i32 %30, %27
+2:   %30 = add nuw nsw i32 %29, %28
+3:   %29 = add nuw nsw i32 %11, %16
+3:   %28 = mul nuw nsw i32 %19, 159
+2:   %27 = mul nsw i32 %22, %26
+3:   %26 = add nuw nsw i32 %25, %24
+4:   %25 = add nuw nsw i32 %10, %23
+4:   %24 = shl nuw nsw i32 %19, 3
+5:   %23 = mul nuw nsw i32 %15, 240
+3:   %22 = add nuw nsw i32 %21, %20
+4:   %21 = add nuw nsw i32 %8, %18
+4:   %20 = mul nuw nsw i32 %19, 255
+4:   %19 = add nuw nsw i32 %17, %14
+5:   %18 = shl nuw nsw i32 %15, 1
+5:   %17 = xor i32 %14, %5
+4:   %16 = mul nuw nsw i32 %15, 194
+5:   %15 = and i32 %14, %7
+4:   %11 = add nuw nsw i32 %6, 195
+5:   %10 = add nuw nsw i32 %9, 232
+6:   %9 = mul nuw nsw i32 %5, 248
+5:   %8 = add nuw nsw i32 %5, 163
+6:   %7 = xor i32 %5, -1
+5:   %6 = mul nuw nsw i32 %5, 97
+[!] Simplification: '123 with 0 operators!
+[+] Done! 1 MBAs simplified (2 ms)
+[+] Running LLVM optimizer ...		 Done! (2 ms)
+[+] Wrote LLVM Module to: 'check_oc_simp.ll'
+[+] MBAs found and replaced: '1' time: 6ms
+   _____ __  ______  ___    __    __ 
+  / __(_)  |/  / _ )/ _ |__/ /___/ /_
+ _\ \/ / /|_/ / _  / __ /_  __/_  __/
+/___/_/_/  /_/____/_/ |_|/_/   /_/1.0
+°°SiMBA ported to C/C++/LLVM ~pgarba~
+
