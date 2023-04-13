@@ -23,27 +23,3 @@ int main(int argc, char **argv) {
   return mba0(argc, argc) + mba1(argc, argc, argc) + mba2(argc, argc, argc);
 }
 
-void __fastcall vm_xor(struct stack *a1) {
-  __int64 v1;         // rax
-  unsigned __int8 v2; // cl
-  __int64 v3;         // rsi
-
-  v1 = *a1;
-  v2 = v1 - 1;
-  v3 = *(a1 + v2 + 1) - *(a1 + v1 + 1) -
-       2LL * (*(a1 + v2 + 1) | ~*(a1 + v1 + 1));
-  *a1 = v1 - 1;
-  *(a1 + v2 + 1) = 5889 * v3 - 7426;
-}
-
-void vm_xor(struct stack *a1) {
-  __int64 v1; // r8
-  __int64 v2; // rdx
-  __int64 v3; // rax
-
-  v1 = *a1;
-  v2 = (v1 - 1);
-  v3 = 5889 * (*(a1 + v1 + 1) ^ *(a1 + v2 + 1)) + 4352;
-  *a1 = v2;
-  *(a1 + v2 + 1) = v3;
-}
