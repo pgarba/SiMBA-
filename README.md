@@ -56,4 +56,4 @@ Not supported in LLVM, as LLVM does not support multithreading!
 
 # SiMBA++ on real world code as Clang/Clang++ plugin
 
-![Alt text](images/openSSL.png "SiMBA++ is able to find missed optimization opportunities by LLVM")
+![Alt text](images/openssl.png "SiMBA++ is able to find missed optimization opportunities by LLVM")
