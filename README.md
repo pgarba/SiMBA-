@@ -4,7 +4,7 @@
    _____ __  ______  ___    __    __
   / __(_)  |/  / _ )/ _ |__/ /___/ /_
  _\ \/ / /|_/ / _  / __ /_  __/_  __/
-/___/_/_/  /_/____/_/ |_|/_/   /_/
+/___/_/_/  /_/____/_/ |_|/_/   /_/v1.0
 °°SiMBA ported to C/C++/LLVM ~pgarba~
 ```
 
@@ -47,15 +47,13 @@ Not supported in LLVM, as LLVM does not support multithreading!
 
 **All Tests are done on a MacBook Air M2 24GB**
 
-![Alt text](Images/Performance.png "SiMBA++/SiMBA performance comparison")
-
+![Alt text](images/Performance.png "SiMBA++/SiMBA performance comparison")
 
 # Comparison with HexRays Goomba
 
-![Alt text](Images/Goomba.png "SiMBA++ easily outperforms Goomba")
+![Alt text](images/Goomba.png "SiMBA++ easily outperforms Goomba")
 
 
 # SiMBA++ on real world code as Clang/Clang++ plugin
 
-![Alt text](Images/OpenSSL.png "SiMBA++ is able to find missed optimization opportunities by LLVM")
-  
+![Alt text](images/OpenSSL.png "SiMBA++ is able to find missed optimization opportunities by LLVM")
