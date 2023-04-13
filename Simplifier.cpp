@@ -1,11 +1,13 @@
 #include "Simplifier.h"
 
+#include "llvm/ADT/APInt.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Support/Regex.h"
 #include "llvm/Support/raw_ostream.h"
 
+#include <cctype>
 #include <filesystem>
 #include <fstream>
 #include <future>
@@ -18,38 +20,37 @@
 #include "BitwiseList.h"
 #include "CSiMBA.h"
 #include "MBAChecker.h"
+#include "Modulo.h"
 #include "ShuttingYard.h"
+#include "Z3Prover.h"
 #include "veque.h"
 
 using namespace llvm;
 using namespace std;
 
 namespace LSiMBA {
-Simplifier::Simplifier(int bitCount, bool UseSigned, bool runParallel,
-                       const std::string &expr)
-    : bitCount(0), modulus(0), vnumber(0), SP64(expr.at(0)) {
+Simplifier::Simplifier(int bitCount, bool runParallel, const std::string &expr)
+    : bitCount(0), vnumber(0), SP64(expr.at(0)) {
 
-  this->init(bitCount, UseSigned, runParallel, expr);
+  this->init(bitCount, runParallel, expr);
 };
 
-Simplifier::Simplifier(int bitCount, bool UseSigned, bool runParallel,
-                       int VNumber, std::vector<int64_t> ResultVector)
-    : bitCount(0), modulus(0), vnumber(0),
-      SP64(VNumber * bitCount * ResultVector.back()) {
+Simplifier::Simplifier(int bitCount, bool runParallel, int VNumber,
+                       std::vector<llvm::APInt> ResultVector)
+    : bitCount(0), vnumber(0), SP64(VNumber * bitCount) {
   this->groupsizes = {1};
   this->bitCount = bitCount;
-  this->modulus = pow(2, bitCount);
+  this->modulus = getModulus(bitCount); // pow(2, bitCount);
   this->originalVariables = {};
   this->originalExpression = "";
   this->vnumber = VNumber;
 
   // fill result vector
-  for (auto v : ResultVector) {
+  for (const APInt &v : ResultVector) {
     this->resultVector.push_back(v);
   }
 
   this->RunParallel = runParallel;
-  this->UseSigned = UseSigned;
   this->MaxThreadCount = thread::hardware_concurrency();
 
   // create fake variables
@@ -65,18 +66,16 @@ Simplifier::Simplifier(int bitCount, bool UseSigned, bool runParallel,
   this->init_groupsizes();
 }
 
-void Simplifier::init(int bitCount, bool UseSigned, bool runParallel,
-                      const std::string &expr) {
+void Simplifier::init(int bitCount, bool runParallel, const std::string &expr) {
   this->groupsizes = {1};
   this->bitCount = bitCount;
-  this->modulus = pow(2, bitCount);
+  this->modulus = getModulus(bitCount);
   this->originalVariables = {};
   this->originalExpression = expr;
   this->vnumber = 0;
   this->resultVector = {};
 
   this->RunParallel = runParallel;
-  this->UseSigned = UseSigned;
   this->MaxThreadCount = thread::hardware_concurrency();
 
   this->parse_and_replace_variables();
@@ -93,14 +92,30 @@ std::string &Simplifier::get_vname(int i) {
   return this->varMap[i];
 }
 
-int64_t Simplifier::mod_red(int64_t n) {
-  if (!n)
-    return 0;
+void Simplifier::fillResultSet(std::vector<llvm::APInt> &resultSet,
+                               std::vector<llvm::APInt> &inputVector) {
+  for (auto &v : inputVector) {
+    // Check if v is in resultSet
+    bool Found = false;
+    for (auto &vs : resultSet) {
+      if (vs.eq(v)) {
+        Found = true;
+        break;
+      }
+    }
 
-  if (this->UseSigned) {
-    return n % this->modulus;
+    if (Found)
+      continue;
+
+    resultSet.push_back(v);
+  }
+}
+
+llvm::APInt Simplifier::mod_red(const llvm::APInt &n, bool Signed) {
+  if (Signed) {
+    return n.srem(this->modulus);
   } else {
-    return (uint64_t)n % this->modulus;
+    return n.urem(this->modulus);
   }
 }
 
@@ -111,8 +126,8 @@ bool Simplifier::simplify(std::string &simp_exp, bool useZ3, bool fastCheck) {
     simpl = this->simplify_generic();
     this->try_simplify_fewer_variables(simpl);
   } else {
-    std::set<int64_t> resultSet(this->resultVector.begin(),
-                                this->resultVector.end());
+    std::vector<APInt> resultSet;
+    fillResultSet(resultSet, this->resultVector);
 
     if (resultSet.size() == 1) {
       simpl = this->simplify_one_value(resultSet);
@@ -130,19 +145,25 @@ bool Simplifier::simplify(std::string &simp_exp, bool useZ3, bool fastCheck) {
     }
   }
 
-  /*
-    if (useZ3 && this->verify_mba_unsat(simpl)) {
-      printf("Error in simplification! Simplified expression is not equivalent "
-             "to original one!");
-      return "";
-    }
-    */
-
+  // Replace variables back
   this->replace_variables_back(simpl);
+  this->replace_variables_back(originalExpression);
+
+  if (Result && useZ3 &&
+      this->verify_mba_unsat(simpl, this->originalExpression)) {
+    printf("[Error] Simplified expression is not equivalent "
+           "to original one!");
+    Result = false;
+  }
 
   simp_exp = simpl;
 
   return Result;
+}
+
+bool Simplifier::verify_mba_unsat(std::string &expr0, std::string &expr1) {
+  return !proveReplacement(expr0, expr1, this->bitCount,
+                           this->originalVariables);
 }
 
 bool Simplifier::probably_equivalent(std::string &expr0, std::string &expr1) {
@@ -153,10 +174,14 @@ bool Simplifier::probably_equivalent(std::string &expr0, std::string &expr1) {
   }
 
   auto f = [&](std::string &expr,
-               llvm::SmallVector<int64_t, 16> &par) -> int64_t {
-    auto n = eval(expr, par);
-    auto m = this->mod_red(n);
-    return m;
+               llvm::SmallVector<APInt, 16> &par) -> uint64_t {
+    auto n = eval(expr, par, bitCount);
+
+    if (n.isSignBitSet()) {
+      return n.srem(this->modulus).getZExtValue();
+    } else {
+      return n.urem(this->modulus).getZExtValue();
+    }
   };
 
   // if expr1 has no X[ then try to replace variables
@@ -167,11 +192,11 @@ bool Simplifier::probably_equivalent(std::string &expr0, std::string &expr1) {
     replace_all(expr1_replVar, this->originalVariables[i], this->get_vname(i));
   }
 
-  llvm::SmallVector<int64_t, 16> par;
+  llvm::SmallVector<APInt, 16> par;
   for (int i = 0; i < NUM_TEST_CASES; i++) {
     par.clear();
     for (int j = 0; j < this->vnumber; j++) {
-      par.push_back(SP64.next() % this->modulus);
+      par.push_back(APInt(bitCount, SP64.next()).urem(this->modulus));
     }
 
     // Compare results
@@ -192,16 +217,20 @@ bool Simplifier::probably_equivalent_parallel(std::string &expr0,
   bool IsValid = true;
 
   auto f = [&](std::string &expr,
-               llvm::SmallVector<int64_t, 16> &par) -> int64_t {
-    auto n = eval(expr, par);
-    auto m = this->mod_red(n);
-    return m;
+               llvm::SmallVector<APInt, 16> &par) -> uint64_t {
+    auto n = eval(expr, par, bitCount);
+
+    if (n.isSignBitSet()) {
+      return n.srem(this->modulus).getZExtValue();
+    } else {
+      return n.urem(this->modulus).getZExtValue();
+    }
   };
 
   auto fcomp = [&](std::string expr0, std::string expr1) -> void {
-    llvm::SmallVector<int64_t, 16> par;
+    llvm::SmallVector<APInt, 16> par;
     for (int j = 0; j < this->vnumber; j++) {
-      par.push_back(SP64.next() % this->modulus);
+      par.push_back(APInt(bitCount, SP64.next()).urem(this->modulus));
     }
 
     auto r0 = f(expr0, par);
@@ -247,20 +276,19 @@ bool Simplifier::probably_equivalent_parallel(std::string &expr0,
   return IsValid;
 }
 
-bool Simplifier::is_double_modulo(int64_t a, int64_t b) {
+bool Simplifier::is_double_modulo(llvm::APInt &a, llvm::APInt &b) {
   return ((2 * b) == a) || ((2 * b) == (a + this->modulus));
 }
 
-std::string
-Simplifier::append_term_refinement(std::string &expr,
-                                   std::vector<std::string> &bitwiseList,
-                                   int64_t r1, bool IsrAlt, int64_t rAlt) {
-  std::vector<int64_t> t;
-  for (auto r2 : this->resultVector) {
-    if (r2 == r1 || (rAlt && (r2 == rAlt))) {
-      t.push_back(1);
+std::string Simplifier::append_term_refinement(
+    std::string &expr, const std::vector<std::string> &bitwiseList,
+    const APInt &r1, bool IsrAlt, const APInt &rAlt) {
+  std::vector<APInt> t;
+  for (auto &r2 : this->resultVector) {
+    if (r2 == r1 || (IsrAlt && (r2 == rAlt))) {
+      t.push_back(APInt(bitCount, 1));
     } else {
-      t.push_back(0);
+      t.push_back(APInt(bitCount, 0));
     }
   }
 
@@ -269,15 +297,17 @@ Simplifier::append_term_refinement(std::string &expr,
     return expr + bitwiseList[index] + "+";
   }
 
-  return expr + to_string(r1) + "*" + bitwiseList[index] + "+";
+  return expr + to_string(r1.getZExtValue()) + "*" + bitwiseList[index] + "+";
 }
 
 std::string Simplifier::expression_for_each_unique_value(
-    std::set<int64_t> &resultSet, std::vector<std::string> &bitwiseList) {
+    std::vector<APInt> &resultSet,
+    const std::vector<std::string> &bitwiseList) {
   std::string expr = "";
-  for (auto r : resultSet) {
-    if (r != 0) {
-      expr = this->append_term_refinement(expr, bitwiseList, r);
+  for (auto &r : resultSet) {
+    if (r.isZero() == false) {
+      expr = this->append_term_refinement(expr, bitwiseList, r, false,
+                                          APInt(bitCount, 0));
     }
   }
 
@@ -293,15 +323,14 @@ std::string Simplifier::expression_for_each_unique_value(
 }
 
 std::string Simplifier::try_find_negated_single_expression(
-    std::set<int64_t> &resultSet, std::vector<std::string> &bitwiseList) {
+    std::vector<APInt> &resultSet,
+    const std::vector<std::string> &bitwiseList) {
   if (resultSet.size() != 2) {
     llvm::report_fatal_error("resultSet.size() != 2");
   }
 
-  auto it = resultSet.begin();
-  int64_t a = *it;
-  ++it;
-  int64_t b = *it;
+  auto a = resultSet[0];
+  auto b = resultSet[1];
 
   auto aDouble = this->is_double_modulo(a, b);
   auto bDouble = this->is_double_modulo(b, a);
@@ -321,11 +350,11 @@ std::string Simplifier::try_find_negated_single_expression(
     return "";
   }
 
-  auto coeff = this->mod_red(-a);
+  auto coeff = this->mod_red(-a, true);
 
-  std::vector<int64_t> t;
-  for (auto r : this->resultVector) {
-    t.push_back(r == b);
+  std::vector<APInt> t;
+  for (auto &r : this->resultVector) {
+    t.push_back(APInt(bitCount, r == b));
   }
 
   auto index = this->get_bitwise_index_for_vector(t, 0);
@@ -340,12 +369,12 @@ std::string Simplifier::try_find_negated_single_expression(
     return e;
   }
 
-  return to_string(coeff) + "*" + e;
+  return to_string(coeff.getZExtValue()) + "*" + e;
 }
 
-std::string
-Simplifier::try_eliminate_unique_value(std::vector<int64_t> &uniqueValues,
-                                       std::vector<std::string> &bitwiseList) {
+std::string Simplifier::try_eliminate_unique_value(
+    std::vector<llvm::APInt> &uniqueValues,
+    const std::vector<std::string> &bitwiseList) {
   int l = uniqueValues.size();
 
   // NOTE: Would be possible also for higher l, implementation is generic.
@@ -366,16 +395,33 @@ Simplifier::try_eliminate_unique_value(std::vector<int64_t> &uniqueValues,
           }
 
           if (l > 3) {
-            std::set<int64_t> resultSet(uniqueValues.begin(),
-                                        uniqueValues.end());
-            resultSet.erase(uniqueValues[i]);
-            resultSet.erase(uniqueValues[j]);
-            resultSet.erase(uniqueValues[k]);
+
+            std::vector<llvm::APInt>
+                resultSet; //(uniqueValues.begin(), uniqueValues.end());
+            fillResultSet(resultSet, uniqueValues);
+
+            // resultSet.erase(uniqueValues[i]);
+            auto It = std::remove(resultSet.begin(), resultSet.end(),
+                                  uniqueValues[i]);
+            resultSet.erase(It);
+
+            // resultSet.erase(uniqueValues[j]);
+            It = std::remove(resultSet.begin(), resultSet.end(),
+                             uniqueValues[j]);
+            resultSet.erase(It);
+
+            // resultSet.erase(uniqueValues[k]);
+            It = std::remove(resultSet.begin(), resultSet.end(),
+                             uniqueValues[k]);
+            resultSet.erase(It);
 
             while (resultSet.size() > 0) {
               auto r1 = *resultSet.begin();
-              resultSet.erase(r1);
-              simpler = this->append_term_refinement(simpler, bitwiseList, r1);
+              It = std::remove(resultSet.begin(), resultSet.end(), r1);
+              resultSet.erase(It);
+
+              simpler = this->append_term_refinement(simpler, bitwiseList, r1,
+                                                     false, APInt(bitCount, 0));
             }
           }
 
@@ -392,17 +438,23 @@ Simplifier::try_eliminate_unique_value(std::vector<int64_t> &uniqueValues,
 
   // Finally, if we have more than 3 values, try to express one of them as
   // a sum of all others.
-  auto sum = [](std::vector<int64_t> &uniqueValues) -> int64_t {
-    int64_t sum = 0;
-    for (auto v : uniqueValues) {
-      sum += v;
+  auto sum = [](std::vector<APInt> &uniqueValues) -> APInt {
+    llvm::APInt Sum(128, 0);
+    for (auto &v : uniqueValues) {
+      Sum += v.getZExtValue();
     }
-    return sum;
+    return Sum;
+  };
+
+  auto double128 = [](APInt &Value) -> APInt {
+    llvm::APInt V128(128, Value.getZExtValue());
+    V128 += V128;
+    return V128;
   };
 
   auto SumUniqueValues = sum(uniqueValues);
   for (int i = 0; i < l; i++) {
-    if (!(2 * uniqueValues[i] == SumUniqueValues))
+    if (!(double128(uniqueValues[i]) == SumUniqueValues))
       continue;
 
     std::string simpler = "";
@@ -412,6 +464,9 @@ Simplifier::try_eliminate_unique_value(std::vector<int64_t> &uniqueValues,
 
       simpler = this->append_term_refinement(
           simpler, bitwiseList, uniqueValues[j], true, uniqueValues[i]);
+
+      // Get rid of '+' at the end.
+      simpler = simpler.substr(0, simpler.size() - 1);
 
       return simpler;
     }
@@ -437,15 +492,15 @@ void Simplifier::try_refine(std::string &expr) {
     return;
   }
 
-  std::set<int64_t> resultSet(this->resultVector.begin(),
-                              this->resultVector.end());
+  std::vector<APInt> resultSet;
+  fillResultSet(resultSet, this->resultVector);
 
   int l = resultSet.size();
   if (l <= 1) {
     report_fatal_error("Expression is not simplified");
   }
 
-  auto bitwiseList = this->get_bitwise_list();
+  auto &bitwiseList = this->get_bitwise_list();
 
   if (l == 2) {
     // (2) If only one nonzero value occurs and the result for all
@@ -480,19 +535,20 @@ void Simplifier::try_refine(std::string &expr) {
   if (constant != 0) {
     for (int i = 0; i < this->resultVector.size(); i++) {
       this->resultVector[i] -= constant;
-      this->resultVector[i] = this->mod_red(this->resultVector[i]);
+      this->resultVector[i] = this->mod_red(
+          this->resultVector[i], this->resultVector[i].isSignBitSet());
     }
   }
 
   resultSet.clear();
-  resultSet.insert(this->resultVector.begin(), this->resultVector.end());
+  fillResultSet(resultSet, this->resultVector);
 
   l = resultSet.size();
 
   if (l == 2) {
     // (4) In this case we know that the constant is nonzero since we
     // would have run into the case above otherwise.
-    expr = to_string(constant) + "+" +
+    expr = to_string(constant.getZExtValue()) + "+" +
            this->expression_for_each_unique_value(resultSet, bitwiseList);
     return;
   }
@@ -503,12 +559,14 @@ void Simplifier::try_refine(std::string &expr) {
     return;
   }
 
-  std::vector<int64_t> uniqueValues;
-  for (auto r : resultSet) {
+  std::vector<APInt> uniqueValues;
+  for (auto &r : resultSet) {
     if (r != 0) {
       uniqueValues.push_back(r);
     }
   }
+  std::sort(uniqueValues.begin(), uniqueValues.end(),
+            [](APInt &L, APInt &R) { return !R.ule(L); });
 
   if (l == 4 && constant == 0) {
     // (6) We can still come down to 2 expressions if we can express one
@@ -543,12 +601,12 @@ void Simplifier::try_refine(std::string &expr) {
       expr = simpler;
       return;
     }
-    expr = to_string(constant) + "+" + simpler;
+    expr = to_string(constant.getZExtValue()) + "+" + simpler;
     return;
   }
 }
 
-void Simplifier::append_conjunction(std::string &expr, int64_t coeff,
+void Simplifier::append_conjunction(std::string &expr, const llvm::APInt &coeff,
                                     std::vector<int> &variables) {
 
   if (variables.size() <= 0) {
@@ -560,7 +618,7 @@ void Simplifier::append_conjunction(std::string &expr, int64_t coeff,
   }
 
   if (coeff != 1) {
-    expr += std::to_string(coeff) + "*";
+    expr += std::to_string(coeff.getZExtValue()) + "*";
   }
 
   // If we have a nontrivial conjunction, we need parentheses.
@@ -599,7 +657,7 @@ bool Simplifier::are_variables_true(int n, std::vector<int> &variables,
   return true;
 }
 
-void Simplifier::subtract_coefficient(int64_t coeff, int firstStart,
+void Simplifier::subtract_coefficient(const llvm::APInt &coeff, int firstStart,
                                       std::vector<int> &variables) {
   auto groupsize1 = this->groupsizes[variables[0]];
   auto period1 = 2 * groupsize1;
@@ -621,13 +679,13 @@ std::string Simplifier::simplify_generic() {
   std::string expr = "";
 
   // The constant term.
-  auto constant = this->mod_red(this->resultVector[0]);
+  auto constant = this->mod_red(this->resultVector[0], true);
   for (int i = 1; i < l; i++) {
     this->resultVector[i] -= constant;
   }
 
-  if (constant) {
-    expr += std::to_string(constant) + "+";
+  if (!constant.isZero()) {
+    expr += std::to_string(constant.getZExtValue()) + "+";
   }
 
   // # Append all conjunctions of variables (including trivial conjunctions
@@ -641,7 +699,7 @@ std::string Simplifier::simplify_generic() {
       index += this->groupsizes[v];
     }
 
-    auto coeff = this->mod_red(this->resultVector[index]);
+    auto coeff = this->mod_red(this->resultVector[index], true);
 
     if (coeff == 0)
       continue;
@@ -700,8 +758,7 @@ void Simplifier::try_simplify_fewer_variables(std::string &expr) {
     }
   }
 
-  auto innerSimplifier =
-      Simplifier(this->bitCount, this->UseSigned, this->RunParallel, expr);
+  auto innerSimplifier = Simplifier(this->bitCount, this->RunParallel, expr);
 
   // Maybe not needed to set ""
   // expr = "";
@@ -718,11 +775,15 @@ void Simplifier::try_simplify_fewer_variables(std::string &expr) {
   }
 }
 
-std::string Simplifier::simplify_one_value(std::set<int64_t> &resultSet) {
+std::string
+Simplifier::simplify_one_value(std::vector<llvm::APInt> &resultSet) {
   auto coefficient = *resultSet.begin();
-  resultSet.erase(coefficient);
 
-  auto simExpre = to_string(this->mod_red(coefficient));
+  auto It = std::remove(resultSet.begin(), resultSet.end(), coefficient);
+  resultSet.erase(It);
+
+  auto simExpre = to_string(
+      this->mod_red(coefficient, coefficient.isSignBitSet()).getZExtValue());
   return simExpre;
 }
 
@@ -888,18 +949,21 @@ void Simplifier::init_result_vector() {
     return;
   }
 
-  auto f = [&](llvm::SmallVector<int64_t, 16> &par) -> int64_t {
-    auto n = eval(this->originalExpression, par);
-    auto m = this->mod_red(n);
-    return m;
+  auto f = [&](llvm::SmallVector<APInt, 16> &par) -> APInt {
+    auto n = eval(this->originalExpression, par, bitCount);
+    if (n.isSignBitSet()) {
+      return n.srem(this->modulus);
+    } else {
+      return n.urem(this->modulus);
+    }
   };
 
   this->resultVector.clear();
   for (int i = 0; i < pow(2, this->vnumber); i++) {
     int n = i;
-    llvm::SmallVector<int64_t, 16> par;
+    llvm::SmallVector<APInt, 16> par;
     for (int j = 0; j < this->vnumber; j++) {
-      par.push_back(n & 1);
+      par.push_back(APInt(bitCount, n & 1));
       n = n >> 1;
     }
 
@@ -911,23 +975,26 @@ void Simplifier::init_result_vector() {
 }
 
 void Simplifier::init_result_vector_parallel() {
-  auto f = [&](std::string expr,
-               llvm::SmallVector<int64_t, 16> par) -> int64_t {
-    auto n = eval(expr, par);
-    auto m = this->mod_red(n);
-    return m;
+  auto f = [&](std::string expr, llvm::SmallVector<APInt, 16> par) -> APInt {
+    auto n = eval(expr, par, bitCount);
+
+    if (n.isSignBitSet()) {
+      return n.srem(this->modulus);
+    } else {
+      return n.urem(this->modulus);
+    }
   };
 
   int CurThreadCount = 0;
-  veque::veque<future<int64_t>> threads;
+  veque::veque<future<APInt>> threads;
 
   this->resultVector.clear();
   for (int i = 0; i < pow(2, this->vnumber); i++) {
-    llvm::SmallVector<int64_t, 16> par;
+    llvm::SmallVector<APInt, 16> par;
 
     int n = i;
     for (int j = 0; j < this->vnumber; j++) {
-      par.push_back(n & 1);
+      par.push_back(APInt(bitCount, n & 1));
       n = n >> 1;
     }
 
@@ -972,7 +1039,7 @@ std::string Simplifier::strip(const std::string &inpt) {
   return std::string(start_it, end_it.base());
 }
 
-const std::vector<std::string> Simplifier::get_bitwise_list() {
+const std::vector<std::string> &Simplifier::get_bitwise_list() {
   if (this->vnumber != 1 && this->vnumber != 2 && this->vnumber != 3) {
     report_fatal_error("[!] Error: Only 1, 2 or 3 variables are supported!");
   }
@@ -985,10 +1052,11 @@ const std::vector<std::string> Simplifier::get_bitwise_list() {
     return Bitwise_List_3;
   }
 
-  return {};
+  // unreachable
+  report_fatal_error("");
 }
 
-int Simplifier::get_bitwise_index_for_vector(std::vector<int64_t> &vector,
+int Simplifier::get_bitwise_index_for_vector(std::vector<llvm::APInt> &vector,
                                              int offset) {
   int index = 0;
   int add = 1;
@@ -1007,7 +1075,8 @@ int Simplifier::get_bitwise_index(int offset) {
   return this->get_bitwise_index_for_vector(this->resultVector, offset);
 }
 
-bool Simplifier::is_sum_modulo(int64_t s1, int64_t s2, int64_t a) {
+bool Simplifier::is_sum_modulo(const llvm::APInt &s1, const llvm::APInt &s2,
+                               const llvm::APInt &a) {
   return ((s1 + s2) == a) || ((s1 + s2) == (a + this->modulus));
 }
 
@@ -1020,9 +1089,8 @@ void Simplifier::replace_all(std::string &str, const std::string &from,
   }
 }
 
-bool Simplifier::simplify_linear_mba(bool UseSigned, std::string &expr,
-                                     std::string &simp_expr, int bitCount,
-                                     bool useZ3, bool checkLinear,
+bool Simplifier::simplify_linear_mba(std::string &expr, std::string &simp_expr,
+                                     int bitCount, bool useZ3, bool checkLinear,
                                      bool fastCheck, bool runParallel) {
   MBAChecker C;
   if (checkLinear && !C.check_expression(expr)) {
@@ -1030,8 +1098,9 @@ bool Simplifier::simplify_linear_mba(bool UseSigned, std::string &expr,
     return "";
   }
 
-  Simplifier S(bitCount, UseSigned, runParallel, expr);
+  Simplifier S(bitCount, runParallel, expr);
   auto R = S.simplify(simp_expr, useZ3, fastCheck);
+
   return R;
 }
 

@@ -1,0 +1,287 @@
+
+      /\
+     (  )
+     (  )
+     (  )
+    /|/\|\
+   /_||||_\ - SaturnV
+     /__\
+    (*#*)
+     (*#)
+      (#*)
+      (*)
+
+warning: Linking two modules of different target triples: '/Users/peter/saturn/build/saturn_intrinsics_aarch64.bc' is 'x86_64-apple-macosx13.0.0-macho' whereas '/Users/peter/saturn/build_remill/remill/build/lib/Arch/AArch64/Runtime/aarch64.bc' is 'aarch64-apple-macosx-macho'
+
+[*] ImportedSymbols count: 5
+[*] Runtime Path '/Users/peter/saturn/build'
+[*] Loading an AArch64 binary
+[*] Loading the AArch64 helpers
+[Saturn] Recovering the function ...
+
+BB[    1] Inst[       1] 0x100003ac4: sub sp, sp, #0x20
+BB[    1] Inst[       2] 0x100003ac8: str x0, [sp, #0x18]
+BB[    1] Inst[       3] 0x100003acc: str x1, [sp, #0x10]
+BB[    1] Inst[       4] 0x100003ad0: str x2, [sp, #8]
+BB[    1] Inst[       5] 0x100003ad4: ldr x9, [sp, #8]
+BB[    1] Inst[       6] 0x100003ad8: ldr x10, [sp, #0x10]
+BB[    1] Inst[       7] 0x100003adc: ldr x8, [sp, #8]
+BB[    1] Inst[       8] 0x100003ae0: bic x8, x8, x10
+BB[    1] Inst[       9] 0x100003ae4: ldr x10, [sp, #0x10]
+BB[    1] Inst[      10] 0x100003ae8: add x10, x8, x10
+BB[    1] Inst[      11] 0x100003aec: ldr x8, [sp, #8]
+BB[    1] Inst[      12] 0x100003af0: bic x8, x8, x10
+BB[    1] Inst[      13] 0x100003af4: ldr x11, [sp, #0x10]
+BB[    1] Inst[      14] 0x100003af8: ldr x10, [sp, #8]
+BB[    1] Inst[      15] 0x100003afc: bic x10, x10, x11
+BB[    1] Inst[      16] 0x100003b00: add x8, x8, x10
+BB[    1] Inst[      17] 0x100003b04: ldr x10, [sp, #0x10]
+BB[    1] Inst[      18] 0x100003b08: add x8, x8, x10
+BB[    1] Inst[      19] 0x100003b0c: bic x8, x8, x9
+BB[    1] Inst[      20] 0x100003b10: ldr x9, [sp, #0x18]
+BB[    1] Inst[      21] 0x100003b14: ldr x10, [sp, #0x18]
+BB[    1] Inst[      22] 0x100003b18: ldr x11, [sp, #0x10]
+BB[    1] Inst[      23] 0x100003b1c: eor x10, x10, x11
+BB[    1] Inst[      24] 0x100003b20: ldr x11, [sp, #0x18]
+BB[    1] Inst[      25] 0x100003b24: ldr x12, [sp, #0x10]
+BB[    1] Inst[      26] 0x100003b28: and x11, x11, x12
+BB[    1] Inst[      27] 0x100003b2c: add x10, x10, x11, lsl #1
+BB[    1] Inst[      28] 0x100003b30: and x9, x9, x10
+BB[    1] Inst[      29] 0x100003b34: add x8, x8, x9, lsl #1
+BB[    1] Inst[      30] 0x100003b38: ldr x10, [sp, #0x18]
+BB[    1] Inst[      31] 0x100003b3c: ldr x9, [sp, #8]
+BB[    1] Inst[      32] 0x100003b40: orn x9, x9, x10
+BB[    1] Inst[      33] 0x100003b44: ldr x10, [sp, #0x18]
+BB[    1] Inst[      34] 0x100003b48: add x9, x9, x10
+BB[    1] Inst[      35] 0x100003b4c: add x10, x9, #1
+BB[    1] Inst[      36] 0x100003b50: ldr x9, [sp, #8]
+BB[    1] Inst[      37] 0x100003b54: bic x9, x9, x10
+BB[    1] Inst[      38] 0x100003b58: add x8, x8, x9
+BB[    1] Inst[      39] 0x100003b5c: ldr x9, [sp, #0x18]
+BB[    1] Inst[      40] 0x100003b60: ldr x10, [sp, #0x18]
+BB[    1] Inst[      41] 0x100003b64: ldr x11, [sp, #0x10]
+BB[    1] Inst[      42] 0x100003b68: eor x10, x10, x11
+BB[    1] Inst[      43] 0x100003b6c: ldr x11, [sp, #0x18]
+BB[    1] Inst[      44] 0x100003b70: ldr x12, [sp, #0x10]
+BB[    1] Inst[      45] 0x100003b74: and x11, x11, x12
+BB[    1] Inst[      46] 0x100003b78: add x10, x10, x11, lsl #1
+BB[    1] Inst[      47] 0x100003b7c: eor x9, x9, x10
+BB[    1] Inst[      48] 0x100003b80: add x8, x8, x9
+BB[    1] Inst[      49] 0x100003b84: ldr x9, [sp, #0x10]
+BB[    1] Inst[      50] 0x100003b88: ldr x11, [sp, #0x10]
+BB[    1] Inst[      51] 0x100003b8c: ldr x10, [sp, #8]
+BB[    1] Inst[      52] 0x100003b90: bic x10, x10, x11
+BB[    1] Inst[      53] 0x100003b94: ldr x11, [sp, #0x10]
+BB[    1] Inst[      54] 0x100003b98: add x10, x10, x11
+BB[    1] Inst[      55] 0x100003b9c: and x9, x9, x10
+BB[    1] Inst[      56] 0x100003ba0: add x8, x8, x9
+BB[    1] Inst[      57] 0x100003ba4: ldr x10, [sp, #0x18]
+BB[    1] Inst[      58] 0x100003ba8: ldr x9, [sp, #8]
+BB[    1] Inst[      59] 0x100003bac: orn x9, x9, x10
+BB[    1] Inst[      60] 0x100003bb0: add x8, x8, x9
+BB[    1] Inst[      61] 0x100003bb4: ldr x9, [sp, #0x18]
+BB[    1] Inst[      62] 0x100003bb8: add x8, x8, x9
+BB[    1] Inst[      63] 0x100003bbc: ldr x9, [sp, #8]
+BB[    1] Inst[      64] 0x100003bc0: add x8, x8, x9
+BB[    1] Inst[      65] 0x100003bc4: add x8, x8, #1
+BB[    1] Inst[      66] 0x100003bc8: ldr x10, [sp, #0x10]
+BB[    1] Inst[      67] 0x100003bcc: ldr x9, [sp, #8]
+BB[    1] Inst[      68] 0x100003bd0: bic x9, x9, x10
+BB[    1] Inst[      69] 0x100003bd4: ldr x10, [sp, #0x10]
+BB[    1] Inst[      70] 0x100003bd8: add x9, x9, x10
+BB[    1] Inst[      71] 0x100003bdc: ldr x11, [sp, #0x10]
+BB[    1] Inst[      72] 0x100003be0: ldr x10, [sp, #8]
+BB[    1] Inst[      73] 0x100003be4: bic x10, x10, x11
+BB[    1] Inst[      74] 0x100003be8: ldr x11, [sp, #0x10]
+BB[    1] Inst[      75] 0x100003bec: add x11, x10, x11
+BB[    1] Inst[      76] 0x100003bf0: ldr x10, [sp, #8]
+BB[    1] Inst[      77] 0x100003bf4: bic x10, x10, x11
+BB[    1] Inst[      78] 0x100003bf8: ldr x12, [sp, #0x10]
+BB[    1] Inst[      79] 0x100003bfc: ldr x11, [sp, #8]
+BB[    1] Inst[      80] 0x100003c00: bic x11, x11, x12
+BB[    1] Inst[      81] 0x100003c04: add x10, x10, x11
+BB[    1] Inst[      82] 0x100003c08: ldr x11, [sp, #0x10]
+BB[    1] Inst[      83] 0x100003c0c: add x10, x10, x11
+BB[    1] Inst[      84] 0x100003c10: orr x9, x9, x10
+BB[    1] Inst[      85] 0x100003c14: subs x8, x8, x9
+BB[    1] Inst[      86] 0x100003c18: ldr x10, [sp, #8]
+BB[    1] Inst[      87] 0x100003c1c: ldr x11, [sp, #0x10]
+BB[    1] Inst[      88] 0x100003c20: ldr x9, [sp, #8]
+BB[    1] Inst[      89] 0x100003c24: bic x9, x9, x11
+BB[    1] Inst[      90] 0x100003c28: ldr x11, [sp, #0x10]
+BB[    1] Inst[      91] 0x100003c2c: add x11, x9, x11
+BB[    1] Inst[      92] 0x100003c30: ldr x9, [sp, #8]
+BB[    1] Inst[      93] 0x100003c34: bic x9, x9, x11
+BB[    1] Inst[      94] 0x100003c38: ldr x12, [sp, #0x10]
+BB[    1] Inst[      95] 0x100003c3c: ldr x11, [sp, #8]
+BB[    1] Inst[      96] 0x100003c40: bic x11, x11, x12
+BB[    1] Inst[      97] 0x100003c44: add x9, x9, x11
+BB[    1] Inst[      98] 0x100003c48: ldr x11, [sp, #0x10]
+BB[    1] Inst[      99] 0x100003c4c: add x9, x9, x11
+BB[    1] Inst[     100] 0x100003c50: bic x9, x9, x10
+BB[    1] Inst[     101] 0x100003c54: ldr x10, [sp, #0x18]
+BB[    1] Inst[     102] 0x100003c58: ldr x11, [sp, #0x18]
+BB[    1] Inst[     103] 0x100003c5c: ldr x12, [sp, #0x10]
+BB[    1] Inst[     104] 0x100003c60: eor x11, x11, x12
+BB[    1] Inst[     105] 0x100003c64: ldr x12, [sp, #0x18]
+BB[    1] Inst[     106] 0x100003c68: ldr x13, [sp, #0x10]
+BB[    1] Inst[     107] 0x100003c6c: and x12, x12, x13
+BB[    1] Inst[     108] 0x100003c70: add x11, x11, x12, lsl #1
+BB[    1] Inst[     109] 0x100003c74: and x10, x10, x11
+BB[    1] Inst[     110] 0x100003c78: add x9, x9, x10, lsl #1
+BB[    1] Inst[     111] 0x100003c7c: ldr x11, [sp, #0x18]
+BB[    1] Inst[     112] 0x100003c80: ldr x10, [sp, #8]
+BB[    1] Inst[     113] 0x100003c84: orn x10, x10, x11
+BB[    1] Inst[     114] 0x100003c88: ldr x11, [sp, #0x18]
+BB[    1] Inst[     115] 0x100003c8c: add x10, x10, x11
+BB[    1] Inst[     116] 0x100003c90: add x11, x10, #1
+BB[    1] Inst[     117] 0x100003c94: ldr x10, [sp, #8]
+BB[    1] Inst[     118] 0x100003c98: bic x10, x10, x11
+BB[    1] Inst[     119] 0x100003c9c: add x9, x9, x10
+BB[    1] Inst[     120] 0x100003ca0: ldr x10, [sp, #0x18]
+BB[    1] Inst[     121] 0x100003ca4: ldr x11, [sp, #0x18]
+BB[    1] Inst[     122] 0x100003ca8: ldr x12, [sp, #0x10]
+BB[    1] Inst[     123] 0x100003cac: eor x11, x11, x12
+BB[    1] Inst[     124] 0x100003cb0: ldr x12, [sp, #0x18]
+BB[    1] Inst[     125] 0x100003cb4: ldr x13, [sp, #0x10]
+BB[    1] Inst[     126] 0x100003cb8: and x12, x12, x13
+BB[    1] Inst[     127] 0x100003cbc: add x11, x11, x12, lsl #1
+BB[    1] Inst[     128] 0x100003cc0: eor x10, x10, x11
+BB[    1] Inst[     129] 0x100003cc4: add x9, x9, x10
+BB[    1] Inst[     130] 0x100003cc8: ldr x10, [sp, #0x10]
+BB[    1] Inst[     131] 0x100003ccc: ldr x12, [sp, #0x10]
+BB[    1] Inst[     132] 0x100003cd0: ldr x11, [sp, #8]
+BB[    1] Inst[     133] 0x100003cd4: bic x11, x11, x12
+BB[    1] Inst[     134] 0x100003cd8: ldr x12, [sp, #0x10]
+BB[    1] Inst[     135] 0x100003cdc: add x11, x11, x12
+BB[    1] Inst[     136] 0x100003ce0: and x10, x10, x11
+BB[    1] Inst[     137] 0x100003ce4: add x9, x9, x10
+BB[    1] Inst[     138] 0x100003ce8: ldr x11, [sp, #0x18]
+BB[    1] Inst[     139] 0x100003cec: ldr x10, [sp, #8]
+BB[    1] Inst[     140] 0x100003cf0: orn x10, x10, x11
+BB[    1] Inst[     141] 0x100003cf4: add x9, x9, x10
+BB[    1] Inst[     142] 0x100003cf8: ldr x10, [sp, #0x18]
+BB[    1] Inst[     143] 0x100003cfc: add x9, x9, x10
+BB[    1] Inst[     144] 0x100003d00: ldr x10, [sp, #8]
+BB[    1] Inst[     145] 0x100003d04: add x9, x9, x10
+BB[    1] Inst[     146] 0x100003d08: add x9, x9, #1
+BB[    1] Inst[     147] 0x100003d0c: ldr x11, [sp, #0x10]
+BB[    1] Inst[     148] 0x100003d10: ldr x10, [sp, #8]
+BB[    1] Inst[     149] 0x100003d14: bic x10, x10, x11
+BB[    1] Inst[     150] 0x100003d18: ldr x11, [sp, #0x10]
+BB[    1] Inst[     151] 0x100003d1c: add x10, x10, x11
+BB[    1] Inst[     152] 0x100003d20: ldr x12, [sp, #0x10]
+BB[    1] Inst[     153] 0x100003d24: ldr x11, [sp, #8]
+BB[    1] Inst[     154] 0x100003d28: bic x11, x11, x12
+BB[    1] Inst[     155] 0x100003d2c: ldr x12, [sp, #0x10]
+BB[    1] Inst[     156] 0x100003d30: add x12, x11, x12
+BB[    1] Inst[     157] 0x100003d34: ldr x11, [sp, #8]
+BB[    1] Inst[     158] 0x100003d38: bic x11, x11, x12
+BB[    1] Inst[     159] 0x100003d3c: ldr x13, [sp, #0x10]
+BB[    1] Inst[     160] 0x100003d40: ldr x12, [sp, #8]
+BB[    1] Inst[     161] 0x100003d44: bic x12, x12, x13
+BB[    1] Inst[     162] 0x100003d48: add x11, x11, x12
+BB[    1] Inst[     163] 0x100003d4c: ldr x12, [sp, #0x10]
+BB[    1] Inst[     164] 0x100003d50: add x11, x11, x12
+BB[    1] Inst[     165] 0x100003d54: orr x10, x10, x11
+BB[    1] Inst[     166] 0x100003d58: subs x9, x9, x10
+BB[    1] Inst[     167] 0x100003d5c: add x0, x8, x9
+BB[    1] Inst[     168] 0x100003d60: add sp, sp, #0x20
+BB[    1] Inst[     169] 0x100003d64: ret 
+warning: Linking two modules of different target triples: '/Users/peter/saturn/build/saturn_helpers_aarch64.bc' is 'x86_64-apple-macosx13.0.0-macho' whereas 'lifted_code' is 'aarch64-apple-macosx-macho'
+
+warning: Linking two modules of different target triples: '/Users/peter/saturn/build/saturn_helpers_aarch64.bc' is 'x86_64-apple-macosx13.0.0-macho' whereas 'lifted_code' is 'aarch64-apple-macosx-macho'
+
+[*] Time taken to SetOptimizedBasicBlock after lifting: 0.0090s
+[cheapEdgeRecovery] using 0 single predecessors
+[*] Recovering edges for 0x100003ac4
+[solveOutgoingEdges] Edge is out of binary: 0x000000
+[*] CheapEdgeRecovery failed (0.0057s) Edges: 0. Falling back to partial control flow graph
+[*] Time taken to optimize partial cfg : 0.0016s
+[*] Time taken to build partial control flow graph: 0.0017s
+[*] Recovering edges for 0x100003ac4
+[solveOutgoingEdges] Edge is out of binary: 0x000000
+[*] Solved by partialGraphRecovery: 0.0056s
+[!] BB: 0x100003ac4 IsOpaque: 0 ResolveType: return instruction 
+[!] Outgoing Edges: 
+[*] Time taken to reprove edges (1) after lifting: 0.0113s
+[*] Building the control flow graph ...
+[Saturn] Time taken to recover the function : 0.0216s
+[Saturn] Applying post translation optimization ...
+[OptimizeModule] Initial optimization ...
+[OptimizeModule] Strong Optimization ...
+[OptimizeModule] Running stack solving pass ...
+[StackSolving] Started on F_100003ac4
+[*] Running SimplifyGEPPass ...
+[*] Candidates: 0
+[*] SimplifyGEPPass done! IsReplaced -> 0
+[*] Stack frame bounds [0 - 24] Size: 24
+[*] Stack frame center 0
+[*] Stack frame bounds [0 - 24] Size: 24
+[*] Stack frame center 0
+[OptimizeModule] Optimization run ...
+[Saturn] Time taken to optimize the function: 0.0133s
+[Saturn] Applying custom post translation optimization ...
+[*] ABI: SYSV
+[*] Detected Argument Count: 3
+[Saturn] Done!
+[*] Storing Recovered Function to linear_mba.ll ... Done!
+[*] Recovered Basic Blocks : 2
+[*] Basic Blocks in optimized lifted Function : 1
+[SolverCache] Solver queries: 2 Cache hits: 1 (50.00%)  Redis hits: 1 Unique Replacements: 1 Missed cached/redis hits: 0
+[*] Recovered Opaque Predicates : 0
+[*] Instruction Count: 169
+[*] ReProved Edges: 1
+[+] Loading LLVM Module: 'linear_mba.ll'
+[+] Running LLVM optimizer (Some MBAs might already be simplified by that!) ...		 Done! (1 ms)
+[+] Simplifying 1 function(s) ...
+[*] Full AST Simplified Expression: 4*a+4*b+2*c
+[*] AST (Operators: 24):
+0:   %23 = shl i64 %22, 1
+1:   %22 = add i64 %21, %8
+2:   %21 = add i64 %20, %13
+3:   %20 = add i64 %19, %14
+4:   %19 = add i64 %18, %11
+5:   %18 = sub i64 %17, %0
+6:   %17 = add i64 %16, %2
+7:   %16 = add i64 %15, %Arg_2
+8:   %15 = add i64 %Arg_1, 1
+4:   %14 = xor i64 %6, %Arg_0
+3:   %13 = and i64 %12, %Arg_2
+4:   %12 = sub i64 9223372036854775806, %11
+5:   %11 = add i64 %10, %Arg_0
+6:   %10 = or i64 %9, %Arg_2
+7:   %9 = xor i64 %Arg_0, -1
+2:   %8 = shl i64 %7, 1
+3:   %7 = and i64 %6, %Arg_0
+4:   %6 = add i64 %5, %3
+5:   %5 = shl i64 %4, 1
+6:   %4 = and i64 %Arg_1, %Arg_0
+5:   %3 = xor i64 %Arg_1, %Arg_0
+7:   %2 = and i64 %1, %Arg_1
+8:   %1 = xor i64 %Arg_2, -1
+6:   %0 = or i64 %Arg_2, %Arg_1
+[!] Simplification: '4*a+4*b+2*c with 5 operators!
+[+] Done! 1 MBAs simplified (4 ms)
+[+] Running LLVM optimizer ...		 Done! (0 ms)
+[+] Wrote LLVM Module to: 'linear_mba_deobf.ll'
+[+] MBAs found and replaced: '1' time: 6ms
+   _____ __  ______  ___    __    __ 
+  / __(_)  |/  / _ )/ _ |__/ /___/ /_
+ _\ \/ / /|_/ / _  / __ /_  __/_  __/
+/___/_/_/  /_/____/_/ |_|/_/   /_/1.0
+°°SiMBA ported to C/C++/LLVM ~pgarba~
+
+
+linear_mba_deobf.o:	file format mach-o arm64
+
+Disassembly of section __TEXT,__text:
+
+0000000000000000 <ltmp0>:
+       0: fd 7b bf a9  	stp	x29, x30, [sp, #-16]!
+       4: fd 03 00 91  	mov	x29, sp
+       8: 28 00 00 8b  	add	x8, x1, x0
+       c: 08 f5 7e d3  	lsl	x8, x8, #2
+      10: 00 05 02 8b  	add	x0, x8, x2, lsl #1
+      14: fd 7b c1 a8  	ldp	x29, x30, [sp], #16
+      18: c0 03 5f d6  	ret

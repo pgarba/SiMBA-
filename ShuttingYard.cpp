@@ -1,4 +1,5 @@
 #include <iostream>
+#include <map>
 #include <math.h>
 #include <sstream>
 #include <stdio.h>
@@ -16,9 +17,9 @@
 
 #include <llvm/IR/IRBuilder.h>
 
-#include "veque.h"
+#include <z3++.h>
 
-#define Use_APINT true
+#include "veque.h"
 
 using namespace llvm;
 
@@ -64,6 +65,44 @@ int8_t isVariable(const char *c, std::vector<std::string> *VNames) {
   return -1;
 }
 
+int countOperators(std::string &expr) {
+  int OpCount = 0;
+  for (const auto *p = expr.c_str(); *p; ++p) {
+    switch (*p) {
+    case '*':
+      OpCount++;
+      break;
+    case '/':
+      OpCount++;
+      break;
+    case '&':
+      OpCount++;
+      break;
+    case '|':
+      OpCount++;
+      break;
+    case '^':
+      OpCount++;
+      break;
+    case '+':
+      OpCount++;
+      break;
+    case '~':
+      OpCount++;
+      break;
+    case '!':
+      OpCount++;
+      break;
+    case '-':
+      OpCount++;
+      break;
+    default:
+      break;
+    }
+  }
+  return OpCount;
+}
+
 void exprToTokens(const std::string &expr, veque::veque<Token> &tokens,
                   bool detectVariables = false,
                   std::vector<std::string> *VNames = nullptr) {
@@ -78,7 +117,7 @@ void exprToTokens(const std::string &expr, veque::veque<Token> &tokens,
       tokens.push_back(t);
 
       // skip the variable name
-      p += (*VNames)[Index].size() - 1;      
+      p += (*VNames)[Index].size() - 1;
     } else if (isdigit(*p)) {
       const auto *b = p;
       while (isdigit(*p)) {
@@ -95,6 +134,8 @@ void exprToTokens(const std::string &expr, veque::veque<Token> &tokens,
       char c = *p;
       switch (c) {
       default:
+        llvm::outs() << "[exprToTokens]: Unkown Token '" << c << "'\n";
+        report_fatal_error("", false);
         break;
       case '(':
         t = Token::Type::LeftParen;
@@ -295,10 +336,122 @@ void replace_all(std::string &str, const std::string &from,
   }
 }
 
+void createLLVMReplacement(llvm::Instruction *InsertionPoint,
+                           llvm::Type *IntType, std::string &expr,
+                           std::vector<std::string> &VNames,
+                           llvm::SmallVectorImpl<llvm::Value *> &Variables) {
+  // Parse expressions and create token
+  veque::veque<Token> tokens;
+  exprToTokens(expr, tokens, true, &VNames);
+
+  // Create deque to parse the operations
+  veque::veque<Token> queue;
+  shuntingYard(tokens, queue);
+
+  // Create the builder to build
+  llvm::IRBuilder<> Builder(InsertionPoint);
+
+  SmallVector<llvm::Value *, 32> stackAP;
+
+  while (!queue.empty()) {
+    const auto token = queue.front();
+    queue.pop_front();
+    switch (token.type) {
+    case Token::Type::Variable: {
+      auto ArgIndex = token.ArgIndex;
+      stackAP.push_back(Variables[ArgIndex]);
+    } break;
+    case Token::Type::Number: {
+      APInt APV(IntType->getIntegerBitWidth(), token.str, 10);
+      auto CI = llvm::ConstantInt::get(IntType, APV);
+      stackAP.push_back(CI);
+    } break;
+
+    case Token::Type::Operator: {
+      if (token.unary) {
+        // unray operators
+        const auto rhsAP = stackAP.back();
+        stackAP.pop_back();
+
+        switch (token.str[0]) {
+        default:
+          printf("Operator error [%s]\n", token.str.c_str());
+          exit(0);
+          break;
+        case 'm': // Special operator name for unary '-'
+          // stackAP.push_back(-rhsAP);
+          stackAP.push_back(Builder.CreateNeg(rhsAP));
+          break;
+        case '~':
+          // stackAP.push_back(~rhsAP);
+          stackAP.push_back(Builder.CreateNot(rhsAP));
+          break;
+        case '!':
+          // stackAP.push_back(rhsAP);
+          printf("! operator not implemented\n");
+          exit(-1);
+          break;
+        }
+      } else {
+        // binary operators
+        const auto rhsAP = stackAP.back();
+        stackAP.pop_back();
+
+        const auto lhsAP = stackAP.back();
+        stackAP.pop_back();
+
+        switch (token.str[0]) {
+        default:
+          printf("Operator error [%s]\n", token.str.c_str());
+          exit(0);
+          break;
+        case '^':
+          // stackAP.push_back(lhsAP ^ rhsAP);
+          stackAP.push_back(Builder.CreateXor(lhsAP, rhsAP));
+          break;
+        case '*':
+          // stackAP.push_back(lhsAP * rhsAP);
+          stackAP.push_back(Builder.CreateMul(lhsAP, rhsAP));
+          break;
+        case '/':
+          // stackAP.push_back(lhsAP.sdiv(rhsAP));
+          stackAP.push_back(Builder.CreateSDiv(lhsAP, rhsAP));
+          break;
+        case '&':
+          // stackAP.push_back(lhsAP & rhsAP);
+          stackAP.push_back(Builder.CreateAnd(lhsAP, rhsAP));
+          break;
+        case '|':
+          // stackAP.push_back(lhsAP | rhsAP);
+          stackAP.push_back(Builder.CreateOr(lhsAP, rhsAP));
+          break;
+        case '+':
+          // stackAP.push_back(lhsAP + rhsAP);
+          stackAP.push_back(Builder.CreateAdd(lhsAP, rhsAP));
+          break;
+        case '-':
+          // stackAP.push_back(lhsAP - rhsAP);
+          stackAP.push_back(Builder.CreateSub(lhsAP, rhsAP));
+          break;
+        }
+      }
+    } break;
+
+    default:
+      printf("Token error\n");
+      exit(0);
+    }
+  }
+
+  // Replace MBA
+  auto &ModV = stackAP.back();
+
+  InsertionPoint->replaceAllUsesWith(ModV);
+}
+
 llvm::Function *createLLVMFunction(llvm::Module *M, llvm::Type *IntType,
                                    std::string &expr,
-                                   std::vector<std::string> &VNames,
-                                   uint64_t Modulus) {
+                                   std::vector<std::string> &VNames) {
   // Parse expressions and create token
   veque::veque<Token> tokens;
   exprToTokens(expr, tokens, true, &VNames);
@@ -334,7 +487,7 @@ llvm::Function *createLLVMFunction(llvm::Module *M, llvm::Type *IntType,
       stackAP.push_back(F->getArg(ArgIndex));
     } break;
     case Token::Type::Number: {
-      APInt APV(64, token.str, 10);
+      APInt APV(IntType->getIntegerBitWidth(), token.str, 10);
       auto CI = llvm::ConstantInt::get(IntType, APV);
       stackAP.push_back(CI);
     } break;
@@ -423,11 +576,12 @@ llvm::Function *createLLVMFunction(llvm::Module *M, llvm::Type *IntType,
   return F;
 }
 
-int64_t eval(std::string expr, SmallVector<int64_t, 16> &par) {
+APInt eval(std::string expr, llvm::SmallVectorImpl<APInt> &par, int BitWidth,
+           int *OperationCount) {
   // Replace variables with values in expression
   for (int i = 0; i < par.size(); i++) {
     std::string var = "X[" + std::to_string(i) + "]";
-    std::string val = std::to_string(par[i]);
+    std::string val = std::to_string(par[i].getZExtValue());
 
     replace_all(expr, var, val);
   }
@@ -440,17 +594,21 @@ int64_t eval(std::string expr, SmallVector<int64_t, 16> &par) {
 
   SmallVector<APInt, 32> stackAP;
 
+  int Operations = 0;
+
   while (!queue.empty()) {
     const auto token = queue.front();
     queue.pop_front();
     switch (token.type) {
     case Token::Type::Number: {
-      APInt APV(128, token.str, 10);
+      APInt APV(BitWidth, token.str, 10);
       stackAP.push_back(APV);
 
     } break;
 
     case Token::Type::Operator: {
+      Operations++;
+
       if (token.unary) {
         // unray operators
         const auto rhsAP = stackAP.back();
@@ -470,10 +628,6 @@ int64_t eval(std::string expr, SmallVector<int64_t, 16> &par) {
 
           break;
         case '!':
-#ifdef Use_APINT
-#else
-          stack.push_back(!rhs);
-#endif
           // stackAP.push_back(rhsAP);
           printf("! operator not implemented\n");
           exit(-1);
@@ -530,8 +684,125 @@ int64_t eval(std::string expr, SmallVector<int64_t, 16> &par) {
     }
   }
 
-  // Dont trigger the assert in LLVM
-  APInt APn = stackAP.back() & 0xFFFFFFFFFFFFFFFF;
+  // Set operation count
+  if (OperationCount) {
+    *OperationCount = Operations;
+  }
 
-  return APn.getLimitedValue();
+  return stackAP.back();
+}
+
+z3::expr getZ3ExprFromString(z3::context &Z3Ctx, std::string &expr,
+                             int BitWidth, std::vector<std::string> &Variables,
+                             std::map<std::string, z3::expr *> &VarMap) {
+  veque::veque<Token> tokens;
+
+  exprToTokens(expr, tokens, true, &Variables);
+
+  veque::veque<Token> queue;
+  shuntingYard(tokens, queue);
+
+  // Create Variables
+  for (auto &Var : Variables) {
+    if (VarMap.find(Var) != VarMap.end())
+      continue;
+
+    auto expr = Z3Ctx.bv_const(Var.c_str(), BitWidth);
+    VarMap[Var] = new z3::expr(expr);
+  }
+
+  SmallVector<z3::expr, 32> stackAP;
+
+  while (!queue.empty()) {
+    const auto token = queue.front();
+    queue.pop_front();
+    switch (token.type) {
+    case Token::Type::Variable: {
+      auto c = token.str.c_str();
+      auto expr = VarMap[token.str.c_str()];
+      stackAP.push_back(*expr);
+    } break;
+    case Token::Type::Number: {
+      // APInt APV(BitWidth, token.str, 10);
+      auto ConstExpr = Z3Ctx.bv_val(token.str.c_str(), BitWidth);
+      stackAP.push_back(ConstExpr);
+    } break;
+    case Token::Type::Operator: {
+      if (token.unary) {
+        // unray operators
+        const auto rhsAP = stackAP.back();
+        stackAP.pop_back();
+
+        switch (token.str[0]) {
+        default: {
+          printf("Operator error [%s]\n", token.str.c_str());
+          exit(0);
+        } break;
+        case 'm': // Special operator name for unary '-'
+        {
+          auto NegExpr = -rhsAP;
+          stackAP.push_back(NegExpr);
+        } break;
+        case '~': {
+          auto CompExpr = ~rhsAP;
+          stackAP.push_back(CompExpr);
+        } break;
+        case '!':
+          // stackAP.push_back(rhsAP);
+          printf("! operator not implemented\n");
+          exit(-1);
+          break;
+        }
+      } else {
+        // binary operators
+        const auto rhsAP = stackAP.back();
+        stackAP.pop_back();
+
+        const auto lhsAP = stackAP.back();
+        stackAP.pop_back();
+
+        switch (token.str[0]) {
+        default: {
+          printf("Operator error [%s]\n", token.str.c_str());
+          exit(0);
+        } break;
+        case '^': {
+          auto XorExpr = lhsAP ^ rhsAP;
+          stackAP.push_back(XorExpr);
+        } break;
+        case '*': {
+          auto MulExpr = lhsAP * rhsAP;
+          stackAP.push_back(MulExpr);
+        } break;
+        case '/': {
+          auto DivExpr = lhsAP / rhsAP;
+          stackAP.push_back(DivExpr);
+        } break;
+        case '&': {
+          auto AndExpr = lhsAP & rhsAP;
+          stackAP.push_back(AndExpr);
+        } break;
+        case '|': {
+          auto OrExpr = lhsAP | rhsAP;
+          stackAP.push_back(OrExpr);
+        } break;
+        case '+': {
+          auto AddExpr = lhsAP + rhsAP;
+          stackAP.push_back(AddExpr);
+        } break;
+        case '-': {
+          auto SubExpr = lhsAP - rhsAP;
+          stackAP.push_back(SubExpr);
+        } break;
+        }
+      }
+    } break;
+
+    default:
+      printf("Token error\n");
+      exit(0);
+    }
+  }
+
+  return stackAP.back();
 }
