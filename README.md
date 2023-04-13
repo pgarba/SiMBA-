@@ -47,13 +47,13 @@ Not supported in LLVM, as LLVM does not support multithreading!
 
 **All Tests are done on a MacBook Air M2 24GB**
 
-![Alt text](images/Performance.png "SiMBA++/SiMBA performance comparison")
+![Alt text](images/performance.png "SiMBA++/SiMBA performance comparison")
 
 # Comparison with HexRays Goomba
 
-![Alt text](images/Goomba.png "SiMBA++ easily outperforms Goomba")
+![Alt text](images/goomba.png "SiMBA++ easily outperforms Goomba")
 
 
 # SiMBA++ on real world code as Clang/Clang++ plugin
 
-![Alt text](images/OpenSSL.png "SiMBA++ is able to find missed optimization opportunities by LLVM")
+![Alt text](images/openSSL.png "SiMBA++ is able to find missed optimization opportunities by LLVM")
