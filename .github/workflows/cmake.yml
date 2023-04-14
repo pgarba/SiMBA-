@@ -21,7 +21,7 @@ jobs:
     - uses: actions/checkout@v3
     
     # sudo apt-get update -qq
-    - name: "Install Ubuntu dependencies"
+    - name: Install Ubuntu dependencies
       run: sudo apt-get update ; sudo apt-get install libz3-dev z3
 
     - name: Configure CMake
