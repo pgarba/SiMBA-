@@ -30,7 +30,7 @@
 #include "Z3Prover.h"
 #include "veque.h"
 
-//#define DEBUG_SIMPLIFICATION
+// #define DEBUG_SIMPLIFICATION
 
 using namespace llvm;
 using namespace std;
@@ -583,6 +583,19 @@ void LLVMParser::extractCandidates(llvm::Function &F,
         Candidates.push_back(Cand);
       }
     } break;
+    case Instruction::Call: {
+      auto CI = dyn_cast<CallInst>(&*I);
+      for (unsigned int i = 0; i < CI->arg_size(); i++) {
+        auto BinOp =
+            dyn_cast<BinaryOperator>(CI->getArgOperand(i)->stripPointerCasts());
+        if (BinOp) {
+          MBACandidate Cand;
+          Cand.Candidate = BinOp;
+          Candidates.push_back(Cand);
+        }
+      }
+    } break;
+    case Instruction::Trunc:
     case Instruction::ICmp:
     case Instruction::Select: {
       for (unsigned int i = 0; i < I->getNumOperands(); i++) {
@@ -762,7 +775,6 @@ bool LLVMParser::walkSubAST(llvm::DominatorTree *DT,
       S.simplify(C.Replacement, false, false);
 
 #ifdef DEBUG_SIMPLIFICATION
-      // Debug out
       printAST(C.AST);
       outs() << "[*] Simplified Expression: " << C.Replacement << "\n";
 #endif
