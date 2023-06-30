@@ -151,11 +151,14 @@ void LLVMParser::initResultVector(llvm::Function &F,
     // Get Result and store in result vector
     auto CIRetVal = dyn_cast<ConstantInt>(RetVal);
     APInt v = dyn_cast<ConstantInt>(CIRetVal)->getValue();
-
+    auto OldBitWidth = v.getBitWidth();
     if (v.isSignBitSet()) {
-      v = v.srem(Modulus);
+      // v = v.srem(Modulus);
+      v = v.sextOrTrunc(Modulus.getBitWidth()).srem(Modulus)
+          .trunc(OldBitWidth);
     } else {
-      v = v.urem(Modulus);
+      // v = v.urem(Modulus);
+      v = v.sextOrTrunc(Modulus.getBitWidth()).urem(Modulus).trunc(OldBitWidth);
     }
 
     // Store value mod modulus
@@ -401,10 +404,12 @@ bool LLVMParser::verify(llvm::Function *F0, llvm::Function *F1,
 
     auto R0 = dyn_cast<ConstantInt>(RetVal0)
                   ->getValue()
+                  .zextOrTrunc(Modulus.getBitWidth())
                   .urem(Modulus)
                   .getLimitedValue();
     auto R1 = dyn_cast<ConstantInt>(RetVal1)
                   ->getValue()
+                  .zextOrTrunc(Modulus.getBitWidth())
                   .urem(Modulus)
                   .getLimitedValue();
 
@@ -462,19 +467,23 @@ bool LLVMParser::verify(llvm::SmallVectorImpl<BFSEntry> &AST,
     }
 
     // Mod
+    /*
     if (AP_R0.isSignBitSet()) {
       AP_R0 = AP_R0.srem(Modulus);
     } else {
       AP_R0 = AP_R0.urem(Modulus);
     }
+    */
 
     // Eval replacement
     auto AP_R1 = eval(Expr1_replVar, par, BitWidth, &Operations);
+    /*
     if (AP_R1.isSignBitSet()) {
       AP_R1 = AP_R1.srem(Modulus);
     } else {
       AP_R1 = AP_R1.urem(Modulus);
     }
+    */
 
     if (AP_R0.getSExtValue() != AP_R1.getSExtValue()) {
       return false;
@@ -501,9 +510,9 @@ bool LLVMParser::verify(llvm::SmallVectorImpl<BFSEntry> &AST,
     }
 
     // Lower BitWidth for faster results ...
-    int BitWidth = 8;
+    int BitWidth = 4;
     if (this->Debug) {
-      outs() << "[Z3] Proving with 8Bits only ...\n";
+      outs() << "[Z3] Proving with " << BitWidth << "Bits only ...\n";
     }
 
     // Get Z3 expressions
@@ -549,7 +558,7 @@ bool LLVMParser::runLLVMOptimizer(bool Initial) {
   builder.LibraryInfo = TLII;
   builder.DisableUnrollLoops = true;
   builder.MergeFunctions = false;
-  builder.RerollLoops = true;
+  //builder.RerollLoops = true;
   builder.VerifyInput = false;
   builder.VerifyOutput = false;
 
@@ -577,7 +586,8 @@ void LLVMParser::extractCandidates(llvm::Function &F,
       auto SI = dyn_cast<StoreInst>(&*I);
       auto Op = SI->getValueOperand();
       auto BinOp = dyn_cast<BinaryOperator>(Op);
-      if (BinOp) {
+      // Only work on supported operands
+      if (BinOp && ConstantExpr::isSupportedBinOp(BinOp->getOpcode())) {
         MBACandidate Cand;
         Cand.Candidate = BinOp;
         Candidates.push_back(Cand);
@@ -756,6 +766,10 @@ bool LLVMParser::walkSubAST(llvm::DominatorTree *DT,
       if (!BinOp)
         continue;
 
+      // Only work on supported operands
+      if (ConstantExpr::isSupportedBinOp(BinOp->getOpcode()) == false)
+        continue;
+
       MBACandidate C;
       C.Candidate = BinOp;
       this->getAST(DT, BinOp, C.AST, C.Variables, true);
@@ -812,11 +826,13 @@ void LLVMParser::initResultVectorFromAST(
     bool Error = false;
     auto v = evaluateAST(AST, Variables, Par, Error);
 
+    /*
     if (v.isSignBitSet()) {
       v = v.srem(Modulus);
     } else {
       v = v.urem(Modulus);
     }
+    */
 
     // Store value mod modulus
     ResultVector.push_back(v);
@@ -845,6 +861,10 @@ void LLVMParser::getAST(llvm::DominatorTree *DT, llvm::Instruction *I,
   if (!BinOp) {
     return;
   }
+
+  // Only work on supported operands
+  if (ConstantExpr::isSupportedBinOp(BinOp->getOpcode()) == false)
+    return;
 
   // Walk the AST in BFS
   std::deque<llvm::Value *> Q;
@@ -938,6 +958,11 @@ LLVMParser::evaluateAST(llvm::SmallVectorImpl<BFSEntry> &AST,
     auto BO = dyn_cast<BinaryOperator>(CurInst);
     if (!BO)
       report_fatal_error("[!] Not an binary operator!", false);
+
+    if (ConstantExpr::isSupportedBinOp(BO->getOpcode()) == false) {
+      Error = true;
+      return APInt(1, 0);
+    }
 
     InstResult = ConstantExpr::get(
         BO->getOpcode(), getVal(BO->getOperand(0), ValueStack, Variables, Par),

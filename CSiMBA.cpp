@@ -95,9 +95,9 @@ cl::opt<bool> RunOptimizer(
     cl::desc("Optimize LLVM IR before simplification (Default true)"),
     cl::value_desc("optimize"), cl::init(true));
 
-cl::opt<bool> Debug("debug", cl::Optional,
+cl::opt<bool> Debug("simba-debug", cl::Optional,
                     cl::desc("Print debug information (Default false)"),
-                    cl::value_desc("debug"), cl::init(false));
+                    cl::value_desc("simba-debug"), cl::init(false));
 
 /**
  * @brief Simplify a single MBA

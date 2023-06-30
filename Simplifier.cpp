@@ -16,6 +16,7 @@
 #include <string>
 #include <thread>
 #include <vector>
+#include <math.h>
 
 #include "BitwiseList.h"
 #include "CSiMBA.h"
@@ -112,10 +113,18 @@ void Simplifier::fillResultSet(std::vector<llvm::APInt> &resultSet,
 }
 
 llvm::APInt Simplifier::mod_red(const llvm::APInt &n, bool Signed) {
+  int OldBitWidth = n.getBitWidth();
+  
   if (Signed) {
-    return n.srem(this->modulus);
+    // return n.srem(this->modulus);
+    return n.sextOrTrunc(this->modulus.getBitWidth())
+        .srem(this->modulus)
+        .trunc(OldBitWidth);
   } else {
-    return n.urem(this->modulus);
+    // return n.urem(this->modulus);
+    return n.sextOrTrunc(this->modulus.getBitWidth())
+        .urem(this->modulus)
+        .trunc(OldBitWidth);
   }
 }
 
@@ -176,11 +185,19 @@ bool Simplifier::probably_equivalent(std::string &expr0, std::string &expr1) {
   auto f = [&](std::string &expr,
                llvm::SmallVector<APInt, 16> &par) -> uint64_t {
     auto n = eval(expr, par, bitCount);
-
+    auto OldBitWidth = n.getBitWidth();
     if (n.isSignBitSet()) {
-      return n.srem(this->modulus).getZExtValue();
+      // return n.srem(this->modulus).getZExtValue();
+      return n.sextOrTrunc(this->modulus.getBitWidth())
+          .srem(this->modulus)
+          .trunc(OldBitWidth)
+          .getZExtValue();
     } else {
-      return n.urem(this->modulus).getZExtValue();
+      // return n.urem(this->modulus).getZExtValue();
+      return n.sextOrTrunc(this->modulus.getBitWidth())
+          .urem(this->modulus)
+          .trunc(OldBitWidth)
+          .getZExtValue();
     }
   };
 
@@ -196,7 +213,10 @@ bool Simplifier::probably_equivalent(std::string &expr0, std::string &expr1) {
   for (int i = 0; i < NUM_TEST_CASES; i++) {
     par.clear();
     for (int j = 0; j < this->vnumber; j++) {
-      par.push_back(APInt(bitCount, SP64.next()).urem(this->modulus));
+      //par.push_back(APInt(bitCount, SP64.next()).urem(this->modulus));
+      par.push_back(APInt(this->modulus.getBitWidth(), SP64.next())
+                        .urem(this->modulus)
+                        .zextOrTrunc(bitCount));
     }
 
     // Compare results
@@ -219,18 +239,28 @@ bool Simplifier::probably_equivalent_parallel(std::string &expr0,
   auto f = [&](std::string &expr,
                llvm::SmallVector<APInt, 16> &par) -> uint64_t {
     auto n = eval(expr, par, bitCount);
-
+    auto OldBitWidth = n.getBitWidth();
     if (n.isSignBitSet()) {
-      return n.srem(this->modulus).getZExtValue();
+      // return n.srem(this->modulus).getZExtValue();
+      return n.sextOrTrunc(this->modulus.getBitWidth())
+          .srem(this->modulus)
+          .trunc(OldBitWidth).getZExtValue();
     } else {
-      return n.urem(this->modulus).getZExtValue();
+      //return n.urem(this->modulus).getZExtValue();
+      return n.sextOrTrunc(this->modulus.getBitWidth())
+          .urem(this->modulus)
+          .trunc(OldBitWidth)
+          .getZExtValue();
     }
   };
 
   auto fcomp = [&](std::string expr0, std::string expr1) -> void {
     llvm::SmallVector<APInt, 16> par;
     for (int j = 0; j < this->vnumber; j++) {
-      par.push_back(APInt(bitCount, SP64.next()).urem(this->modulus));
+      //par.push_back(APInt(bitCount, SP64.next()).urem(this->modulus));
+      par.push_back(APInt(this->modulus.getBitWidth(), SP64.next())
+                        .urem(this->modulus)
+                        .zextOrTrunc(bitCount));
     }
 
     auto r0 = f(expr0, par);
@@ -277,7 +307,18 @@ bool Simplifier::probably_equivalent_parallel(std::string &expr0,
 }
 
 bool Simplifier::is_double_modulo(llvm::APInt &a, llvm::APInt &b) {
-  return ((2 * b) == a) || ((2 * b) == (a + this->modulus));
+      
+  // return ((2 * b) == a) || ((2 * b) == (a + this->modulus));
+
+  if ((2 * b) == a) return true;
+
+  auto A = a.sextOrTrunc(this->modulus.getBitWidth());
+  auto B = b.sextOrTrunc(this->modulus.getBitWidth());
+  
+  if ((2 * A) == (B + this->modulus))
+    return true;
+
+  return false;
 }
 
 std::string Simplifier::append_term_refinement(
@@ -681,7 +722,7 @@ std::string Simplifier::simplify_generic() {
   // The constant term.
   auto constant = this->mod_red(this->resultVector[0], true);
   for (int i = 1; i < l; i++) {
-    this->resultVector[i] -= constant;
+    this->resultVector[i] -= constant.sextOrTrunc(this->resultVector[i].getBitWidth());
   }
 
   if (!constant.isZero()) {
@@ -951,10 +992,17 @@ void Simplifier::init_result_vector() {
 
   auto f = [&](llvm::SmallVector<APInt, 16> &par) -> APInt {
     auto n = eval(this->originalExpression, par, bitCount);
+    auto OldBitWidth = n.getBitWidth();
     if (n.isSignBitSet()) {
-      return n.srem(this->modulus);
+      // return n.srem(this->modulus);
+      return n.sextOrTrunc(this->modulus.getBitWidth())
+          .srem(this->modulus)
+          .trunc(OldBitWidth);
     } else {
-      return n.urem(this->modulus);
+      // return n.urem(this->modulus);
+      return n.sextOrTrunc(this->modulus.getBitWidth())
+          .urem(this->modulus)
+          .trunc(OldBitWidth);
     }
   };
 
@@ -977,11 +1025,17 @@ void Simplifier::init_result_vector() {
 void Simplifier::init_result_vector_parallel() {
   auto f = [&](std::string expr, llvm::SmallVector<APInt, 16> par) -> APInt {
     auto n = eval(expr, par, bitCount);
-
+    auto OldBitWidth = n.getBitWidth();
     if (n.isSignBitSet()) {
-      return n.srem(this->modulus);
+      // return n.srem(this->modulus);
+      return n.sextOrTrunc(this->modulus.getBitWidth())
+          .srem(this->modulus)
+          .trunc(OldBitWidth);
     } else {
-      return n.urem(this->modulus);
+      // return n.urem(this->modulus);
+      return n.sextOrTrunc(this->modulus.getBitWidth())
+          .urem(this->modulus)
+          .trunc(OldBitWidth);
     }
   };
 
@@ -1077,7 +1131,18 @@ int Simplifier::get_bitwise_index(int offset) {
 
 bool Simplifier::is_sum_modulo(const llvm::APInt &s1, const llvm::APInt &s2,
                                const llvm::APInt &a) {
-  return ((s1 + s2) == a) || ((s1 + s2) == (a + this->modulus));
+  //return ((s1 + s2) == a) || ((s1 + s2) == (a + this->modulus));
+  if ((s1 + s2) == a)
+    return true;
+
+  auto S1 = s1.sextOrTrunc(this->modulus.getBitWidth());
+  auto S2 = s2.sextOrTrunc(this->modulus.getBitWidth());
+  auto A = a.sextOrTrunc(this->modulus.getBitWidth());
+
+  if ((S1 + S2) == (A + this->modulus))
+    return true;
+
+  return false;
 }
 
 void Simplifier::replace_all(std::string &str, const std::string &from,
