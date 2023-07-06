@@ -25,6 +25,10 @@ separate_arguments(LLVM_DEFINITIONS_LIST NATIVE_COMMAND ${LLVM_DEFINITIONS})
 add_definitions(${LLVM_DEFINITIONS_LIST})
 add_executable(SiMBA++ "CSiMBA.cpp" "CSiMBA.h" "LLVMParser.cpp" "LLVMParser.h" "Simplifier.h" "MBAChecker.cpp" "MBAChecker.h" "Simplifier.cpp" "ShuttingYard.cpp" "Modulo.cpp" "Modulo.h" "Z3Prover.cpp" "Z3Prover.h")
 
+set_target_properties(SiMBA++ PROPERTIES
+    COMPILE_FLAGS " -fno-rtti"
+)
+
 target_link_libraries(SiMBA++
     LLVMipo
     LLVMScalarOpts
@@ -37,6 +41,15 @@ target_link_libraries(SiMBA++
     LLVMBitReader
     LLVMCore
     LLVMSupport
+    z3
+)
+
+# SiMBA++ static
+add_library(LSiMBA++ STATIC "LLVMParser.cpp" "LLVMParser.h" "Simplifier.h" "MBAChecker.cpp" "MBAChecker.h" "Simplifier.cpp" "ShuttingYard.cpp" "Modulo.cpp" "Modulo.h" "Z3Prover.cpp" "Z3Prover.h")
+
+# No rtti
+set_target_properties(LSiMBA++ PROPERTIES
+    COMPILE_FLAGS " -fno-rtti"
 )
 
 # SiMBA++ tests
@@ -63,6 +76,7 @@ add_test(NAME MBAs_Linear_64bit_unsigned_llvm
 # SiMBAPass
 add_library(SiMBAPass SHARED SiMBAPass.cpp SiMBAPass.h LLVMParser.cpp LLVMParser.h Simplifier.h Simplifier.cpp ShuttingYard.cpp MBAChecker.cpp MBAChecker.h Modulo.cpp Modulo.h)
 
+# No rtti
 set_target_properties(SiMBAPass PROPERTIES
     COMPILE_FLAGS " -fno-rtti"
 )
