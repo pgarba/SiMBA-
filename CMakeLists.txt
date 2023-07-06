@@ -8,6 +8,22 @@ set(CMAKE_CXX_STANDARD 17)
 find_package(LLVM REQUIRED CONFIG)
 message(STATUS "LLVM binary directory: " ${LLVM_TOOLS_BINARY_DIR})
 
+message(STATUS ${LLVM_TOOLS_BINARY_DIR})
+
+execute_process(COMMAND ${LLVM_TOOLS_BINARY_DIR}/llvm-config --libs OUTPUT_VARIABLE LLVM_LIBS)
+execute_process(COMMAND ${LLVM_TOOLS_BINARY_DIR}/llvm-config --system-libs OUTPUT_VARIABLE SYS_LIBS)
+execute_process(COMMAND ${LLVM_TOOLS_BINARY_DIR}/llvm-config --ldflags OUTPUT_VARIABLE LDF)
+
+execute_process(COMMAND ${LLVM_TOOLS_BINARY_DIR}/llvm-config --cxxflags OUTPUT_VARIABLE CMAKE_CXX_FLAGS)
+string(STRIP ${CMAKE_CXX_FLAGS} CMAKE_CXX_FLAGS)
+
+string(STRIP ${LLVM_LIBS} LLVM_LIBS)
+string(STRIP ${SYS_LIBS} SYS_LIBS)
+string(STRIP ${LDF} LDF)
+
+set(LLVM_LIBS ${LLVM_LIBS} ${SYS_LIBS})
+set(LLVM_LIBS ${LLVM_LIBS} ${LDF})
+
 # z3
 find_package(Z3 REQUIRED CONFIG)
 
@@ -21,13 +37,20 @@ endif()
 
 include_directories(${LLVM_INCLUDE_DIRS} "include")
 
-separate_arguments(LLVM_DEFINITIONS_LIST NATIVE_COMMAND ${LLVM_DEFINITIONS})
-add_definitions(${LLVM_DEFINITIONS_LIST})
+#separate_arguments(LLVM_DEFINITIONS_LIST NATIVE_COMMAND ${LLVM_DEFINITIONS})
+#add_definitions(${LLVM_DEFINITIONS_LIST})
+
+# add llvm at end so all linkers can find it
+list(APPEND PROJECT_LIBRARIES ${LLVM_LIBS})
+list(APPEND PROJECT_DEFINITIONS ${LLVM_DEFINITIONS})
+list(APPEND PROJECT_INCLUDEDIRECTORIES ${LLVM_INCLUDE_DIRS})
+
+
 add_executable(SiMBA++ "CSiMBA.cpp" "CSiMBA.h" "LLVMParser.cpp" "LLVMParser.h" "Simplifier.h" "MBAChecker.cpp" "MBAChecker.h" "Simplifier.cpp" "ShuttingYard.cpp" "Modulo.cpp" "Modulo.h" "Z3Prover.cpp" "Z3Prover.h")
 
-set_target_properties(SiMBA++ PROPERTIES
-    COMPILE_FLAGS " -fno-rtti"
-)
+#set_target_properties(SiMBA++ PROPERTIES
+#    COMPILE_FLAGS " -fno-rtti"
+#)
 
 target_link_libraries(SiMBA++
     LLVMipo
@@ -48,9 +71,9 @@ target_link_libraries(SiMBA++
 add_library(LSiMBA++ STATIC "LLVMParser.cpp" "LLVMParser.h" "Simplifier.h" "MBAChecker.cpp" "MBAChecker.h" "Simplifier.cpp" "ShuttingYard.cpp" "Modulo.cpp" "Modulo.h" "Z3Prover.cpp" "Z3Prover.h")
 
 # No rtti
-set_target_properties(LSiMBA++ PROPERTIES
-    COMPILE_FLAGS " -fno-rtti"
-)
+#set_target_properties(LSiMBA++ PROPERTIES
+#    COMPILE_FLAGS " -fno-rtti"
+#)
 
 # SiMBA++ tests
 INCLUDE(CTest)

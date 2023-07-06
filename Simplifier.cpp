@@ -7,6 +7,7 @@
 #include "llvm/Support/Regex.h"
 #include "llvm/Support/raw_ostream.h"
 
+#include <math.h>
 #include <cctype>
 #include <filesystem>
 #include <fstream>
@@ -16,7 +17,6 @@
 #include <string>
 #include <thread>
 #include <vector>
-#include <math.h>
 
 #include "BitwiseList.h"
 #include "CSiMBA.h"
@@ -32,7 +32,6 @@ using namespace std;
 namespace LSiMBA {
 Simplifier::Simplifier(int bitCount, bool runParallel, const std::string &expr)
     : bitCount(0), vnumber(0), SP64(expr.at(0)) {
-
   this->init(bitCount, runParallel, expr);
 };
 
@@ -41,7 +40,7 @@ Simplifier::Simplifier(int bitCount, bool runParallel, int VNumber,
     : bitCount(0), vnumber(0), SP64(VNumber * bitCount) {
   this->groupsizes = {1};
   this->bitCount = bitCount;
-  this->modulus = getModulus(bitCount); // pow(2, bitCount);
+  this->modulus = getModulus(bitCount);  // pow(2, bitCount);
   this->originalVariables = {};
   this->originalExpression = "";
   this->vnumber = VNumber;
@@ -99,14 +98,14 @@ void Simplifier::fillResultSet(std::vector<llvm::APInt> &resultSet,
     // Check if v is in resultSet
     bool Found = false;
     for (auto &vs : resultSet) {
-      if (vs.eq(v)) {
+      if (v.zextOrTrunc(vs.getBitWidth()).eq(vs)) {
+        // if (vs.eq(v)) {
         Found = true;
         break;
       }
     }
 
-    if (Found)
-      continue;
+    if (Found) continue;
 
     resultSet.push_back(v);
   }
@@ -114,7 +113,7 @@ void Simplifier::fillResultSet(std::vector<llvm::APInt> &resultSet,
 
 llvm::APInt Simplifier::mod_red(const llvm::APInt &n, bool Signed) {
   int OldBitWidth = n.getBitWidth();
-  
+
   if (Signed) {
     // return n.srem(this->modulus);
     return n.sextOrTrunc(this->modulus.getBitWidth())
@@ -160,8 +159,9 @@ bool Simplifier::simplify(std::string &simp_exp, bool useZ3, bool fastCheck) {
 
   if (Result && useZ3 &&
       this->verify_mba_unsat(simpl, this->originalExpression)) {
-    printf("[Error] Simplified expression is not equivalent "
-           "to original one!");
+    printf(
+        "[Error] Simplified expression is not equivalent "
+        "to original one!");
     Result = false;
   }
 
@@ -213,7 +213,7 @@ bool Simplifier::probably_equivalent(std::string &expr0, std::string &expr1) {
   for (int i = 0; i < NUM_TEST_CASES; i++) {
     par.clear();
     for (int j = 0; j < this->vnumber; j++) {
-      //par.push_back(APInt(bitCount, SP64.next()).urem(this->modulus));
+      // par.push_back(APInt(bitCount, SP64.next()).urem(this->modulus));
       par.push_back(APInt(this->modulus.getBitWidth(), SP64.next())
                         .urem(this->modulus)
                         .zextOrTrunc(bitCount));
@@ -233,7 +233,6 @@ bool Simplifier::probably_equivalent(std::string &expr0, std::string &expr1) {
 
 bool Simplifier::probably_equivalent_parallel(std::string &expr0,
                                               std::string &expr1) {
-
   bool IsValid = true;
 
   auto f = [&](std::string &expr,
@@ -244,9 +243,10 @@ bool Simplifier::probably_equivalent_parallel(std::string &expr0,
       // return n.srem(this->modulus).getZExtValue();
       return n.sextOrTrunc(this->modulus.getBitWidth())
           .srem(this->modulus)
-          .trunc(OldBitWidth).getZExtValue();
+          .trunc(OldBitWidth)
+          .getZExtValue();
     } else {
-      //return n.urem(this->modulus).getZExtValue();
+      // return n.urem(this->modulus).getZExtValue();
       return n.sextOrTrunc(this->modulus.getBitWidth())
           .urem(this->modulus)
           .trunc(OldBitWidth)
@@ -257,7 +257,7 @@ bool Simplifier::probably_equivalent_parallel(std::string &expr0,
   auto fcomp = [&](std::string expr0, std::string expr1) -> void {
     llvm::SmallVector<APInt, 16> par;
     for (int j = 0; j < this->vnumber; j++) {
-      //par.push_back(APInt(bitCount, SP64.next()).urem(this->modulus));
+      // par.push_back(APInt(bitCount, SP64.next()).urem(this->modulus));
       par.push_back(APInt(this->modulus.getBitWidth(), SP64.next())
                         .urem(this->modulus)
                         .zextOrTrunc(bitCount));
@@ -293,30 +293,26 @@ bool Simplifier::probably_equivalent_parallel(std::string &expr0,
       --CurThreadCount;
     }
 
-    if (!IsValid)
-      break;
+    if (!IsValid) break;
   }
 
   // Wait for threads to finish
   for (auto &t : threads) {
-    if (t.joinable())
-      t.join();
+    if (t.joinable()) t.join();
   }
 
   return IsValid;
 }
 
 bool Simplifier::is_double_modulo(llvm::APInt &a, llvm::APInt &b) {
-      
   // return ((2 * b) == a) || ((2 * b) == (a + this->modulus));
 
   if ((2 * b) == a) return true;
 
   auto A = a.sextOrTrunc(this->modulus.getBitWidth());
   auto B = b.sextOrTrunc(this->modulus.getBitWidth());
-  
-  if ((2 * A) == (B + this->modulus))
-    return true;
+
+  if ((2 * A) == (B + this->modulus)) return true;
 
   return false;
 }
@@ -326,7 +322,8 @@ std::string Simplifier::append_term_refinement(
     const APInt &r1, bool IsrAlt, const APInt &rAlt) {
   std::vector<APInt> t;
   for (auto &r2 : this->resultVector) {
-    if (r2 == r1 || (IsrAlt && (r2 == rAlt))) {
+    auto r2_ex = r2.sextOrTrunc(r1.getBitWidth());
+    if (r2_ex == r1 || (IsrAlt && (r2_ex == rAlt))) {
       t.push_back(APInt(bitCount, 1));
     } else {
       t.push_back(APInt(bitCount, 0));
@@ -424,8 +421,7 @@ std::string Simplifier::try_eliminate_unique_value(
   for (int i = 0; i < l - 1; i++) {
     for (int j = i + 1; j < l; j++) {
       for (int k = 0; k < l; k++) {
-        if (k == i || k == j)
-          continue;
+        if (k == i || k == j) continue;
 
         if (this->is_sum_modulo(uniqueValues[i], uniqueValues[j],
                                 uniqueValues[k])) {
@@ -436,9 +432,8 @@ std::string Simplifier::try_eliminate_unique_value(
           }
 
           if (l > 3) {
-
             std::vector<llvm::APInt>
-                resultSet; //(uniqueValues.begin(), uniqueValues.end());
+                resultSet;  //(uniqueValues.begin(), uniqueValues.end());
             fillResultSet(resultSet, uniqueValues);
 
             // resultSet.erase(uniqueValues[i]);
@@ -495,13 +490,11 @@ std::string Simplifier::try_eliminate_unique_value(
 
   auto SumUniqueValues = sum(uniqueValues);
   for (int i = 0; i < l; i++) {
-    if (!(double128(uniqueValues[i]) == SumUniqueValues))
-      continue;
+    if (!(double128(uniqueValues[i]) == SumUniqueValues)) continue;
 
     std::string simpler = "";
     for (int j = 0; j < l; j++) {
-      if (i == j)
-        continue;
+      if (i == j) continue;
 
       simpler = this->append_term_refinement(
           simpler, bitwiseList, uniqueValues[j], true, uniqueValues[i]);
@@ -568,8 +561,7 @@ void Simplifier::try_refine(std::string &expr) {
   }
 
   // We cannot simplify the expression better.
-  if (count <= 2)
-    return;
+  if (count <= 2) return;
 
   // If the first result is nonzero, this is the term's constant. Subtract it.
   auto constant = this->resultVector[0];
@@ -649,7 +641,6 @@ void Simplifier::try_refine(std::string &expr) {
 
 void Simplifier::append_conjunction(std::string &expr, const llvm::APInt &coeff,
                                     std::vector<int> &variables) {
-
   if (variables.size() <= 0) {
     report_fatal_error("No variables in append_conjunction");
   }
@@ -722,7 +713,8 @@ std::string Simplifier::simplify_generic() {
   // The constant term.
   auto constant = this->mod_red(this->resultVector[0], true);
   for (int i = 1; i < l; i++) {
-    this->resultVector[i] -= constant.sextOrTrunc(this->resultVector[i].getBitWidth());
+    this->resultVector[i] -=
+        constant.sextOrTrunc(this->resultVector[i].getBitWidth());
   }
 
   if (!constant.isZero()) {
@@ -742,8 +734,7 @@ std::string Simplifier::simplify_generic() {
 
     auto coeff = this->mod_red(this->resultVector[index], true);
 
-    if (coeff == 0)
-      continue;
+    if (coeff == 0) continue;
 
     this->subtract_coefficient(coeff, index, comb);
 
@@ -816,8 +807,8 @@ void Simplifier::try_simplify_fewer_variables(std::string &expr) {
   }
 }
 
-std::string
-Simplifier::simplify_one_value(std::vector<llvm::APInt> &resultSet) {
+std::string Simplifier::simplify_one_value(
+    std::vector<llvm::APInt> &resultSet) {
   auto coefficient = *resultSet.begin();
 
   auto It = std::remove(resultSet.begin(), resultSet.end(), coefficient);
@@ -858,8 +849,7 @@ std::vector<std::string> Simplifier::getVariables(std::string &expr) {
 
   std::set<std::string> varSet;
   for (auto &S : varsAndConstants) {
-    if (S.front() != '0')
-      varSet.insert(S);
+    if (S.front() != '0') varSet.insert(S);
   }
 
   // List of unique variables.
@@ -905,8 +895,7 @@ void Simplifier::parse_and_replace_variables() {
 
   std::set<std::string> varSet;
   for (auto &S : varsAndConstants) {
-    if (S.front() != '0')
-      varSet.insert(S);
+    if (S.front() != '0') varSet.insert(S);
   }
 
   // List of unique variables.
@@ -925,8 +914,7 @@ void Simplifier::parse_and_replace_variables() {
   // List of binary or hex numbers.
   varSet.clear();
   for (auto &S : varsAndConstants) {
-    if (S.front() == '0')
-      varSet.insert(S);
+    if (S.front() == '0') varSet.insert(S);
   }
 
   // Again remove duplicates for efficiency.
@@ -941,8 +929,7 @@ void Simplifier::parse_and_replace_variables() {
 
   // Finally replace those numbers by their decimal equivalents.
   for (auto &c : constants) {
-    if (c.size() <= 1)
-      report_fatal_error("Constant is to small!");
+    if (c.size() <= 1) report_fatal_error("Constant is to small!");
 
     // convert to decimal string
     int64_t n = 0;
@@ -1086,10 +1073,8 @@ void Simplifier::replace_variables_back(std::string &expr) {
 std::string Simplifier::strip(const std::string &inpt) {
   auto start_it = inpt.begin();
   auto end_it = inpt.rbegin();
-  while (std::isspace(*start_it))
-    ++start_it;
-  while (std::isspace(*end_it))
-    ++end_it;
+  while (std::isspace(*start_it)) ++start_it;
+  while (std::isspace(*end_it)) ++end_it;
   return std::string(start_it, end_it.base());
 }
 
@@ -1131,16 +1116,14 @@ int Simplifier::get_bitwise_index(int offset) {
 
 bool Simplifier::is_sum_modulo(const llvm::APInt &s1, const llvm::APInt &s2,
                                const llvm::APInt &a) {
-  //return ((s1 + s2) == a) || ((s1 + s2) == (a + this->modulus));
-  if ((s1 + s2) == a)
-    return true;
+  // return ((s1 + s2) == a) || ((s1 + s2) == (a + this->modulus));
+  if ((s1 + s2) == a) return true;
 
   auto S1 = s1.sextOrTrunc(this->modulus.getBitWidth());
   auto S2 = s2.sextOrTrunc(this->modulus.getBitWidth());
   auto A = a.sextOrTrunc(this->modulus.getBitWidth());
 
-  if ((S1 + S2) == (A + this->modulus))
-    return true;
+  if ((S1 + S2) == (A + this->modulus)) return true;
 
   return false;
 }
@@ -1169,4 +1152,4 @@ bool Simplifier::simplify_linear_mba(std::string &expr, std::string &simp_expr,
   return R;
 }
 
-} // namespace LSiMBA
+}  // namespace LSiMBA

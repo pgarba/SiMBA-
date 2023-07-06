@@ -24,7 +24,7 @@ class Evaluator;
 class TargetLibraryInfoImpl;
 class TargetLibraryInfo;
 class Type;
-} // namespace llvm
+}  // namespace llvm
 
 namespace LSiMBA {
 
@@ -48,13 +48,17 @@ typedef struct MBACandidate {
 } MBACandidate;
 
 class LLVMParser {
-public:
+ public:
   LLVMParser(const std::string &filename, const std::string &OutputFile,
              bool Parallel = true, bool Verify = true,
              bool OptimizeBefore = true, bool OptimizeAfter = true,
              bool Debug = false, bool Prove = false);
 
   LLVMParser(llvm::Module *M, bool Parallel = true, bool Verify = true,
+             bool OptimizeBefore = true, bool OptimizeAfter = true,
+             bool Debug = false, bool Prove = false);
+
+  LLVMParser(llvm::Function *F, bool Parallel = true, bool Verify = true,
              bool OptimizeBefore = true, bool OptimizeAfter = true,
              bool Debug = false, bool Prove = false);
 
@@ -72,7 +76,7 @@ public:
 
   static llvm::LLVMContext &getLLVMContext();
 
-private:
+ private:
   std::string OutputFile = "";
 
   bool Parallel;
@@ -96,6 +100,8 @@ private:
   std::unique_ptr<llvm::TargetLibraryInfo> TLI;
 
   llvm::Module *M;
+
+  llvm::Function *F;
 
   SplitMix64 SP64;
 
@@ -149,26 +155,25 @@ private:
                           llvm::SmallVectorImpl<llvm::Value *> &Variables,
                           llvm::SmallVectorImpl<llvm::APInt> &Par, bool &Error);
 
-  llvm::Constant *
-  getVal(llvm::Value *V,
-         llvm::DenseMap<llvm::Value *, llvm::Constant *> &ValueStack,
-         llvm::SmallVectorImpl<llvm::Value *> &Variables,
-         llvm::SmallVectorImpl<llvm::APInt> &Par);
+  llvm::Constant *getVal(
+      llvm::Value *V,
+      llvm::DenseMap<llvm::Value *, llvm::Constant *> &ValueStack,
+      llvm::SmallVectorImpl<llvm::Value *> &Variables,
+      llvm::SmallVectorImpl<llvm::APInt> &Par);
 
   bool doesDominateInst(llvm::DominatorTree *DT, const llvm::Instruction *InstA,
                         const llvm::Instruction *InstB);
 
-  z3::expr
-  getZ3ExpressionFromAST(z3::context &Z3Ctx,
-                         llvm::SmallVectorImpl<BFSEntry> &AST,
-                         llvm::SmallVectorImpl<llvm::Value *> &Variables,
-                         int OverrideBitWidth = 0);
+  z3::expr getZ3ExpressionFromAST(
+      z3::context &Z3Ctx, llvm::SmallVectorImpl<BFSEntry> &AST,
+      llvm::SmallVectorImpl<llvm::Value *> &Variables,
+      int OverrideBitWidth = 0);
 
   z3::expr *getZ3Val(z3::context &Z3Ctx, llvm::Value *V,
                      llvm::DenseMap<llvm::Value *, z3::expr *> &ValueMap,
                      int OverrideBitWidth = 0);
 };
 
-} // namespace LSiMBA
+}  // namespace LSiMBA
 
-#endif // LLVMPARSER_H
+#endif  // LLVMPARSER_H
