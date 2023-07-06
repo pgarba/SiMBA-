@@ -101,5 +101,16 @@ endif()
 
 target_link_libraries(SiMBAPass ${PASS_LDFLAGS})
 
+# Header
+set_target_properties(LSiMBA++ PROPERTIES PUBLIC_HEADER "LLVMParser.h")
+
 # Install
-install(TARGETS SiMBA++ SiMBAPass DESTINATION out)
+install(TARGETS SiMBA++ SiMBAPass DESTINATION "bin"
+	LIBRARY DESTINATION "lib"
+	PUBLIC_HEADER DESTINATION "include"
+	)
+
+install(TARGETS LSiMBA++
+        LIBRARY DESTINATION "lib"
+        PUBLIC_HEADER DESTINATION "include"
+        )
