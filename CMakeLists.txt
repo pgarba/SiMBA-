@@ -102,7 +102,7 @@ endif()
 target_link_libraries(SiMBAPass ${PASS_LDFLAGS})
 
 # Header
-set_target_properties(LSiMBA++ PROPERTIES PUBLIC_HEADER "LLVMParser.h")
+set_target_properties(LSiMBA++ PROPERTIES PUBLIC_HEADER "LLVMParser.h;include/splitmix64.h")
 
 # Install
 install(TARGETS SiMBA++ SiMBAPass DESTINATION "bin"
