@@ -28,6 +28,7 @@ set(LLVM_LIBS ${LLVM_LIBS} ${LDF})
 find_package(Z3 REQUIRED CONFIG)
 
 message(STATUS "Z3 include directory: " ${Z3_CXX_INCLUDE_DIRS})
+message(STATUS "Z3 library: " ${Z3_LIBRARIES})
 include_directories(${Z3_CXX_INCLUDE_DIRS} "include")
 
 # Disable some LLVM warnings for Visual Studio
@@ -64,7 +65,7 @@ target_link_libraries(SiMBA++
     LLVMBitReader
     LLVMCore
     LLVMSupport
-    z3
+    ${Z3_LIBRARIES}
 )
 
 # SiMBA++ static
