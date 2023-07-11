@@ -40,6 +40,10 @@ public:
 
   bool simplify(std::string &simp_exp, bool useZ3, bool fastCheck);
 
+  bool external_simplifier(llvm::StringRef expr, std::string &simp_exp,
+                           bool useZ3, bool fastCheck,
+                           const llvm::StringRef ExternalSimplifierPath);
+
 private:
   bool RunParallel;
 

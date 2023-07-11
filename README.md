@@ -23,6 +23,10 @@ MBA evaluation and verification will be run in parallel, if the MBA has more tha
 
 Not supported in LLVM, as LLVM does not support multithreading!
 
+# Works with external simplifiers like SiMBA/GAMBA
+
+Use an external simplfier like **GAMBA** to crunch non linear MBAs on LLVM IR!
+
 # General Options
 
 ```
@@ -40,6 +44,7 @@ Not supported in LLVM, as LLVM does not support multithreading!
   --stop=<stop>                  - Stop after N MBAs are solved (Default 0)
   --parallel                     - Evaluate/Check MBA expressions in parallel
   --optimize                     - Optimize LLVM IR before simplification (Default true)
+  --external-simplifier          - Use SiMBA or GAMBA as simplifier instead of internal (Path to simplify.py/simplify_general.py)
 ```
 
 

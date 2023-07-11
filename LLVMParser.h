@@ -146,6 +146,9 @@ class LLVMParser {
 
   void printAST(llvm::SmallVectorImpl<BFSEntry> &AST);
 
+  std::string getASTAsString(llvm::SmallVectorImpl<BFSEntry> &AST,
+                             llvm::SmallVectorImpl<llvm::Value *> &Variables);
+
   void initResultVectorFromAST(llvm::SmallVectorImpl<BFSEntry> &AST,
                                std::vector<llvm::APInt> &ResultVector,
                                const llvm::APInt &Modulus,
