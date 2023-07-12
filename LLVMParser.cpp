@@ -261,6 +261,10 @@ int LLVMParser::extractAndSimplify() {
       continue;
     }
 
+    if (this->Debug) {
+      outs() << "[*] Simplifying function: " << F->getName() << "\n";
+    }
+
     int MBACount = 0;
     bool Found = false;
 
@@ -766,6 +770,9 @@ bool LLVMParser::findReplacements(llvm::DominatorTree *DT,
       std::string &Path = UseExternalSimplifier;    
       auto Expr = getASTAsString(Cand.AST, Cand.Variables);
       S.external_simplifier(Expr, Cand.Replacement, false, false, Path);
+      if (this->Debug) {
+        outs() << "[*] External simplified expression from '" << Expr << "' to '" << Cand.Replacement << "'\n"; 
+      }
     } else {
       S.simplify(Cand.Replacement, false, false);
     }

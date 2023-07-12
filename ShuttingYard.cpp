@@ -147,6 +147,10 @@ void exprToTokens(const std::string &expr, veque::veque<Token> &tokens,
         t = Token::Type::Operator;
         precedence = 6;
         break;
+      case '#':
+        t = Token::Type::Operator;
+        precedence = 7;
+        break;
       case '/':
         t = Token::Type::Operator;
         precedence = 6;
@@ -340,6 +344,10 @@ void createLLVMReplacement(llvm::Instruction *InsertionPoint,
                            llvm::Type *IntType, std::string &expr,
                            std::vector<std::string> &VNames,
                            llvm::SmallVectorImpl<llvm::Value *> &Variables) {
+
+  // replace ** with p (pow operator is supported by GAMBA)
+  replace_all(expr, "**", "#");
+
   // Parse expressions and create token
   veque::veque<Token> tokens;
   exprToTokens(expr, tokens, true, &VNames);
@@ -412,6 +420,20 @@ void createLLVMReplacement(llvm::Instruction *InsertionPoint,
         case '*':
           // stackAP.push_back(lhsAP * rhsAP);
           stackAP.push_back(Builder.CreateMul(lhsAP, rhsAP));
+          break;
+        case '#':
+          // stackAP.push_back(lhsAP ** rhsAP);
+          // Call Pow intrinsics
+          {
+            auto DblTy = Type::getDoubleTy(lhsAP->getContext());
+            auto DlhsAP = Builder.CreateUIToFP(lhsAP, DblTy);
+            auto DrhsAP = Builder.CreateUIToFP(rhsAP, DblTy);
+            auto Res = Builder.CreateIntrinsic(
+                llvm::Intrinsic::pow, {DblTy, DblTy}, {DlhsAP, DrhsAP});     
+            auto ResInt = Builder.CreateFPToUI(Res,lhsAP->getType());
+
+            stackAP.push_back(ResInt);
+          }
           break;
         case '/':
           // stackAP.push_back(lhsAP.sdiv(rhsAP));
@@ -576,6 +598,20 @@ llvm::Function *createLLVMFunction(llvm::Module *M, llvm::Type *IntType,
   return F;
 }
 
+APInt APIntPow(APInt base, APInt exp) {
+  APInt result(base.getBitWidth(), 1);
+  for (;;) {
+    if ((exp & 1) == 1)
+      result *= base;
+    exp = exp.lshr(1);
+    if (!exp)
+      break;
+    base *= base;
+  }
+
+  return result;
+}
+
 APInt eval(std::string expr, llvm::SmallVectorImpl<APInt> &par, int BitWidth,
            int *OperationCount) {
   // Replace variables with values in expression
@@ -585,6 +621,9 @@ APInt eval(std::string expr, llvm::SmallVectorImpl<APInt> &par, int BitWidth,
 
     replace_all(expr, var, val);
   }
+
+  // replace ** with p (pow operator is supported by GAMBA)
+  replace_all(expr, "**", "#");
 
   veque::veque<Token> tokens;
   exprToTokens(expr, tokens);
@@ -648,31 +687,27 @@ APInt eval(std::string expr, llvm::SmallVectorImpl<APInt> &par, int BitWidth,
           break;
         case '^':
           stackAP.push_back(lhsAP ^ rhsAP);
-
           break;
         case '*':
           stackAP.push_back(lhsAP * rhsAP);
-
           break;
         case '/':
           stackAP.push_back(lhsAP.sdiv(rhsAP));
-
           break;
         case '&':
           stackAP.push_back(lhsAP & rhsAP);
-
           break;
         case '|':
           stackAP.push_back(lhsAP | rhsAP);
-
           break;
         case '+':
           stackAP.push_back(lhsAP + rhsAP);
-
           break;
         case '-':
           stackAP.push_back(lhsAP - rhsAP);
-
+          break;
+        case '#':
+          stackAP.push_back(APIntPow(lhsAP, rhsAP));
           break;
         }
       }
@@ -695,8 +730,10 @@ APInt eval(std::string expr, llvm::SmallVectorImpl<APInt> &par, int BitWidth,
 z3::expr getZ3ExprFromString(z3::context &Z3Ctx, std::string &expr,
                              int BitWidth, std::vector<std::string> &Variables,
                              std::map<std::string, z3::expr *> &VarMap) {
-  veque::veque<Token> tokens;
+  // replace ** with p (pow operator is supported by GAMBA)
+  replace_all(expr, "**", "#");
 
+  veque::veque<Token> tokens;
   exprToTokens(expr, tokens, true, &Variables);
 
   veque::veque<Token> queue;
@@ -773,6 +810,11 @@ z3::expr getZ3ExprFromString(z3::context &Z3Ctx, std::string &expr,
         case '*': {
           auto MulExpr = lhsAP * rhsAP;
           stackAP.push_back(MulExpr);
+        } break;
+        case '#': {
+          // power operator
+          auto PowExpr =  z3::pw(lhsAP, rhsAP); 
+          stackAP.push_back(PowExpr);
         } break;
         case '/': {
           auto DivExpr = lhsAP / rhsAP;

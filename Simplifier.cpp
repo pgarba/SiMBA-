@@ -4,6 +4,7 @@
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/StringRef.h"
+#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/Program.h"
 #include "llvm/Support/Regex.h"
@@ -35,6 +36,11 @@
 
 using namespace llvm;
 using namespace std;
+
+cl::opt<std::string> PythonPath("python-path", cl::Optional,
+                                cl::desc("Path to python binary"),
+                                cl::value_desc("python-path"),
+                                cl::init("python"));
 
 namespace LSiMBA {
 Simplifier::Simplifier(int bitCount, bool runParallel, const std::string &expr)
@@ -136,7 +142,11 @@ llvm::APInt Simplifier::mod_red(const llvm::APInt &n, bool Signed) {
 }
 
 int exec(std::string &cmd, std::string &output) {
+#ifdef _WIN32
   std::shared_ptr<FILE> pipe(_popen(cmd.c_str(), "r"), _pclose);
+#else
+  std::shared_ptr<FILE> pipe(popen(cmd.c_str(), "r"), pclose);
+#endif
   if (!pipe)
     return 1;
 
@@ -149,7 +159,7 @@ int exec(std::string &cmd, std::string &output) {
 
       // Check for "*** ... simplified to"
       const std::string Str = "*** ... simplified to ";
-      if (temp._Starts_with(Str)) {
+      if (!strncmp(temp.c_str(), Str.c_str(), Str.size())) {
         output = temp.substr(Str.size());
         output.erase(std::remove(output.begin(), output.end(), '\n'),
                      output.cend());
@@ -170,27 +180,21 @@ bool Simplifier::external_simplifier(
     return false;
   }
 
-  if (!sys::fs::can_execute(ExternalSimplifierPath)) {
-    errs() << "[!] External simplifier file is not executable: "
-           << ExternalSimplifierPath << "\n";
-    return false;
-  }
-
   // Execute external simplifier
   std::string output = "";
 
-  std::string cmd =
-      "python " + ExternalSimplifierPath.str() + " \"" + expr.str() + "\"";
+  std::string cmd = PythonPath + " " + ExternalSimplifierPath.str() + " \"" +
+                    expr.str() + "\"";
   auto exitCode = exec(cmd, output);
 
   if (exitCode != 0) {
-    errs() << "[!] External simplifier failed!\n";
+    report_fatal_error("[!] External simplifier failed!\n");
     return false;
   }
 
   // Check if output is valid
   if (output.empty()) {
-    errs() << "[!] External simplifier did not return any output\n";
+    report_fatal_error("[!] External simplifier did not return any output\n");
     return false;
   }
 
