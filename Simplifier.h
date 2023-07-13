@@ -42,7 +42,8 @@ public:
 
   bool external_simplifier(llvm::StringRef expr, std::string &simp_exp,
                            bool useZ3, bool fastCheck,
-                           const llvm::StringRef ExternalSimplifierPath);
+                           const llvm::StringRef ExternalSimplifierPath,
+                           int BitWidth);
 
 private:
   bool RunParallel;

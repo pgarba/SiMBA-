@@ -165,14 +165,29 @@ int exec(std::string &cmd, std::string &output) {
                      output.cend());
         return 0;
       }
+
+      // Check for Error:
+      const std::string Str2 = "Error: ";
+      if (!strncmp(temp.c_str(), Str2.c_str(), Str2.size())) {
+        errs() << "[!] External simplifier failed: " << temp << "\n";
+        return 1;
+      }
     }
   }
-  return 0;
+
+  // Something went wrong
+  return 1;
 }
 
 bool Simplifier::external_simplifier(
     llvm::StringRef expr, std::string &simp_exp, bool useZ3, bool fastCheck,
-    const llvm::StringRef ExternalSimplifierPath) {
+    const llvm::StringRef ExternalSimplifierPath, int BitWidth) {
+
+  // >> is not supported
+  if (expr.find(">>") != std::string::npos) {
+    return false;
+  }
+
   // Check if file exists with llvm
   if (!sys::fs::exists(ExternalSimplifierPath)) {
     errs() << "[!] External simplifier file does not exist: "
@@ -184,11 +199,10 @@ bool Simplifier::external_simplifier(
   std::string output = "";
 
   std::string cmd = PythonPath + " " + ExternalSimplifierPath.str() + " \"" +
-                    expr.str() + "\"";
+                    expr.str() + "\"" + " -b " + to_string(BitWidth);
   auto exitCode = exec(cmd, output);
 
   if (exitCode != 0) {
-    report_fatal_error("[!] External simplifier failed!\n");
     return false;
   }
 

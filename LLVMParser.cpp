@@ -768,8 +768,12 @@ bool LLVMParser::findReplacements(llvm::DominatorTree *DT,
       }
 
       std::string &Path = UseExternalSimplifier;    
-      auto Expr = getASTAsString(Cand.AST, Cand.Variables);
-      S.external_simplifier(Expr, Cand.Replacement, false, false, Path);
+      auto Expr = getASTAsString(Cand.AST, Cand.Variables);      
+      auto R = S.external_simplifier(Expr, Cand.Replacement, false, false, Path,
+                                     BitWidth);
+      if (R == false)
+        continue;
+
       if (this->Debug) {
         outs() << "[*] External simplified expression from '" << Expr << "' to '" << Cand.Replacement << "'\n"; 
       }
@@ -851,7 +855,11 @@ bool LLVMParser::walkSubAST(llvm::DominatorTree *DT,
       if (!UseExternalSimplifier.empty()) {
         std::string &Path = UseExternalSimplifier;
         auto Expr = getASTAsString(C.AST, C.Variables);
-        S.external_simplifier(Expr, C.Replacement, false, false, Path);
+        auto R = S.external_simplifier(Expr, C.Replacement, false, false, Path,
+                                       BitWidth);
+        if (R == false) {
+          return false;
+        }
       } else {
         S.simplify(C.Replacement, false, false);
       }
@@ -989,7 +997,7 @@ LLVMParser::getASTAsString(llvm::SmallVectorImpl<BFSEntry> &AST,
     case Instruction::Shl:
       Expr += " << ";
       break;
-    case Instruction::AShr:
+    case Instruction::LShr:
       Expr += " >> ";
       break;
     case Instruction::Xor:
