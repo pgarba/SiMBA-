@@ -150,10 +150,10 @@ int exec(std::string &cmd, std::string &output) {
   if (!pipe)
     return 1;
 
-  char buffer[128];
+  char buffer[2048];
 
   while (!feof(pipe.get())) {
-    if (fgets(buffer, 128, pipe.get()) != NULL) {
+    if (fgets(buffer, 2048, pipe.get()) != NULL) {
 
       std::string temp = buffer;
 
@@ -162,7 +162,13 @@ int exec(std::string &cmd, std::string &output) {
       if (!strncmp(temp.c_str(), Str.c_str(), Str.size())) {
         output = temp.substr(Str.size());
         output.erase(std::remove(output.begin(), output.end(), '\n'),
-                     output.cend());
+                     output.cend());  
+
+        while (fgets(buffer, 2048, pipe.get()) != NULL) {
+          std::string temp = buffer;
+          output += temp;
+        }        
+
         return 0;
       }
 

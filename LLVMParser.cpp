@@ -775,7 +775,7 @@ bool LLVMParser::findReplacements(llvm::DominatorTree *DT,
         continue;
 
       if (this->Debug) {
-        outs() << "[*] External simplified expression from '" << Expr << "' to '" << Cand.Replacement << "'\n"; 
+        outs() << "[*] External simplified expression (BitWidth: " << BitWidth << ") from '" << Expr << "' to '" << Cand.Replacement << "'\n"; 
       }
     } else {
       S.simplify(Cand.Replacement, false, false);
