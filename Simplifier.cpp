@@ -42,6 +42,8 @@ cl::opt<std::string> PythonPath("python-path", cl::Optional,
                                 cl::value_desc("python-path"),
                                 cl::init("python"));
 
+static bool WarnOnce = false;
+
 namespace LSiMBA {
 Simplifier::Simplifier(int bitCount, bool runParallel, const std::string &expr)
     : bitCount(0), vnumber(0), SP64(expr.at(0)) {
@@ -158,23 +160,23 @@ int exec(std::string &cmd, std::string &output) {
       std::string temp = buffer;
 
       // Check for "*** ... simplified to"
-      const std::string Str = "*** ... simplified to ";
-      if (!strncmp(temp.c_str(), Str.c_str(), Str.size())) {
-        output = temp.substr(Str.size());
+      const std::string SimplifiedTo = "*** ... simplified to ";
+      if (!strncmp(temp.c_str(), SimplifiedTo.c_str(), SimplifiedTo.size())) {
+        output = temp.substr(SimplifiedTo.size());
         output.erase(std::remove(output.begin(), output.end(), '\n'),
-                     output.cend());  
+                     output.cend());
 
         while (fgets(buffer, 2048, pipe.get()) != NULL) {
           std::string temp = buffer;
           output += temp;
-        }        
+        }
 
         return 0;
       }
 
       // Check for Error:
-      const std::string Str2 = "Error: ";
-      if (!strncmp(temp.c_str(), Str2.c_str(), Str2.size())) {
+      const std::string Error = "Error: ";
+      if (!strncmp(temp.c_str(), Error.c_str(), Error.size())) {
         errs() << "[!] External simplifier failed: " << temp << "\n";
         return 1;
       }
@@ -187,10 +189,14 @@ int exec(std::string &cmd, std::string &output) {
 
 bool Simplifier::external_simplifier(
     llvm::StringRef expr, std::string &simp_exp, bool useZ3, bool fastCheck,
-    const llvm::StringRef ExternalSimplifierPath, int BitWidth) {
+    const llvm::StringRef ExternalSimplifierPath, int BitWidth, bool Debug) {
 
   // >> is not supported
   if (expr.find(">>") != std::string::npos) {
+    if (Debug && !WarnOnce) {
+      outs() << "[!] '>>' operator not supported!\n";
+      WarnOnce = true;
+    }
     return false;
   }
 

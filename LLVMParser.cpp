@@ -761,28 +761,35 @@ bool LLVMParser::findReplacements(llvm::DominatorTree *DT,
 
     // Simpify MBA
     Simplifier S(BitWidth, false, Cand.Variables.size(), ResultVector);
+    bool SkipVerify = false;
 
     if (!UseExternalSimplifier.empty()) {
       if (this->Debug) {
         outs() << "[*] Using external simplifier\n";
       }
 
-      std::string &Path = UseExternalSimplifier;    
-      auto Expr = getASTAsString(Cand.AST, Cand.Variables);      
+      std::string &Path = UseExternalSimplifier;
+      auto Expr = getASTAsString(Cand.AST, Cand.Variables);
       auto R = S.external_simplifier(Expr, Cand.Replacement, false, false, Path,
-                                     BitWidth);
-      if (R == false)
-        continue;
-
-      if (this->Debug) {
-        outs() << "[*] External simplified expression (BitWidth: " << BitWidth << ") from '" << Expr << "' to '" << Cand.Replacement << "'\n"; 
+                                     BitWidth, this->Debug);
+      if (R) {
+        if (this->Debug) {
+          outs() << "[*] External simplified expression (BitWidth: " << BitWidth
+                 << ") from '" << Expr << "' to '" << Cand.Replacement << "'\n";
+        }
+      } else {
+        // Skip verify and walk sub ast
+        Cand.isValid = false;
+        SkipVerify = true;
       }
     } else {
       S.simplify(Cand.Replacement, false, false);
     }
 
     // Verify is replacement is valid
-    Cand.isValid = this->verify(Cand.AST, Cand.Replacement, Cand.Variables);
+    if (!SkipVerify)
+      Cand.isValid = this->verify(Cand.AST, Cand.Replacement, Cand.Variables);
+
     if (Cand.isValid == false) {
       // Could not simplify the whole AST so walk through SubASTs
       ReplacementFound = walkSubAST(DT, Cand.AST, SubASTCandidates);
@@ -824,6 +831,7 @@ bool LLVMParser::walkSubAST(llvm::DominatorTree *DT,
                             std::vector<MBACandidate> &Candidates) {
   bool Valid = false;
 
+  // Walk forward
   for (auto &E : AST) {
     // Walk the operands
     for (auto &Op : E.I->operands()) {
@@ -850,26 +858,32 @@ bool LLVMParser::walkSubAST(llvm::DominatorTree *DT,
       initResultVectorFromAST(C.AST, ResultVector, Modulus, C.Variables);
 
       // Simplify MBA
-      Simplifier S(BitWidth, false, C.Variables.size(), ResultVector);      
+      bool SkipVerify = false;
+      Simplifier S(BitWidth, false, C.Variables.size(), ResultVector);
 
       if (!UseExternalSimplifier.empty()) {
         std::string &Path = UseExternalSimplifier;
         auto Expr = getASTAsString(C.AST, C.Variables);
         auto R = S.external_simplifier(Expr, C.Replacement, false, false, Path,
-                                       BitWidth);
+                                       BitWidth, this->Debug);
         if (R == false) {
-          return false;
+          SkipVerify = true;
+          C.isValid = false;
         }
       } else {
         S.simplify(C.Replacement, false, false);
       }
 
 #ifdef DEBUG_SIMPLIFICATION
-      printAST(C.AST);
-      outs() << "[*] Simplified Expression: " << C.Replacement << "\n";
+      if (!SkipVerify) {
+        printAST(C.AST);
+        outs() << "[*] Simplified Expression: " << C.Replacement << "\n";
+      }
 #endif
 
-      C.isValid = this->verify(C.AST, C.Replacement, C.Variables);
+      if (!SkipVerify)
+        C.isValid = this->verify(C.AST, C.Replacement, C.Variables);
+
       if (C.isValid) {
         // Store valid replacement
         Candidates.push_back(C);
