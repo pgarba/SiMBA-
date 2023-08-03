@@ -87,8 +87,8 @@ cl::opt<bool>
 
 cl::opt<bool>
     ProveZ3("prove", cl::Optional,
-                cl::desc("Prove with Z3 that the MBA is correct (Default false)"),
-                cl::value_desc("prove"), cl::init(false));
+            cl::desc("Prove with Z3 that the MBA is correct (Default false)"),
+            cl::value_desc("prove"), cl::init(false));
 
 cl::opt<bool> RunOptimizer(
     "optimize", cl::Optional,
@@ -299,6 +299,13 @@ void SimplifyLLVMModule() {
 
   outs() << "[+] MBAs found and replaced: '" << MBACount
          << "' time: " << (int)duration.count() << "ms\n";
+
+  outs() << "[+] Instruction count before: '"
+         << Parser.getInstructionCountBefore()
+         << "' after: " << Parser.getInstructionCountAfter() << " (+-"
+         << int(Parser.getInstructionCountAfter() / 100. *
+                Parser.getInstructionCountBefore())
+         << "%)\n";
 }
 
 void RunSimplifier(std::string &MBA, std::string &SimpMBA, std::string &ExpMBA,

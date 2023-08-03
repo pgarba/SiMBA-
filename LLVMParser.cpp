@@ -106,6 +106,8 @@ LLVMParser::~LLVMParser() {}
 int LLVMParser::simplify() {
   int Count = this->extractAndSimplify();
 
+  this->InstructionCountAfter = getInstructionCount(M);
+
   writeModule();
 
   return Count;
@@ -217,6 +219,8 @@ bool LLVMParser::parse(const std::string &filename) {
   if (!M) {
     llvm::report_fatal_error("[!] Could not read llvm ir file!", false);
   }
+
+  this->InstructionCountBefore = getInstructionCount(M);
 
   if (this->OptimizeBefore) {
     runLLVMOptimizer(true);
@@ -1436,6 +1440,26 @@ LLVMParser::getZ3Val(z3::context &Z3Ctx, llvm::Value *V,
   }
 
   return ValueMap[V];
+}
+
+int LLVMParser::getInstructionCount(llvm::Module *M) {
+  int Count = 0;
+  for (auto &F : *M) {
+    for (auto &BB : F) {
+      for (auto &I : BB) {
+        Count++;
+      }
+    }
+  }
+  return Count;
+}
+
+int LLVMParser::getInstructionCountBefore() {
+  return this->InstructionCountBefore;
+}
+  
+int LLVMParser::getInstructionCountAfter() {
+  return this->InstructionCountAfter;
 }
 
 } // namespace LSiMBA

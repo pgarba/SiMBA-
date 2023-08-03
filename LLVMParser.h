@@ -76,6 +76,11 @@ class LLVMParser {
 
   static llvm::LLVMContext &getLLVMContext();
 
+
+  int getInstructionCountBefore();
+  
+  int getInstructionCountAfter();
+
  private:
   std::string OutputFile = "";
 
@@ -92,6 +97,10 @@ class LLVMParser {
   bool Debug;
 
   int MaxThreadCount;
+
+  int InstructionCountBefore = 0;
+
+  int InstructionCountAfter = 0;
 
   static llvm::LLVMContext Context;
 
@@ -177,6 +186,8 @@ class LLVMParser {
   z3::expr *getZ3Val(z3::context &Z3Ctx, llvm::Value *V,
                      llvm::DenseMap<llvm::Value *, z3::expr *> &ValueMap,
                      int OverrideBitWidth = 0);
+
+  static int getInstructionCount(llvm::Module *M);
 };
 
 }  // namespace LSiMBA
