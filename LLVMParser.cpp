@@ -837,23 +837,29 @@ bool LLVMParser::findReplacements(llvm::DominatorTree *DT,
     bool SkipVerify = false;
 
     if (!UseExternalSimplifier.empty()) {
-      if (this->Debug) {
-        outs() << "[*] Using external simplifier\n";
-      }
-
       std::string &Path = UseExternalSimplifier;
       auto Expr = getASTAsString(Cand.AST, Cand.Variables);
+
+      if (this->Debug) {
+        outs() << "[*] Using external simplifier\n";
+        outs() << "[*] External simplified expression (BitWidth: " << BitWidth
+                 << ") from '" << Expr << "'\n";
+      }
+
       auto R = S.external_simplifier(Expr, Cand.Replacement, false, false, Path,
                                      BitWidth, this->Debug);
       if (R) {
         if (this->Debug) {
-          outs() << "[*] External simplified expression (BitWidth: " << BitWidth
-                 << ") from '" << Expr << "' to '" << Cand.Replacement << "'\n";
+          outs() << "[*] to '" << Cand.Replacement << "'\n";
         }
-      } else {
+      } else {        
         // Skip verify and walk sub ast
         Cand.isValid = false;
         SkipVerify = true;
+
+        if (this->Debug) {
+          outs() << "[*] Failed!\n";
+        }
       }
     } else {
       S.simplify(Cand.Replacement, false, false);
@@ -1258,7 +1264,6 @@ LLVMParser::evaluateAST(llvm::SmallVectorImpl<BFSEntry> &AST,
   auto CI = dyn_cast<ConstantInt>(InstResult);
   if (!CI) {
     // Value might become poison so take care of this
-    InstResult->dump();
     Error = true;
     return APInt(1, 0);
   }
