@@ -4,6 +4,7 @@
 #include "llvm/Analysis/TargetLibraryInfo.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/Dominators.h"
+#include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/InstIterator.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/LegacyPassManager.h"
@@ -465,15 +466,6 @@ bool LLVMParser::verify(llvm::Function *F0, llvm::Function *F1,
   return true;
 }
 
-void replace_all(std::string &str, const std::string &from,
-                 const std::string &to) {
-  size_t start_pos = 0;
-  while ((start_pos = str.find(from, start_pos)) != std::string::npos) {
-    str.replace(start_pos, from.length(), to);
-    start_pos += to.length();
-  }
-}
-
 bool LLVMParser::verify(llvm::SmallVectorImpl<BFSEntry> &AST,
                         std::string &SimpExpr,
                         llvm::SmallVectorImpl<llvm::Value *> &Variables) {
@@ -486,7 +478,8 @@ bool LLVMParser::verify(llvm::SmallVectorImpl<BFSEntry> &AST,
     char Var = 'a' + i;
     string StrVar(1, Var);
 
-    replace_all(Expr1_replVar, StrVar, "X[" + std::to_string(i) + "]");
+    Simplifier::replaceAllStrings(Expr1_replVar, StrVar,
+                                  "X[" + std::to_string(i) + "]");
   }
 
   // The number of operations in the new expressions
@@ -551,10 +544,8 @@ bool LLVMParser::verify(llvm::SmallVectorImpl<BFSEntry> &AST,
       Vars.push_back(strC);
     }
 
-    // Lower BitWidth for faster results ...
-    int BitWidth = 4;
     if (this->Debug) {
-      outs() << "[Z3] Proving with " << BitWidth << "Bits only ...\n";
+      outs() << "[Z3] Proving with " << BitWidth << "Bits ...\n";
     }
 
     // Get Z3 expressions
@@ -574,7 +565,7 @@ bool LLVMParser::verify(llvm::SmallVectorImpl<BFSEntry> &AST,
       auto duration = duration_cast<milliseconds>(stop - start);
 
       outs() << "[Z3] Proved in " << duration.count()
-             << " ms Result: " << Result << "\n";
+             << " ms Result (1:valid): " << Result << "\n";
     }
 
     return Result;
@@ -600,7 +591,6 @@ bool LLVMParser::runLLVMOptimizer(bool Initial) {
   builder.LibraryInfo = TLII;
   builder.DisableUnrollLoops = true;
   builder.MergeFunctions = false;
-  // builder.RerollLoops = true;
   builder.VerifyInput = false;
   builder.VerifyOutput = false;
 
@@ -613,9 +603,73 @@ bool LLVMParser::runLLVMOptimizer(bool Initial) {
   auto stop = high_resolution_clock::now();
   auto duration = duration_cast<milliseconds>(stop - start);
 
+  rewriteIntrinsics();
+
   outs() << " Done! (" << duration.count() << " ms)\n";
 
   return true;
+}
+
+bool LLVMParser::rewriteIntrinsics() {
+  bool Changes = false;
+
+  std::map<std::string, std::function<bool()>> Transformations;
+
+  // Transform llvm.fshl.i64 to rotate left code (if possible)
+  Transformations.emplace("llvm.fshl.i64", [&]() -> bool {
+    auto Intri = this->M->getFunction("llvm.fshl.i64");
+    if (!Intri)
+      return false;
+
+    SmallVector<llvm::Instruction *, 4> ToDelete;
+
+    for (auto U : Intri->users()) {
+      auto CI = dyn_cast<CallInst>(U);
+      if (!CI)
+        continue;
+
+      // Arg0 and Arg1 has to be equal to be a rotl
+      if (CI->getArgOperand(0) != CI->getArgOperand(0))
+        continue;
+
+      /*
+        %3 = shl i64 %0, %1
+        %4 = sub i64 64, %1
+        %5 = lshr i64 %0, %4
+        %6 = or i64 %5, %3
+      */
+      // Create the builder to build
+      llvm::IRBuilder<> Builder(CI);
+
+      auto Op = CI->getArgOperand(0);
+      auto Count = CI->getArgOperand(2);
+      auto t3 = Builder.CreateShl(Op, Count);
+      auto t4 = Builder.CreateSub(
+          llvm::ConstantInt::get(Count->getType(),
+                                 Count->getType()->getIntegerBitWidth()),
+          Count);
+      auto t5 = Builder.CreateLShr(Op, t4);
+      auto t6 = Builder.CreateOr(t5, t3);
+
+      CI->replaceAllUsesWith(t6);
+
+      ToDelete.push_back(CI);
+    }
+
+    // Cleanup
+    for (auto CI : ToDelete) {
+      CI->eraseFromParent();
+    }
+
+    return true;
+  });
+
+  // Apply transformation
+  for (auto T : Transformations) {
+    Changes |= T.second();
+  }
+
+  return Changes;
 }
 
 void LLVMParser::extractCandidates(llvm::Function &F,
@@ -694,6 +748,21 @@ void LLVMParser::extractCandidates(llvm::Function &F,
         }
       }
     } break;
+    /* Disable as no use for now
+    case Instruction::Add:
+    case Instruction::Sub:
+    case Instruction::Xor:
+    case Instruction::Or:
+    case Instruction::And:
+    case Instruction::Shl:
+    case Instruction::LShr:
+    case Instruction::AShr:
+    case Instruction::Mul: {
+      MBACandidate Cand;
+      Cand.Candidate = dyn_cast<BinaryOperator>(&*I);
+      Candidates.push_back(Cand);
+    }
+    */
     default: {
       // Skip
     }
@@ -1185,6 +1254,7 @@ LLVMParser::evaluateAST(llvm::SmallVectorImpl<BFSEntry> &AST,
   auto CI = dyn_cast<ConstantInt>(InstResult);
   if (!CI) {
     // Value might become poison so take care of this
+    InstResult->dump();
     Error = true;
     return APInt(1, 0);
   }

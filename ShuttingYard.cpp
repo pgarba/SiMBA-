@@ -145,15 +145,19 @@ void exprToTokens(const std::string &expr, veque::veque<Token> &tokens,
         break;
       case '*':
         t = Token::Type::Operator;
-        precedence = 6;
+        precedence = 7;
+        break;
+      case '>':
+        t = Token::Type::Operator;
+        precedence = 5;
         break;
       case '#':
         t = Token::Type::Operator;
-        precedence = 7;
+        precedence = 8;
         break;
       case '/':
         t = Token::Type::Operator;
-        precedence = 6;
+        precedence = 7;
         break;
       case '&':
         t = Token::Type::Operator;
@@ -169,7 +173,7 @@ void exprToTokens(const std::string &expr, veque::veque<Token> &tokens,
         break;
       case '+':
         t = Token::Type::Operator;
-        precedence = 5;
+        precedence = 6;
         break;
       case '~':
         unary = true;
@@ -180,7 +184,7 @@ void exprToTokens(const std::string &expr, veque::veque<Token> &tokens,
           precedence = tokens.back().precedence + 1;
         } else {
           // Keep default
-          precedence = 7;
+          precedence = 9;
         }
         break;
       case '!':
@@ -192,7 +196,7 @@ void exprToTokens(const std::string &expr, veque::veque<Token> &tokens,
           precedence = tokens.back().precedence + 1;
         } else {
           // Keep default
-          precedence = 7;
+          precedence = 9;
         }
         break;
       case '-':
@@ -214,12 +218,12 @@ void exprToTokens(const std::string &expr, veque::veque<Token> &tokens,
             precedence = tokens.back().precedence + 1;
           } else {
             // Keep default
-            precedence = 7;
+            precedence = 9;
           }
         } else {
           // otherwise, it's binary '-'
           t = Token::Type::Operator;
-          precedence = 5;
+          precedence = 6;
         }
         break;
       }
@@ -421,6 +425,10 @@ void createLLVMReplacement(llvm::Instruction *InsertionPoint,
           // stackAP.push_back(lhsAP * rhsAP);
           stackAP.push_back(Builder.CreateMul(lhsAP, rhsAP));
           break;
+        case '>':
+          // stackAP.push_back(lhsAP >> rhsAP);
+          stackAP.push_back(Builder.CreateAShr(lhsAP, rhsAP));
+          break;
         case '#':
           // stackAP.push_back(lhsAP ** rhsAP);
           // Call Pow intrinsics
@@ -429,8 +437,8 @@ void createLLVMReplacement(llvm::Instruction *InsertionPoint,
             auto DlhsAP = Builder.CreateUIToFP(lhsAP, DblTy);
             auto DrhsAP = Builder.CreateUIToFP(rhsAP, DblTy);
             auto Res = Builder.CreateIntrinsic(
-                llvm::Intrinsic::pow, {DblTy, DblTy}, {DlhsAP, DrhsAP});     
-            auto ResInt = Builder.CreateFPToUI(Res,lhsAP->getType());
+                llvm::Intrinsic::pow, {DblTy, DblTy}, {DlhsAP, DrhsAP});
+            auto ResInt = Builder.CreateFPToUI(Res, lhsAP->getType());
 
             stackAP.push_back(ResInt);
           }
@@ -646,8 +654,6 @@ APInt eval(std::string expr, llvm::SmallVectorImpl<APInt> &par, int BitWidth,
     } break;
 
     case Token::Type::Operator: {
-      Operations++;
-
       if (token.unary) {
         // unray operators
         const auto rhsAP = stackAP.back();
@@ -673,6 +679,8 @@ APInt eval(std::string expr, llvm::SmallVectorImpl<APInt> &par, int BitWidth,
           break;
         }
       } else {
+        Operations++;
+
         // binary operators
         const auto rhsAP = stackAP.back();
         stackAP.pop_back();
@@ -690,6 +698,9 @@ APInt eval(std::string expr, llvm::SmallVectorImpl<APInt> &par, int BitWidth,
           break;
         case '*':
           stackAP.push_back(lhsAP * rhsAP);
+          break;
+        case '>':
+          stackAP.push_back(lhsAP.lshr(rhsAP));
           break;
         case '/':
           stackAP.push_back(lhsAP.sdiv(rhsAP));
@@ -730,7 +741,7 @@ APInt eval(std::string expr, llvm::SmallVectorImpl<APInt> &par, int BitWidth,
 z3::expr getZ3ExprFromString(z3::context &Z3Ctx, std::string &expr,
                              int BitWidth, std::vector<std::string> &Variables,
                              std::map<std::string, z3::expr *> &VarMap) {
-  // replace ** with p (pow operator is supported by GAMBA)
+  // replace ** with # (pow operator is supported by GAMBA)
   replace_all(expr, "**", "#");
 
   veque::veque<Token> tokens;
@@ -811,10 +822,16 @@ z3::expr getZ3ExprFromString(z3::context &Z3Ctx, std::string &expr,
           auto MulExpr = lhsAP * rhsAP;
           stackAP.push_back(MulExpr);
         } break;
+        case '>': {
+          auto ShrExpr = z3::lshr(lhsAP, rhsAP);
+          stackAP.push_back(ShrExpr);
+        } break;
         case '#': {
           // power operator
-          auto PowExpr =  z3::pw(lhsAP, rhsAP); 
-          stackAP.push_back(PowExpr);
+          z3::sort Sort(Z3Ctx);
+          auto PowExpr =
+              z3::pw(z3::ubv_to_fpa(lhsAP, Sort), z3::ubv_to_fpa(rhsAP, Sort));
+          stackAP.push_back(z3::fpa_to_ubv(PowExpr, BitWidth));
         } break;
         case '/': {
           auto DivExpr = lhsAP / rhsAP;

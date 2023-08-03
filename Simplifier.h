@@ -17,9 +17,6 @@ namespace LSiMBA {
 
 const std::string VarAndConstsRegEx = "[0]?[a-zA-Z][a-zA-Z0-9_]*";
 
-// Some helper
-std::string strip(const std::string &inpt);
-
 class Simplifier {
 public:
   Simplifier(int bitCount, bool runParallel, const std::string &expr);
@@ -35,6 +32,9 @@ public:
 
   // Some helpers
   static std::string strip(const std::string &inpt);
+
+  static void replaceAllStrings(std::string &str, const std::string &from,
+                                const std::string &to);
 
   static std::vector<std::string> getVariables(std::string &expr);
 

@@ -131,6 +131,8 @@ class LLVMParser {
 
   bool runLLVMOptimizer(bool Initial = false);
 
+  bool rewriteIntrinsics();
+
   void extractCandidates(llvm::Function &F,
                          std::vector<MBACandidate> &Candidates);
 

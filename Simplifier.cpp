@@ -10,6 +10,7 @@
 #include "llvm/Support/Regex.h"
 #include "llvm/Support/raw_ostream.h"
 
+#include <algorithm>
 #include <array>
 #include <cctype>
 #include <cstdio>
@@ -41,6 +42,14 @@ cl::opt<std::string> PythonPath("python-path", cl::Optional,
                                 cl::desc("Path to python binary"),
                                 cl::value_desc("python-path"),
                                 cl::init("python"));
+
+cl::opt<bool> RedisCache("redis-cache", cl::Optional,
+                         cl::desc("Enable redis cache in GAMBA"),
+                         cl::value_desc("redis-cache"), cl::init(false));
+
+cl::opt<bool> EnableSHR("enable-shr", cl::Optional,
+                         cl::desc("Enable SHR in external solving"),
+                         cl::value_desc("renable-shr"), cl::init(false));
 
 static bool WarnOnce = false;
 
@@ -152,10 +161,9 @@ int exec(std::string &cmd, std::string &output) {
   if (!pipe)
     return 1;
 
-  char buffer[2048];
-
+  char buffer[10000];
   while (!feof(pipe.get())) {
-    if (fgets(buffer, 2048, pipe.get()) != NULL) {
+    if (fgets(buffer, 10000, pipe.get()) != NULL) {
 
       std::string temp = buffer;
 
@@ -165,11 +173,6 @@ int exec(std::string &cmd, std::string &output) {
         output = temp.substr(SimplifiedTo.size());
         output.erase(std::remove(output.begin(), output.end(), '\n'),
                      output.cend());
-
-        while (fgets(buffer, 2048, pipe.get()) != NULL) {
-          std::string temp = buffer;
-          output += temp;
-        }
 
         return 0;
       }
@@ -192,13 +195,18 @@ bool Simplifier::external_simplifier(
     const llvm::StringRef ExternalSimplifierPath, int BitWidth, bool Debug) {
 
   // >> is not supported
-  if (expr.find(">>") != std::string::npos) {
+  if (!EnableSHR && expr.find(">>") != std::string::npos) {
     if (Debug && !WarnOnce) {
       outs() << "[!] '>>' operator not supported!\n";
       WarnOnce = true;
     }
     return false;
   }
+
+  // Replace '>>' with '>'
+  std::string exprStr = expr.str();
+  Simplifier::replaceAllStrings(exprStr, ">>", ">");
+  expr = exprStr;
 
   // Check if file exists with llvm
   if (!sys::fs::exists(ExternalSimplifierPath)) {
@@ -212,6 +220,11 @@ bool Simplifier::external_simplifier(
 
   std::string cmd = PythonPath + " " + ExternalSimplifierPath.str() + " \"" +
                     expr.str() + "\"" + " -b " + to_string(BitWidth);
+
+  if (RedisCache) {
+    cmd += " -r";
+  }
+
   auto exitCode = exec(cmd, output);
 
   if (exitCode != 0) {
@@ -220,7 +233,7 @@ bool Simplifier::external_simplifier(
 
   // Check if output is valid
   if (output.empty()) {
-    report_fatal_error("[!] External simplifier did not return any output\n");
+    // Might be a timeout or other error
     return false;
   }
 
@@ -1192,6 +1205,15 @@ std::string Simplifier::strip(const std::string &inpt) {
   while (std::isspace(*end_it))
     ++end_it;
   return std::string(start_it, end_it.base());
+}
+
+void Simplifier::replaceAllStrings(std::string &str, const std::string &from,
+                                   const std::string &to) {
+  size_t start_pos = 0;
+  while ((start_pos = str.find(from, start_pos)) != std::string::npos) {
+    str.replace(start_pos, from.length(), to);
+    start_pos += to.length();
+  }
 }
 
 const std::vector<std::string> &Simplifier::get_bitwise_list() {
