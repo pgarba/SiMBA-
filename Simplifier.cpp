@@ -154,6 +154,10 @@ llvm::APInt Simplifier::mod_red(const llvm::APInt &n, bool Signed) {
 
 int exec(std::string &cmd, std::string &output) {
 #ifdef _WIN32
+  // if cmd to long popen will crash
+  if (cmd.size() > 62000)
+    return 1;
+
   std::shared_ptr<FILE> pipe(_popen(cmd.c_str(), "r"), _pclose);
 #else
   std::shared_ptr<FILE> pipe(popen(cmd.c_str(), "r"), pclose);
@@ -217,7 +221,6 @@ bool Simplifier::external_simplifier(
 
   // Execute external simplifier
   std::string output = "";
-
   std::string cmd = PythonPath + " " + ExternalSimplifierPath.str() + " \"" +
                     expr.str() + "\"" + " -b " + to_string(BitWidth);
 
