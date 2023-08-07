@@ -35,6 +35,7 @@ void createLLVMReplacement(llvm::Instruction *InsertionPoint,
 
 z3::expr getZ3ExprFromString(z3::context &Z3Ctx, std::string &expr,
                              int BitWidth, std::vector<std::string> &Variables,
+                             std::map<std::string, llvm::Type *> &VarTypes,
                              std::map<std::string, z3::expr *> &VarMap);
 
 #endif

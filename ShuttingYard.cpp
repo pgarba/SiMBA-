@@ -11,11 +11,11 @@
 #include <llvm/ADT/SmallVector.h>
 #include <llvm/ADT/StringRef.h>
 #include <llvm/IR/Constants.h>
+#include <llvm/IR/IRBuilder.h>
 #include <llvm/IR/Instructions.h>
 #include <llvm/IR/LLVMContext.h>
 #include <llvm/IR/Module.h>
-
-#include <llvm/IR/IRBuilder.h>
+#include <llvm/IR/Type.h>
 
 #include <z3++.h>
 
@@ -371,7 +371,15 @@ void createLLVMReplacement(llvm::Instruction *InsertionPoint,
     switch (token.type) {
     case Token::Type::Variable: {
       auto ArgIndex = token.ArgIndex;
-      stackAP.push_back(Variables[ArgIndex]);
+
+      // Cast variable if needed
+      auto Var = Variables[ArgIndex];
+      if (Var->getType() != IntType) {
+        Var = Builder.CreateIntCast(Variables[ArgIndex], IntType, false,
+                                    "CastedVar");
+      }
+
+      stackAP.push_back(Var);
     } break;
     case Token::Type::Number: {
       APInt APV(IntType->getIntegerBitWidth(), token.str, 10);
@@ -740,6 +748,7 @@ APInt eval(std::string expr, llvm::SmallVectorImpl<APInt> &par, int BitWidth,
 
 z3::expr getZ3ExprFromString(z3::context &Z3Ctx, std::string &expr,
                              int BitWidth, std::vector<std::string> &Variables,
+                             std::map<std::string, llvm::Type *> &VarTypes,
                              std::map<std::string, z3::expr *> &VarMap) {
   // replace ** with # (pow operator is supported by GAMBA)
   replace_all(expr, "**", "#");
@@ -751,9 +760,14 @@ z3::expr getZ3ExprFromString(z3::context &Z3Ctx, std::string &expr,
   shuntingYard(tokens, queue);
 
   // Create Variables
+  std::map<z3::expr *, llvm::Type *> TyMap;
   for (auto &Var : Variables) {
-    if (VarMap.find(Var) != VarMap.end())
+    if (VarMap.find(Var) != VarMap.end()) {
+      // Get Type
+      auto VarTy = VarTypes[Var];
+      TyMap[VarMap[Var]] = VarTy;
       continue;
+    }
 
     auto expr = Z3Ctx.bv_const(Var.c_str(), BitWidth);
     VarMap[Var] = new z3::expr(expr);
@@ -762,8 +776,10 @@ z3::expr getZ3ExprFromString(z3::context &Z3Ctx, std::string &expr,
   SmallVector<z3::expr, 32> stackAP;
 
   while (!queue.empty()) {
+
     const auto token = queue.front();
     queue.pop_front();
+
     switch (token.type) {
     case Token::Type::Variable: {
       auto c = token.str.c_str();
@@ -797,17 +813,30 @@ z3::expr getZ3ExprFromString(z3::context &Z3Ctx, std::string &expr,
         } break;
         case '!':
           // stackAP.push_back(rhsAP);
-          printf("! operator not implemented\n");
+          printf("[getZ3ExprFromString] '!' operator not implemented\n");
           exit(-1);
           break;
         }
       } else {
         // binary operators
-        const auto rhsAP = stackAP.back();
+        auto rhsAP = stackAP.back();
         stackAP.pop_back();
 
-        const auto lhsAP = stackAP.back();
+        auto lhsAP = stackAP.back();
         stackAP.pop_back();
+
+        // Align bitwidth
+        int lhsBitWidth = lhsAP.get_sort().bv_size();
+        int rhsBitWidth = rhsAP.get_sort().bv_size();
+        if (lhsBitWidth != rhsBitWidth) {
+          if (lhsBitWidth > rhsBitWidth) {
+            auto Sort = rhsAP.get_sort();
+            rhsAP = z3::zext(rhsAP, lhsBitWidth - rhsBitWidth);
+          } else if (lhsBitWidth < rhsBitWidth) {
+            auto Sort = lhsAP.get_sort();
+            lhsAP = z3::zext(lhsAP, rhsBitWidth - lhsBitWidth);
+          }
+        }
 
         switch (token.str[0]) {
         default: {
@@ -863,5 +892,16 @@ z3::expr getZ3ExprFromString(z3::context &Z3Ctx, std::string &expr,
     }
   }
 
-  return stackAP.back();
+  // Aling bitwidth
+  auto &ModV = stackAP.back();
+  int ModBitWidth = ModV.get_sort().bv_size();
+  if (ModBitWidth > BitWidth) {
+    auto Sort = ModV.get_sort();
+    ModV = ModV.extract(BitWidth - 1, 0);
+  } else if (ModBitWidth < BitWidth) {
+    auto Sort = ModV.get_sort();
+    ModV = z3::zext(ModV, BitWidth - ModBitWidth);
+  }
+
+  return ModV;
 }

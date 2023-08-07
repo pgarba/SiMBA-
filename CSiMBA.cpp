@@ -7,6 +7,7 @@
 #include "llvm/IR/Module.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/FileSystem.h"
+#include "llvm/Support/Format.h"
 #include "llvm/Support/InitLLVM.h"
 
 #include "CSiMBA.h"
@@ -300,10 +301,9 @@ void SimplifyLLVMModule() {
   outs() << "[+] MBAs found and replaced: '" << MBACount
          << "' time: " << (int)duration.count() << "ms\n";
 
-  outs() << "[+] Instruction count before: '"
-         << Parser.getInstructionCountBefore()
-         << "' after: " << Parser.getInstructionCountAfter() << " (+-"
-         << int(Parser.getInstructionCountAfter() / 100. *
+  outs() << "[+] : '" << Parser.getInstructionCountBefore()
+         << "' after: " << Parser.getInstructionCountAfter() << " (-"
+         << int(Parser.getInstructionCountAfter() * 100. /
                 Parser.getInstructionCountBefore())
          << "%)\n";
 }

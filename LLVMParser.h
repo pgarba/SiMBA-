@@ -7,6 +7,7 @@
 #ifndef LLVMPARSER_H
 #define LLVMPARSER_H
 
+#include <map>
 #include <unordered_set>
 
 #include <llvm/IR/Instructions.h>
@@ -24,7 +25,7 @@ class Evaluator;
 class TargetLibraryInfoImpl;
 class TargetLibraryInfo;
 class Type;
-}  // namespace llvm
+} // namespace llvm
 
 namespace LSiMBA {
 
@@ -36,7 +37,7 @@ typedef struct BFSEntry {
 } BFSEntry;
 
 typedef struct MBACandidate {
-  llvm::BinaryOperator *Candidate;
+  llvm::Instruction *Candidate;
 
   llvm::SmallVector<BFSEntry, 16> AST;
 
@@ -48,7 +49,7 @@ typedef struct MBACandidate {
 } MBACandidate;
 
 class LLVMParser {
- public:
+public:
   LLVMParser(const std::string &filename, const std::string &OutputFile,
              bool Parallel = true, bool Verify = true,
              bool OptimizeBefore = true, bool OptimizeAfter = true,
@@ -76,12 +77,11 @@ class LLVMParser {
 
   static llvm::LLVMContext &getLLVMContext();
 
-
   int getInstructionCountBefore();
-  
+
   int getInstructionCountAfter();
 
- private:
+private:
   std::string OutputFile = "";
 
   bool Parallel;
@@ -142,6 +142,8 @@ class LLVMParser {
 
   bool rewriteIntrinsics();
 
+  bool isSupportedInstruction(llvm::Value *V);
+
   void extractCandidates(llvm::Function &F,
                          std::vector<MBACandidate> &Candidates);
 
@@ -169,11 +171,11 @@ class LLVMParser {
                           llvm::SmallVectorImpl<llvm::Value *> &Variables,
                           llvm::SmallVectorImpl<llvm::APInt> &Par, bool &Error);
 
-  llvm::Constant *getVal(
-      llvm::Value *V,
-      llvm::DenseMap<llvm::Value *, llvm::Constant *> &ValueStack,
-      llvm::SmallVectorImpl<llvm::Value *> &Variables,
-      llvm::SmallVectorImpl<llvm::APInt> &Par);
+  llvm::Constant *
+  getVal(llvm::Value *V,
+         llvm::DenseMap<llvm::Value *, llvm::Constant *> &ValueStack,
+         llvm::SmallVectorImpl<llvm::Value *> &Variables,
+         llvm::SmallVectorImpl<llvm::APInt> &Par);
 
   bool doesDominateInst(llvm::DominatorTree *DT, const llvm::Instruction *InstA,
                         const llvm::Instruction *InstB);
@@ -181,15 +183,17 @@ class LLVMParser {
   z3::expr getZ3ExpressionFromAST(
       z3::context &Z3Ctx, llvm::SmallVectorImpl<BFSEntry> &AST,
       llvm::SmallVectorImpl<llvm::Value *> &Variables,
-      int OverrideBitWidth = 0);
+      std::map<std::string, z3::expr *> &VarMap, int OverrideBitWidth = 0);
 
   z3::expr *getZ3Val(z3::context &Z3Ctx, llvm::Value *V,
                      llvm::DenseMap<llvm::Value *, z3::expr *> &ValueMap,
                      int OverrideBitWidth = 0);
 
+  uint64_t getMASK(llvm::Type *Ty);
+
   static int getInstructionCount(llvm::Module *M);
 };
 
-}  // namespace LSiMBA
+} // namespace LSiMBA
 
-#endif  // LLVMPARSER_H
+#endif // LLVMPARSER_H

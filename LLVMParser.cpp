@@ -6,9 +6,11 @@
 #include "llvm/IR/Dominators.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/InstIterator.h"
+#include "llvm/IR/Instruction.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/LegacyPassManager.h"
 #include "llvm/IRReader/IRReader.h"
+#include "llvm/Support/Casting.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/FileSystem.h"
@@ -21,9 +23,11 @@
 
 #include <memory>
 #include <mutex>
+#include <string>
 #include <thread>
 #include <unordered_map>
 #include <unordered_set>
+#include <z3++.h>
 
 #include "CSiMBA.h"
 #include "Modulo.h"
@@ -525,6 +529,9 @@ bool LLVMParser::verify(llvm::SmallVectorImpl<BFSEntry> &AST,
     */
 
     if (AP_R0.getSExtValue() != AP_R1.getSExtValue()) {
+#ifdef DEBUG_SIMPLIFICATION
+      outs() << "[!] Error: Verification failed for: " << SimpExpr << "\n";
+#endif
       return false;
     }
 
@@ -533,6 +540,10 @@ bool LLVMParser::verify(llvm::SmallVectorImpl<BFSEntry> &AST,
 
   // Check if replacement is cheaper than original expression
   if (AST.size() <= Operations) {
+#ifdef DEBUG_SIMPLIFICATION
+    outs() << "[!] Simpl is no improvement! (" << AST.size()
+           << " <= " << Operations << ")\n";
+#endif
     return false;
   }
 
@@ -542,34 +553,46 @@ bool LLVMParser::verify(llvm::SmallVectorImpl<BFSEntry> &AST,
 
     // Build Variable replacements
     std::vector<std::string> Vars;
+    std::map<std::string, llvm::Type *> VarTypes;
     for (int i = 0; i < Variables.size(); i++) {
       char c = 'a' + i;
       string strC = string(1, c);
       Vars.push_back(strC);
+
+      VarTypes[strC] = Variables[i]->getType();
     }
 
     if (this->Debug) {
-      outs() << "[Z3] Proving with " << BitWidth << "Bits ...\n";
+      outs() << "[Z3] Proving ...\n";
     }
 
     // Get Z3 expressions
-    auto Z3Exp0 = getZ3ExpressionFromAST(Z3Ctx, AST, Variables, BitWidth);
-
     std::map<std::string, z3::expr *> VarMap;
-    auto Z3Exp1 = getZ3ExprFromString(Z3Ctx, SimpExpr, BitWidth, Vars, VarMap);
+    auto Z3Exp0 =
+        getZ3ExpressionFromAST(Z3Ctx, AST, Variables, VarMap, BitWidth);
+
+    // Ensure BitWidth matches
+    if (Z3Exp0.get_sort().bv_size() != BitWidth) {
+      report_fatal_error("[!] Error: Z3Exp0 BitWidth does not match!");
+    }
+
+    auto Z3Exp1 =
+        getZ3ExprFromString(Z3Ctx, SimpExpr, BitWidth, Vars, VarTypes, VarMap);
+
+    if (Z3Exp1.get_sort().bv_size() != BitWidth) {
+      report_fatal_error("[!] Error: Z3Exp1 BitWidth does not match!");
+    }
 
     // Prove expressions
     auto start = high_resolution_clock::now();
-
     auto Result = prove(((Z3Exp0 == Z3Exp1)));
-
     auto stop = high_resolution_clock::now();
 
     if (this->Debug) {
       auto duration = duration_cast<milliseconds>(stop - start);
 
       outs() << "[Z3] Proved in " << duration.count()
-             << " ms Result (1:valid): " << Result << "\n";
+             << " ms Result (1 == valid): " << Result << "\n";
     }
 
     return Result;
@@ -618,6 +641,8 @@ bool LLVMParser::rewriteIntrinsics() {
   bool Changes = false;
 
   std::map<std::string, std::function<bool()>> Transformations;
+
+  // Todo: %39 = tail call i64 @llvm.bswap.i64(i64 %38)
 
   // Transform llvm.fshl.i64 to rotate left code (if possible)
   Transformations.emplace("llvm.fshl.i64", [&]() -> bool {
@@ -676,6 +701,31 @@ bool LLVMParser::rewriteIntrinsics() {
   return Changes;
 }
 
+bool LLVMParser::isSupportedInstruction(llvm::Value *V) {
+  // We dont support AShr as GAMBA does not support it, for now
+  if (auto BO = dyn_cast<BinaryOperator>(V)) {
+    if (BO->getOpcode() == Instruction::AShr) {
+      return false;
+    }
+
+    return ConstantExpr::isSupportedBinOp(BO->getOpcode());
+  }
+
+  if (isa<TruncInst>(V)) {
+    return true;
+  }
+
+  if (isa<ZExtInst>(V)) {
+    return true;
+  }
+
+  if (isa<SExtInst>(V)) {
+    return true;
+  }
+
+  return false;
+}
+
 void LLVMParser::extractCandidates(llvm::Function &F,
                                    std::vector<MBACandidate> &Candidates) {
   // Instruction to look for 'store', 'select', 'gep', 'icmp', 'ret'
@@ -685,35 +735,30 @@ void LLVMParser::extractCandidates(llvm::Function &F,
       // Check Candidate
       auto SI = dyn_cast<StoreInst>(&*I);
       auto Op = SI->getValueOperand();
-      auto BinOp = dyn_cast<BinaryOperator>(Op);
-      // Only work on supported operands
-      if (BinOp && ConstantExpr::isSupportedBinOp(BinOp->getOpcode())) {
+      if (isSupportedInstruction(Op)) {
         MBACandidate Cand;
-        Cand.Candidate = BinOp;
+        Cand.Candidate = dyn_cast<Instruction>(Op);
         Candidates.push_back(Cand);
       }
     } break;
     case Instruction::Call: {
       auto CI = dyn_cast<CallInst>(&*I);
       for (unsigned int i = 0; i < CI->arg_size(); i++) {
-        auto BinOp =
-            dyn_cast<BinaryOperator>(CI->getArgOperand(i)->stripPointerCasts());
-        if (BinOp) {
+        if (isSupportedInstruction(CI->getArgOperand(i)->stripPointerCasts())) {
           MBACandidate Cand;
-          Cand.Candidate = BinOp;
+          Cand.Candidate =
+              dyn_cast<Instruction>(CI->getArgOperand(i)->stripPointerCasts());
           Candidates.push_back(Cand);
         }
       }
     } break;
-    case Instruction::Trunc:
     case Instruction::ICmp:
     case Instruction::Select: {
       for (unsigned int i = 0; i < I->getNumOperands(); i++) {
-        auto BinOp =
-            dyn_cast<BinaryOperator>(I->getOperand(i)->stripPointerCasts());
-        if (BinOp) {
+        if (isSupportedInstruction(I->getOperand(i)->stripPointerCasts())) {
           MBACandidate Cand;
-          Cand.Candidate = BinOp;
+          Cand.Candidate =
+              dyn_cast<Instruction>(I->getOperand(i)->stripPointerCasts());
           Candidates.push_back(Cand);
         }
       }
@@ -721,10 +766,10 @@ void LLVMParser::extractCandidates(llvm::Function &F,
     case Instruction::GetElementPtr: {
       auto GEP = dyn_cast<GetElementPtrInst>(&*I);
       auto Index = GEP->getOperand(GEP->getNumOperands() - 1);
-      auto BinOp = dyn_cast<BinaryOperator>(Index->stripPointerCasts());
-      if (BinOp) {
+
+      if (isSupportedInstruction(Index->stripPointerCasts())) {
         MBACandidate Cand;
-        Cand.Candidate = BinOp;
+        Cand.Candidate = dyn_cast<Instruction>(Index->stripPointerCasts());
         Candidates.push_back(Cand);
       }
     } break;
@@ -733,21 +778,19 @@ void LLVMParser::extractCandidates(llvm::Function &F,
       if (!RI->getReturnValue())
         continue;
 
-      auto BinOp =
-          dyn_cast<BinaryOperator>(RI->getReturnValue()->stripPointerCasts());
-      if (BinOp) {
+      if (isSupportedInstruction(RI->getReturnValue()->stripPointerCasts())) {
         MBACandidate Cand;
-        Cand.Candidate = BinOp;
+        Cand.Candidate =
+            dyn_cast<Instruction>(RI->getReturnValue()->stripPointerCasts());
         Candidates.push_back(Cand);
       }
     } break;
     case Instruction::PHI: {
       auto Phi = dyn_cast<PHINode>(&*I);
       for (auto &Inc : Phi->incoming_values()) {
-        auto BinOp = dyn_cast<BinaryOperator>(Inc->stripPointerCasts());
-        if (BinOp) {
+        if (isSupportedInstruction(Inc->stripPointerCasts())) {
           MBACandidate Cand;
-          Cand.Candidate = BinOp;
+          Cand.Candidate = dyn_cast<Instruction>(Inc->stripPointerCasts());
           Candidates.push_back(Cand);
         }
       }
@@ -793,7 +836,8 @@ bool LLVMParser::findReplacements(llvm::DominatorTree *DT,
     auto &Cand = Candidates[i];
     getAST(DT, Cand.Candidate, Cand.AST, Cand.Variables, true);
 
-    if (Cand.AST.size() < 3) {
+    int s = Cand.AST.size();
+    if (Cand.AST.size() < 2) {
       continue;
     }
 
@@ -843,7 +887,7 @@ bool LLVMParser::findReplacements(llvm::DominatorTree *DT,
       if (this->Debug) {
         outs() << "[*] Using external simplifier\n";
         outs() << "[*] External simplified expression (BitWidth: " << BitWidth
-                 << ") from '" << Expr << "'\n";
+               << ") from '" << Expr << "'\n";
       }
 
       auto R = S.external_simplifier(Expr, Cand.Replacement, false, false, Path,
@@ -852,7 +896,7 @@ bool LLVMParser::findReplacements(llvm::DominatorTree *DT,
         if (this->Debug) {
           outs() << "[*] to '" << Cand.Replacement << "'\n";
         }
-      } else {        
+      } else {
         // Skip verify and walk sub ast
         Cand.isValid = false;
         SkipVerify = true;
@@ -866,8 +910,9 @@ bool LLVMParser::findReplacements(llvm::DominatorTree *DT,
     }
 
     // Verify is replacement is valid
-    if (!SkipVerify)
+    if (!SkipVerify) {
       Cand.isValid = this->verify(Cand.AST, Cand.Replacement, Cand.Variables);
+    }
 
     if (Cand.isValid == false) {
       // Could not simplify the whole AST so walk through SubASTs
@@ -943,6 +988,13 @@ bool LLVMParser::walkSubAST(llvm::DominatorTree *DT,
       if (!UseExternalSimplifier.empty()) {
         std::string &Path = UseExternalSimplifier;
         auto Expr = getASTAsString(C.AST, C.Variables);
+
+        if (this->Debug) {
+          outs() << "[*] Using external simplifier\n";
+          outs() << "[*] External simplified expression (BitWidth: " << BitWidth
+                 << ") from '" << Expr << "'\n";
+        }
+
         auto R = S.external_simplifier(Expr, C.Replacement, false, false, Path,
                                        BitWidth, this->Debug);
         if (R == false) {
@@ -968,6 +1020,9 @@ bool LLVMParser::walkSubAST(llvm::DominatorTree *DT,
         Candidates.push_back(C);
 
         Valid = true;
+
+        // Stop here
+        return Valid;
       }
     }
   }
@@ -1039,98 +1094,148 @@ LLVMParser::getASTAsString(llvm::SmallVectorImpl<BFSEntry> &AST,
   for (auto E = AST.rbegin(); E != AST.rend(); ++E) {
     auto &e = *E;
 
-    auto BinOp = dyn_cast<BinaryOperator>(e.I);
-    if (!BinOp) {
-      report_fatal_error("AST contains non binary operator!");
-    }
-
     std::string Expr = "(";
 
-    switch (BinOp->getNumOperands()) {
-    // Add later
-    case 1:
+    auto CurInst = dyn_cast<Instruction>(e.I);
+
+    if (auto BinOp = dyn_cast<BinaryOperator>(e.I)) {
+
+      switch (BinOp->getNumOperands()) {
       // Add later
-      break;
-    case 2:
-      if (auto C = dyn_cast<ConstantInt>(BinOp->getOperand(0))) {
-        SmallString<16> StrC;
-        C->getValue().toString(StrC, 10, true);
-        Expr += StrC;
-      } else {
-        Expr += VariableMap[BinOp->getOperand(0)];
+      case 1:
+        // Add later
+        report_fatal_error("Unsupported number of operands!");
+        break;
+      case 2:
+        if (auto C = dyn_cast<ConstantInt>(BinOp->getOperand(0))) {
+          SmallString<16> StrC;
+          C->getValue().toString(StrC, 10, true);
+          Expr += StrC;
+        } else {
+          Expr += VariableMap[BinOp->getOperand(0)];
+        }
+        break;
+      default:
+        e.I->dump();
+        report_fatal_error("Unsupported number of operands!");
       }
-      break;
-    default:
-      e.I->dump();
-      report_fatal_error("Unsupported number of operands!");
-    }
 
-    switch (BinOp->getOpcode()) {
-    case Instruction::Add:
-      Expr += " + ";
-      break;
-    case Instruction::Sub:
-      Expr += " - ";
-      break;
-    case Instruction::Mul:
-      Expr += " * ";
-      break;
-    case Instruction::UDiv:
-      Expr += " / ";
-      break;
-    case Instruction::SDiv:
-      Expr += " / ";
-      break;
-    case Instruction::URem:
-      Expr += " % ";
-      break;
-    case Instruction::SRem:
-      Expr += " % ";
-      break;
-    case Instruction::Shl:
-      Expr += " << ";
-      break;
-    case Instruction::LShr:
-      Expr += " >> ";
-      break;
-    case Instruction::Xor:
-      Expr += " ^ ";
-      break;
-    case Instruction::And:
-      Expr += " & ";
-      break;
-    case Instruction::Or:
-      Expr += " | ";
-      break;
-    default:
-      e.I->dump();
-      report_fatal_error("Unsupported binary operator!");
-    }
+      switch (BinOp->getOpcode()) {
+      case Instruction::Add:
+        Expr += " + ";
+        break;
+      case Instruction::Sub:
+        Expr += " - ";
+        break;
+      case Instruction::Mul:
+        Expr += " * ";
+        break;
+      case Instruction::UDiv:
+        Expr += " / ";
+        break;
+      case Instruction::SDiv:
+        Expr += " / ";
+        break;
+      case Instruction::URem:
+        Expr += " % ";
+        break;
+      case Instruction::SRem:
+        Expr += " % ";
+        break;
+      case Instruction::Shl:
+        Expr += " << ";
+        break;
+      case Instruction::LShr:
+        Expr += " >> ";
+        break;
+      case Instruction::AShr:
+        // Should work in python...
+        Expr += " >> ";
+        break;
+      case Instruction::Xor:
+        Expr += " ^ ";
+        break;
+      case Instruction::And:
+        Expr += " & ";
+        break;
+      case Instruction::Or:
+        Expr += " | ";
+        break;
+      default:
+        e.I->dump();
+        report_fatal_error("[getASTAsString] Unsupported binary operator!");
+      }
 
-    switch (BinOp->getNumOperands()) {
-    // Add later
-    case 1:
-      // Print operand
-      if (auto C = dyn_cast<ConstantInt>(BinOp->getOperand(0))) {
-        SmallString<16> StrC;
-        C->getValue().toString(StrC, 10, true);
-        Expr += StrC;
-      } else {
-        Expr += VariableMap[BinOp->getOperand(0)];
+      switch (CurInst->getNumOperands()) {
+      case 1:
+        // Print operand
+        if (auto C = dyn_cast<ConstantInt>(CurInst->getOperand(0))) {
+          SmallString<16> StrC;
+          C->getValue().toString(StrC, 10, true);
+          Expr += StrC;
+        } else {
+          Expr += VariableMap[CurInst->getOperand(0)];
+        }
+        break;
+      case 2:
+        if (auto C = dyn_cast<ConstantInt>(CurInst->getOperand(1))) {
+          SmallString<16> StrC;
+          C->getValue().toString(StrC, 10, true);
+          Expr += StrC;
+        } else {
+          Expr += VariableMap[CurInst->getOperand(1)];
+        }
+        break;
+      default:
+        e.I->dump();
+        report_fatal_error("Unsupported number of operands!");
       }
-      break;
-    case 2:
-      if (auto C = dyn_cast<ConstantInt>(BinOp->getOperand(1))) {
-        SmallString<16> StrC;
-        C->getValue().toString(StrC, 10, true);
-        Expr += StrC;
-      } else {
-        Expr += VariableMap[BinOp->getOperand(1)];
+    } else if (auto Trunc = dyn_cast<TruncInst>(CurInst)) {
+      Expr += " (";
+      Expr += VariableMap[Trunc->getOperand(0)];
+      Expr += " & " + to_string(getMASK(Trunc->getDestTy())) + ")";
+    } else if (auto ZExt = dyn_cast<ZExtInst>(CurInst)) {
+      auto Op0 = ZExt->getOperand(0);
+
+      // Expr += " (";
+      Expr += VariableMap[Op0];
+      // Expr += " & " + to_string(getMASK(ZExt->getSrcTy())) + ")";
+    } else if (auto SExt = dyn_cast<SExtInst>(CurInst)) {
+      auto Op0 = SExt->getOperand(0);
+
+      Expr += " (";
+      Expr += VariableMap[Op0];
+
+      // 8bit: (x & 0x7f) - (x & 0x80)
+      // 16bit: (x & 0x7fff) - (x & 0x8000)
+      // 32bit: (x & 0x7fffffff) - (x & 0x80000000)
+      // 64bit: (x & 0x7fffffffffffffff) - (x & 0x8000000000000000)
+      switch (SExt->getSrcTy()->getIntegerBitWidth()) {
+      case 8:
+        Expr += " & 0x7f) - (";
+        Expr += VariableMap[Op0];
+        Expr += " & 0x80)";
+        break;
+      case 16:
+        Expr += " & 0x7fff) - (";
+        Expr += VariableMap[Op0];
+        Expr += " & 0x8000)";
+        break;
+      case 32:
+        Expr += " & 0x7fffffff) - (";
+        Expr += VariableMap[Op0];
+        Expr += " & 0x80000000)";
+        break;
+      case 64:
+        Expr += " & 0x7fffffffffffffff) - (";
+        Expr += VariableMap[Op0];
+        Expr += " & 0x8000000000000000)";
+        break;
+      default:
+        report_fatal_error("Unsupported bit width!");
       }
-      break;
-    default:
-      e.I->dump();
-      report_fatal_error("Unsupported number of operands!");
+    } else {
+      report_fatal_error("Unsupported instruction!");
     }
 
     Expr += ") ";
@@ -1142,19 +1247,29 @@ LLVMParser::getASTAsString(llvm::SmallVectorImpl<BFSEntry> &AST,
   return ExprStack.top();
 }
 
+uint64_t LLVMParser::getMASK(llvm::Type *Ty) {
+  uint64_t Mask = 0;
+
+  if (Ty->isIntegerTy()) {
+    Mask = ((uint64_t)1 << Ty->getIntegerBitWidth()) - 1;
+  } else if (Ty->isVectorTy()) {
+    auto *VTy = cast<VectorType>(Ty);
+    Mask = (1 << VTy->getElementType()->getIntegerBitWidth()) - 1;
+  } else {
+    report_fatal_error("Unsupported type!");
+  }
+
+  return Mask;
+}
+
 void LLVMParser::getAST(llvm::DominatorTree *DT, llvm::Instruction *I,
                         llvm::SmallVectorImpl<BFSEntry> &AST,
                         llvm::SmallVectorImpl<llvm::Value *> &Variables,
                         bool KeepRoot) {
-  // Check if RootInst is BinOp
-  auto BinOp = dyn_cast<BinaryOperator>(I);
-  if (!BinOp) {
+  // Only work on supported operands
+  if (isSupportedInstruction(I) == false) {
     return;
   }
-
-  // Only work on supported operands
-  if (ConstantExpr::isSupportedBinOp(BinOp->getOpcode()) == false)
-    return;
 
   // Walk the AST in BFS
   std::deque<llvm::Value *> Q;
@@ -1197,9 +1312,9 @@ void LLVMParser::getAST(llvm::DominatorTree *DT, llvm::Instruction *I,
 
       if (auto OpIns = dyn_cast<Instruction>(O->stripPointerCasts())) {
         if (Dis.find(OpIns) == Dis.end()) {
-          // Check if binary operator
-          auto BinOp = dyn_cast<BinaryOperator>(OpIns);
-          if (!BinOp) {
+
+          // Check if supported
+          if (!isSupportedInstruction(OpIns)) {
             // Use as variable
             Vars.insert(OpIns);
             continue;
@@ -1245,20 +1360,37 @@ LLVMParser::evaluateAST(llvm::SmallVectorImpl<BFSEntry> &AST,
   for (auto E = AST.rbegin(); E != AST.rend(); ++E) {
     auto CurInst = E->I;
 
-    auto BO = dyn_cast<BinaryOperator>(CurInst);
-    if (!BO)
-      report_fatal_error("[!] Not an binary operator!", false);
+    if (auto BO = dyn_cast<BinaryOperator>(CurInst)) {
+      if (ConstantExpr::isSupportedBinOp(BO->getOpcode()) == false) {
+        CurInst->dump();
+        report_fatal_error("[!] Not supported binary operator!", false);
+        Error = true;
+        return APInt(1, 0);
+      }
 
-    if (ConstantExpr::isSupportedBinOp(BO->getOpcode()) == false) {
-      Error = true;
-      return APInt(1, 0);
+      InstResult = ConstantExpr::get(
+          BO->getOpcode(),
+          getVal(BO->getOperand(0), ValueStack, Variables, Par),
+          getVal(BO->getOperand(1), ValueStack, Variables, Par));
+    } else if (auto Trunc = dyn_cast<TruncInst>(CurInst)) {
+      // %27 = trunc i64 %26 to i32
+      InstResult = ConstantExpr::getTrunc(
+          getVal(Trunc->getOperand(0), ValueStack, Variables, Par),
+          Trunc->getType());
+    } else if (auto ZExt = dyn_cast<ZExtInst>(CurInst)) {
+      InstResult = ConstantExpr::getZExt(
+          getVal(ZExt->getOperand(0), ValueStack, Variables, Par),
+          ZExt->getType());
+    } else if (auto SExt = dyn_cast<SExtInst>(CurInst)) {
+      InstResult = ConstantExpr::getSExt(
+          getVal(SExt->getOperand(0), ValueStack, Variables, Par),
+          SExt->getType());
+    } else {
+      CurInst->dump();
+      report_fatal_error("[!] Not supported instruction!", false);
     }
 
-    InstResult = ConstantExpr::get(
-        BO->getOpcode(), getVal(BO->getOperand(0), ValueStack, Variables, Par),
-        getVal(BO->getOperand(1), ValueStack, Variables, Par));
-
-    ValueStack[BO] = InstResult;
+    ValueStack[CurInst] = InstResult;
   }
 
   auto CI = dyn_cast<ConstantInt>(InstResult);
@@ -1288,7 +1420,16 @@ LLVMParser::getVal(llvm::Value *V,
       continue;
     }
 
-    return llvm::ConstantInt::get(V->getType(), Par[i]);
+    // Check if Type is different
+    if (Par[i].getBitWidth() > V->getType()->getIntegerBitWidth()) {
+      return llvm::ConstantInt::get(
+          V->getType(), Par[i].trunc(V->getType()->getIntegerBitWidth()));
+    } else if (Par[i].getBitWidth() < V->getType()->getIntegerBitWidth()) {
+      return llvm::ConstantInt::get(
+          V->getType(), Par[i].zext(V->getType()->getIntegerBitWidth()));
+    } else {
+      return llvm::ConstantInt::get(V->getType(), Par[i]);
+    }
   }
 
   if (ValueStack.count(V) == 0) {
@@ -1312,7 +1453,8 @@ bool LLVMParser::doesDominateInst(DominatorTree *DT, const Instruction *InstA,
 
 z3::expr LLVMParser::getZ3ExpressionFromAST(
     z3::context &Z3Ctx, llvm::SmallVectorImpl<BFSEntry> &AST,
-    llvm::SmallVectorImpl<llvm::Value *> &Variables, int OverrideBitWidth) {
+    llvm::SmallVectorImpl<llvm::Value *> &Variables,
+    std::map<std::string, z3::expr *> &VarMap, int OverrideBitWidth) {
   llvm::DenseMap<llvm::Value *, z3::expr *> ValueMAP;
 
   // Create Variables
@@ -1320,16 +1462,12 @@ z3::expr LLVMParser::getZ3ExpressionFromAST(
   for (auto V : Variables) {
     string VarStr = string(1, Var);
 
-    int BitWidth = 0;
-    if (OverrideBitWidth) {
-      BitWidth = OverrideBitWidth;
-    } else {
-      BitWidth = V->getType()->getIntegerBitWidth();
-    }
-
-    auto VExpr = Z3Ctx.bv_const(VarStr.c_str(), BitWidth);
+    auto VExpr =
+        Z3Ctx.bv_const(VarStr.c_str(), V->getType()->getIntegerBitWidth());
 
     ValueMAP[V] = new z3::expr(VExpr);
+
+    VarMap[VarStr] = ValueMAP[V];
 
     Var++;
   }
@@ -1339,84 +1477,122 @@ z3::expr LLVMParser::getZ3ExpressionFromAST(
   for (auto E = AST.rbegin(); E != AST.rend(); ++E) {
     auto CurInst = E->I;
 
+    // Take the real bitwidth
+    // Remove this and parameter
+    OverrideBitWidth = CurInst->getType()->getIntegerBitWidth();
+
     auto BO = dyn_cast<BinaryOperator>(CurInst);
-    if (!BO)
-      report_fatal_error("[!] Not an binary operator!", false);
+    if (BO) {
+      switch (BO->getOpcode()) {
+      case Instruction::BinaryOps::Add: {
+        auto exp =
+            *getZ3Val(Z3Ctx, BO->getOperand(0), ValueMAP, OverrideBitWidth) +
+            *getZ3Val(Z3Ctx, BO->getOperand(1), ValueMAP, OverrideBitWidth);
+        ValueMAP[BO] = new z3::expr(exp);
+      } break;
+      case Instruction::BinaryOps::Sub: {
+        auto exp =
+            *getZ3Val(Z3Ctx, BO->getOperand(0), ValueMAP, OverrideBitWidth) -
+            *getZ3Val(Z3Ctx, BO->getOperand(1), ValueMAP, OverrideBitWidth);
+        ValueMAP[BO] = new z3::expr(exp);
+      } break;
+      case Instruction::BinaryOps::Mul: {
+        auto exp =
+            *getZ3Val(Z3Ctx, BO->getOperand(0), ValueMAP, OverrideBitWidth) *
+            *getZ3Val(Z3Ctx, BO->getOperand(1), ValueMAP, OverrideBitWidth);
+        ValueMAP[BO] = new z3::expr(exp);
+      } break;
+      case Instruction::BinaryOps::SDiv: {
+        auto exp =
+            *getZ3Val(Z3Ctx, BO->getOperand(0), ValueMAP, OverrideBitWidth) /
+            *getZ3Val(Z3Ctx, BO->getOperand(1), ValueMAP, OverrideBitWidth);
+        ValueMAP[BO] = new z3::expr(exp);
+      } break;
+      case Instruction::BinaryOps::Xor: {
+        auto exp =
+            *getZ3Val(Z3Ctx, BO->getOperand(0), ValueMAP, OverrideBitWidth) ^
+            *getZ3Val(Z3Ctx, BO->getOperand(1), ValueMAP, OverrideBitWidth);
+        ValueMAP[BO] = new z3::expr(exp);
+      } break;
+      case Instruction::BinaryOps::And: {
+        auto exp =
+            *getZ3Val(Z3Ctx, BO->getOperand(0), ValueMAP, OverrideBitWidth) &
+            *getZ3Val(Z3Ctx, BO->getOperand(1), ValueMAP, OverrideBitWidth);
+        ValueMAP[BO] = new z3::expr(exp);
+      } break;
+      case Instruction::BinaryOps::Or: {
+        auto exp =
+            *getZ3Val(Z3Ctx, BO->getOperand(0), ValueMAP, OverrideBitWidth) |
+            *getZ3Val(Z3Ctx, BO->getOperand(1), ValueMAP, OverrideBitWidth);
+        ValueMAP[BO] = new z3::expr(exp);
+      } break;
+      case Instruction::BinaryOps::Shl: {
+        auto exp = z3::shl(
+            *getZ3Val(Z3Ctx, BO->getOperand(0), ValueMAP, OverrideBitWidth),
+            *getZ3Val(Z3Ctx, BO->getOperand(1), ValueMAP, OverrideBitWidth));
+        ValueMAP[BO] = new z3::expr(exp);
+      } break;
+      case Instruction::BinaryOps::LShr: {
+        auto exp = z3::lshr(
+            *getZ3Val(Z3Ctx, BO->getOperand(0), ValueMAP, OverrideBitWidth),
+            *getZ3Val(Z3Ctx, BO->getOperand(1), ValueMAP, OverrideBitWidth));
+        ValueMAP[BO] = new z3::expr(exp);
+      } break;
+      case Instruction::BinaryOps::AShr: {
+        auto exp = z3::ashr(
+            *getZ3Val(Z3Ctx, BO->getOperand(0), ValueMAP, OverrideBitWidth),
+            *getZ3Val(Z3Ctx, BO->getOperand(1), ValueMAP, OverrideBitWidth));
+        ValueMAP[BO] = new z3::expr(exp);
+      } break;
+      default: {
+        BO->print(outs());
+        report_fatal_error("Unknown opcode!");
+      }
+      }
 
-    switch (BO->getOpcode()) {
-    case Instruction::BinaryOps::Add: {
+    } else if (auto Trunc = dyn_cast<llvm::TruncInst>(CurInst)) {
       auto exp =
-          *getZ3Val(Z3Ctx, BO->getOperand(0), ValueMAP, OverrideBitWidth) +
-          *getZ3Val(Z3Ctx, BO->getOperand(1), ValueMAP, OverrideBitWidth);
-      ValueMAP[BO] = new z3::expr(exp);
-    } break;
-    case Instruction::BinaryOps::Sub: {
-      auto exp =
-          *getZ3Val(Z3Ctx, BO->getOperand(0), ValueMAP, OverrideBitWidth) -
-          *getZ3Val(Z3Ctx, BO->getOperand(1), ValueMAP, OverrideBitWidth);
-      ValueMAP[BO] = new z3::expr(exp);
-    } break;
-    case Instruction::BinaryOps::Mul: {
-      auto exp =
-          *getZ3Val(Z3Ctx, BO->getOperand(0), ValueMAP, OverrideBitWidth) *
-          *getZ3Val(Z3Ctx, BO->getOperand(1), ValueMAP, OverrideBitWidth);
-      ValueMAP[BO] = new z3::expr(exp);
-    } break;
-    case Instruction::BinaryOps::SDiv: {
-      auto exp =
-          *getZ3Val(Z3Ctx, BO->getOperand(0), ValueMAP, OverrideBitWidth) /
-          *getZ3Val(Z3Ctx, BO->getOperand(1), ValueMAP, OverrideBitWidth);
-      ValueMAP[BO] = new z3::expr(exp);
-    } break;
-    case Instruction::BinaryOps::Xor: {
-      auto exp =
-          *getZ3Val(Z3Ctx, BO->getOperand(0), ValueMAP, OverrideBitWidth) ^
-          *getZ3Val(Z3Ctx, BO->getOperand(1), ValueMAP, OverrideBitWidth);
-      ValueMAP[BO] = new z3::expr(exp);
-    } break;
-    case Instruction::BinaryOps::And: {
-      auto exp =
-          *getZ3Val(Z3Ctx, BO->getOperand(0), ValueMAP, OverrideBitWidth) &
-          *getZ3Val(Z3Ctx, BO->getOperand(1), ValueMAP, OverrideBitWidth);
-      ValueMAP[BO] = new z3::expr(exp);
-    } break;
-    case Instruction::BinaryOps::Or: {
-      auto exp =
-          *getZ3Val(Z3Ctx, BO->getOperand(0), ValueMAP, OverrideBitWidth) |
-          *getZ3Val(Z3Ctx, BO->getOperand(1), ValueMAP, OverrideBitWidth);
-      ValueMAP[BO] = new z3::expr(exp);
-    } break;
-    case Instruction::BinaryOps::Shl: {
-      auto exp = z3::shl(
-          *getZ3Val(Z3Ctx, BO->getOperand(0), ValueMAP, OverrideBitWidth),
-          *getZ3Val(Z3Ctx, BO->getOperand(1), ValueMAP, OverrideBitWidth));
-      ValueMAP[BO] = new z3::expr(exp);
-    } break;
-    case Instruction::BinaryOps::LShr: {
-      auto exp = z3::lshr(
-          *getZ3Val(Z3Ctx, BO->getOperand(0), ValueMAP, OverrideBitWidth),
-          *getZ3Val(Z3Ctx, BO->getOperand(1), ValueMAP, OverrideBitWidth));
-      ValueMAP[BO] = new z3::expr(exp);
-    } break;
-    case Instruction::BinaryOps::AShr: {
-      auto exp = z3::ashr(
-          *getZ3Val(Z3Ctx, BO->getOperand(0), ValueMAP, OverrideBitWidth),
-          *getZ3Val(Z3Ctx, BO->getOperand(1), ValueMAP, OverrideBitWidth));
-      ValueMAP[BO] = new z3::expr(exp);
-    } break;
-    default: {
-      BO->print(outs());
-      report_fatal_error("Unknown opcode!");
-    }
+          getZ3Val(Z3Ctx, Trunc->getOperand(0), ValueMAP, OverrideBitWidth)
+              ->extract(Trunc->getType()->getIntegerBitWidth() - 1, 0);
+
+      ValueMAP[Trunc] = new z3::expr(exp);
+    } else if (auto ZExt = dyn_cast<ZExtInst>(CurInst)) {
+      auto exp = z3::zext(
+          *getZ3Val(Z3Ctx, ZExt->getOperand(0), ValueMAP, OverrideBitWidth),
+          ZExt->getType()->getIntegerBitWidth() -
+              ZExt->getOperand(0)->getType()->getIntegerBitWidth());
+      ValueMAP[ZExt] = new z3::expr(exp);
+    } else if (auto SExt = dyn_cast<SExtInst>(CurInst)) {
+      auto exp = z3::sext(
+          *getZ3Val(Z3Ctx, SExt->getOperand(0), ValueMAP, OverrideBitWidth),
+          SExt->getType()->getIntegerBitWidth() -
+              SExt->getOperand(0)->getType()->getIntegerBitWidth());
+      ValueMAP[SExt] = new z3::expr(exp);
+    } else {
+      CurInst->dump();
+      report_fatal_error("[getZ3ExpressionFromAST] Unsupported instruction!");
     }
 
-    LastInst = ValueMAP[BO];
+    // Set last inst
+    LastInst = ValueMAP[CurInst];
   }
 
   z3::expr Result = *LastInst;
 
   // Clean up
   for (auto V : ValueMAP) {
+    // Skip Vars
+    bool Found = false;
+    for (auto &E : VarMap) {
+      if (E.second == V.second) {
+        Found = true;
+        break;
+      }
+    }
+
+    if (Found)
+      continue;
+
     delete V.second;
   }
 
@@ -1434,14 +1610,21 @@ LLVMParser::getZ3Val(z3::context &Z3Ctx, llvm::Value *V,
     } else {
       BitWidth = CV->getBitWidth();
     }
-    auto ConstExpr = Z3Ctx.bv_val(CV->getZExtValue(), BitWidth);
 
-    ValueMap[V] = new z3::expr(ConstExpr);
+    if (CV->isNegative()) {
+      auto ConstExpr = Z3Ctx.bv_val(CV->getSExtValue(), BitWidth);
+      ValueMap[V] = new z3::expr(ConstExpr);
+    } else {
+
+      auto ConstExpr = Z3Ctx.bv_val(CV->getZExtValue(), BitWidth);
+      ValueMap[V] = new z3::expr(ConstExpr);
+    }
+
     return ValueMap[V];
   }
 
   if (ValueMap.count(V) == 0) {
-    report_fatal_error("V not found!");
+    report_fatal_error("[getZ3Val] Value not found!");
   }
 
   return ValueMap[V];
@@ -1462,7 +1645,7 @@ int LLVMParser::getInstructionCount(llvm::Module *M) {
 int LLVMParser::getInstructionCountBefore() {
   return this->InstructionCountBefore;
 }
-  
+
 int LLVMParser::getInstructionCountAfter() {
   return this->InstructionCountAfter;
 }
