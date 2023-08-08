@@ -43,13 +43,18 @@ cl::opt<std::string> PythonPath("python-path", cl::Optional,
                                 cl::value_desc("python-path"),
                                 cl::init("python"));
 
-cl::opt<bool> RedisCache("redis-cache", cl::Optional,
+cl::opt<bool> RedisCache("enable-redis-cache", cl::Optional,
                          cl::desc("Enable redis cache in GAMBA"),
                          cl::value_desc("redis-cache"), cl::init(false));
 
 cl::opt<bool> EnableSHR("enable-shr", cl::Optional,
-                         cl::desc("Enable SHR in external solving"),
-                         cl::value_desc("renable-shr"), cl::init(false));
+                        cl::desc("Enable SHR in external solving in GAMBA"),
+                        cl::value_desc("enable-shr"), cl::init(true));
+
+cl::opt<bool>
+    EnableMod("enable-mod-red", cl::Optional,
+              cl::desc("Enable modulo reduction of constants in GAMBA"),
+              cl::value_desc("enable-mod-red"), cl::init(false));
 
 static bool WarnOnce = false;
 
@@ -226,6 +231,10 @@ bool Simplifier::external_simplifier(
 
   if (RedisCache) {
     cmd += " -r";
+  }
+
+  if (EnableMod) {
+    cmd += " -m";
   }
 
   auto exitCode = exec(cmd, output);
