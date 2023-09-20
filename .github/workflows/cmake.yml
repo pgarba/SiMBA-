@@ -19,10 +19,32 @@ jobs:
 
     steps:
     - uses: actions/checkout@v3
-    
+    - uses: actions/setup-python@v4
+      with:
+        python-version: '3.10' 
     # sudo apt-get update -qq
     - name: Install Ubuntu dependencies
-      run: sudo apt-get update ; sudo apt-get install libz3-dev z3
+      run: |
+          sudo apt update
+          sudo apt upgrade
+          sudo apt install cmake git wget
+    - name: Build clang and Install clang
+      run: |
+        wget https://apt.llvm.org/llvm.sh
+        ./llvm.sh 16
+        sudo update-alternatives --install /usr/bin/clang++ clang++ /usr/bin/clang++-16 100
+        update-alternatives --install /usr/bin/clang clang /usr/bin/clang-16 100
+        update-alternatives --config cc
+        clang --version
+    - name: Build z3 and Install z3
+      run: |
+          git clone https://github.com/Z3Prover/z3
+          cd z3
+          CXX=clang++ CC=clang python scripts/mk_make.py
+          cd build
+          make
+          sudo make install
+        
 
     - name: Configure CMake
       # Configure CMake in a 'build' subdirectory. `CMAKE_BUILD_TYPE` is only required if you are using a single-configuration generator such as make.
