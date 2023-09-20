@@ -31,6 +31,7 @@ jobs:
     - name: Build clang and Install clang
       run: |
         wget https://apt.llvm.org/llvm.sh
+        sudo chmod +x ./llvm.sh
         sudo ./llvm.sh 16
         sudo update-alternatives --install /usr/bin/clang++ clang++ /usr/bin/clang++-16 100
         sudo update-alternatives --install /usr/bin/clang clang /usr/bin/clang-16 100
