@@ -27,22 +27,16 @@ jobs:
       run: |
           sudo apt update
           sudo apt upgrade
-          sudo apt install cmake git wget clang llvm lld 
-        
-    - name: Build z3 and Install z3
-      run: |
-          wget http://github.com/Z3Prover/z3/releases/download/z3-4.12.2/z3-solver-4.12.2.0.tar.gz -O z3-solver.tar.gz
-          tar zxvf ./z3-solver.tar.gz 
+          sudo apt install cmake git wget clang llvm lld  libz3-dev z3
+          
     - name: Configure CMake
       env:
           CC: clang
           CXX: clang++
-          Z3_DIR: "./z3-solver/"
       # Configure CMake in a 'build' subdirectory. `CMAKE_BUILD_TYPE` is only required if you are using a single-configuration generator such as make.
       # See https://cmake.org/cmake/help/latest/variable/CMAKE_BUILD_TYPE.html?highlight=cmake_build_type
       run: |
-          cmake -B ${{github.workspace}}/build -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} -DCMAKE_INSTALL_PREFIX="./z3-solver/"
-
+          cmake -B ${{github.workspace}}/build -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}}
     - name: Build
       # Build your program with the given configuration
       run: cmake --build ${{github.workspace}}/build --config ${{env.BUILD_TYPE}}
