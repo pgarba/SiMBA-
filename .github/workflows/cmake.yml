@@ -27,30 +27,20 @@ jobs:
       run: |
           sudo apt update
           sudo apt upgrade
-          sudo apt install cmake git wget
-    - name: Build clang and Install clang
-      run: |
-        wget https://apt.llvm.org/llvm.sh
-        sudo chmod +x ./llvm.sh
-        sudo ./llvm.sh 16
-        sudo update-alternatives --install /usr/bin/clang++ clang++ /usr/bin/clang++-16 100
-        sudo update-alternatives --install /usr/bin/clang clang /usr/bin/clang-16 100
-        sudo update-alternatives --config cc
-        clang --version
+          sudo apt install cmake git wget clang llvm lld 
+        
     - name: Build z3 and Install z3
       run: |
-          git clone https://github.com/Z3Prover/z3
-          cd z3
-          CXX=clang++ CC=clang python scripts/mk_make.py
-          cd build
-          make
-          sudo make install
-        
-
+          wget http://github.com/Z3Prover/z3/releases/download/z3-4.12.2/z3-solver-4.12.2.0.tar.gz -O z3-solver.tar.gz
+          tar zxvf ./z3-solver.tar.gz 
     - name: Configure CMake
+      env:
+          CC: clang
+          CXX: clang++
       # Configure CMake in a 'build' subdirectory. `CMAKE_BUILD_TYPE` is only required if you are using a single-configuration generator such as make.
       # See https://cmake.org/cmake/help/latest/variable/CMAKE_BUILD_TYPE.html?highlight=cmake_build_type
-      run: cmake -B ${{github.workspace}}/build -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}}
+      run: |
+          cmake -B ${{github.workspace}}/build -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} CMAKE_INSTALL_PREFIX="./z3-solver/"
 
     - name: Build
       # Build your program with the given configuration
