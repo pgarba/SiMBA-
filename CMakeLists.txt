@@ -1,11 +1,34 @@
 cmake_minimum_required(VERSION 3.1.0 FATAL_ERROR)
 
 project(SiMBA++)
-
 set(CMAKE_CXX_STANDARD 17)
+if(${CMAKE_SYSTEM_NAME} MATCHES "Windows")
+    set(BuildDir "c:/dev")
+    set(LLVM_DIR "${BuildDir}/llvm-15.0.3-win64/lib/cmake/llvm/")
+    set(CMAKE_PREFIX_PATH "${BuildDir}/z3/")
+endif()
 
-# set(LLVM_DIR "c:/libs/lib/cmake/llvm")
-find_package(LLVM REQUIRED CONFIG)
+if(${CMAKE_SYSTEM_NAME} MATCHES "Linux")
+    set(Z3_INCLUDE_DIRS “/usr/include”)
+endif()
+
+#https://github.com/JonathanSalwan/Triton/blob/master/CMakeLists.txt#L177
+#Compiling with LLVM
+message(STATUS "Compiling with LLVM")
+if(NOT DEFINED LLVM_INCLUDE_DIRS)
+    find_package(LLVM REQUIRED CONFIG)
+    message(STATUS "Found LLVM ${LLVM_PACKAGE_VERSION}")
+    message(STATUS "Using LLVMConfig.cmake in: ${LLVM_DIR}")
+    include_directories(${LLVM_INCLUDE_DIRS})
+    if(LLVM_LINK_LLVM_DYLIB)
+        set(LLVM_LIBRARIES LLVM)
+    else()
+        set(LLVM_LIBRARIES ${LLVM_AVAILABLE_LIBS})
+    endif()
+endif()
+
+
+#find_package(LLVM REQUIRED CONFIG)
 message(STATUS "LLVM binary directory: " ${LLVM_TOOLS_BINARY_DIR})
 
 message(STATUS ${LLVM_TOOLS_BINARY_DIR})
@@ -24,8 +47,23 @@ string(STRIP ${LDF} LDF)
 set(LLVM_LIBS ${LLVM_LIBS} ${SYS_LIBS})
 set(LLVM_LIBS ${LLVM_LIBS} ${LDF})
 
+
+
 # z3
+#find_package(Z3 REQUIRED CONFIG)
+message(STATUS "Compiling with Z3 SMT solver")
 find_package(Z3 REQUIRED CONFIG)
+message(STATUS "Z3 version: ${Z3_VERSION}")
+if(TARGET z3::libz3)
+    link_libraries(z3::libz3)
+elseif(DEFINED Z3_INCLUDE_DIRS)
+    include_directories(${Z3_INCLUDE_DIRS})
+else()
+    if(${CMAKE_SYSTEM_NAME} MATCHES "Linux")
+        include_directories(${Z3_INCLUDE_DIRS})
+    endif()
+    #message(FATAL_ERROR "Unexpected Z3 package search outcome: neither target z3::libz3 not variable Z3_INCLUDE_DIRS exists.")
+endif()
 
 message(STATUS "Z3 include directory: " ${Z3_CXX_INCLUDE_DIRS})
 message(STATUS "Z3 library: " ${Z3_LIBRARIES})
@@ -54,18 +92,18 @@ add_executable(SiMBA++ "CSiMBA.cpp" "CSiMBA.h" "LLVMParser.cpp" "LLVMParser.h" "
 #)
 
 target_link_libraries(SiMBA++
-    LLVMipo
-    LLVMScalarOpts
-    LLVMInstCombine
-    LLVMTransformUtils
-    LLVMAnalysis
-    LLVMTarget
-    LLVMOption
-    LLVMObject
-    LLVMBitReader
-    LLVMCore
-    LLVMSupport
-    ${Z3_LIBRARIES}
+        LLVMipo
+        LLVMScalarOpts
+        LLVMInstCombine
+        LLVMTransformUtils
+        LLVMAnalysis
+        LLVMTarget
+        LLVMOption
+        LLVMObject
+        LLVMBitReader
+        LLVMCore
+        LLVMSupport
+        ${Z3_LIBRARIES}
 )
 
 # SiMBA++ static
@@ -82,44 +120,44 @@ ENABLE_TESTING()
 include(FindPythonInterp)
 
 add_test(NAME Convert_DATA_to_LLVM
-    COMMAND ${PYTHON_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/scripts/convert_data_to_llvm.py
-    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/scripts)
+        COMMAND ${PYTHON_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/scripts/convert_data_to_llvm.py
+        WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/scripts)
 
 add_test(NAME MBAs_Linear_64bit_unsigned_llvm_detect_and_simplify
-    COMMAND ${PYTHON_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/run_tests_llvm_simplify.py " 64" "0 "
-    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/tests)
+        COMMAND ${PYTHON_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/run_tests_llvm_simplify.py " 64" "0 "
+        WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/tests)
 
 add_test(NAME MBAs_Linear_64bit_unsigned
-    COMMAND ${PYTHON_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/run_tests.py " 64" "0 "
-    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/tests)
+        COMMAND ${PYTHON_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/run_tests.py " 64" "0 "
+        WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/tests)
 
 add_test(NAME MBAs_Linear_64bit_unsigned_llvm
-    COMMAND ${PYTHON_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/run_tests_llvm.py " 64" "0 "
-    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/tests)
+        COMMAND ${PYTHON_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/run_tests_llvm.py " 64" "0 "
+        WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/tests)
 
 # SiMBAPass
-add_library(SiMBAPass SHARED SiMBAPass.cpp SiMBAPass.h LLVMParser.cpp LLVMParser.h Simplifier.h Simplifier.cpp ShuttingYard.cpp MBAChecker.cpp MBAChecker.h Modulo.cpp Modulo.h)
+add_library(SiMBAPass SHARED Z3Prover.h Z3Prover.cpp Simplifier.h Simplifier.cpp SiMBAPass.cpp SiMBAPass.h LLVMParser.cpp LLVMParser.h Simplifier.h Simplifier.cpp ShuttingYard.cpp MBAChecker.cpp MBAChecker.h Modulo.cpp Modulo.h)
 
 # No rtti
 set_target_properties(SiMBAPass PROPERTIES
-    COMPILE_FLAGS " -fno-rtti"
+        COMPILE_FLAGS " -fno-rtti"
 )
 
 if(APPLE)
     set(PASS_LDFLAGS "-Wl,-undefined,dynamic_lookup -Wl,-no_pie")
 elseif(WIN32)
     target_link_libraries(SiMBAPass
-        LLVMipo
-        LLVMScalarOpts
-        LLVMInstCombine
-        LLVMTransformUtils
-        LLVMAnalysis
-        LLVMTarget
-        LLVMOption
-        LLVMObject
-        LLVMBitReader
-        LLVMCore
-        LLVMSupport
+            LLVMipo
+            LLVMScalarOpts
+            LLVMInstCombine
+            LLVMTransformUtils
+            LLVMAnalysis
+            LLVMTarget
+            LLVMOption
+            LLVMObject
+            LLVMBitReader
+            LLVMCore
+            LLVMSupport
     )
 endif()
 
@@ -130,11 +168,11 @@ set_target_properties(LSiMBA++ PROPERTIES PUBLIC_HEADER "LLVMParser.h;include/sp
 
 # Install
 install(TARGETS SiMBA++ SiMBAPass DESTINATION "bin"
-	LIBRARY DESTINATION "lib"
-	PUBLIC_HEADER DESTINATION "include"
-	)
+        LIBRARY DESTINATION "lib"
+        PUBLIC_HEADER DESTINATION "include"
+)
 
 install(TARGETS LSiMBA++
         LIBRARY DESTINATION "lib"
         PUBLIC_HEADER DESTINATION "include"
-        )
+)
