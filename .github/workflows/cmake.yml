@@ -26,7 +26,7 @@ jobs:
           sudo apt upgrade
           sudo apt install cmake git wget clang llvm lld
     - name: z3
-    uses: pavpanchekha/setup-z3@v1.3
+    - uses: pavpanchekha/setup-z3@v1.3
       with:
         version: '4.12.2'  
     - name: Configure CMake
