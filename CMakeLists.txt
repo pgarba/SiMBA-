@@ -50,9 +50,8 @@ set(LLVM_LIBS ${LLVM_LIBS} ${LDF})
 
 
 # z3
-#find_package(Z3 REQUIRED CONFIG)
 message(STATUS "Compiling with Z3 SMT solver")
-find_package(Z3 REQUIRED CONFIG)
+find_package(Z3 REQUIRED)
 message(STATUS "Z3 version: ${Z3_VERSION}")
 if(TARGET z3::libz3)
     link_libraries(z3::libz3)
