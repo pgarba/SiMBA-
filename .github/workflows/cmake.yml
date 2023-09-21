@@ -19,16 +19,16 @@ jobs:
 
     steps:
     - uses: actions/checkout@v3
-    - uses: actions/setup-python@v4
-      with:
-        python-version: '3.10' 
     # sudo apt-get update -qq
     - name: Install Ubuntu dependencies
       run: |
           sudo apt update
           sudo apt upgrade
-          sudo apt install cmake git wget clang llvm lld  libz3-dev z3
-          
+          sudo apt install cmake git wget clang llvm lld
+    - name: z3
+    uses: pavpanchekha/setup-z3@v1.3
+      with:
+        version: '4.12.2'  
     - name: Configure CMake
       env:
           CC: clang
