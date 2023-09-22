@@ -9,12 +9,15 @@
 
 #include <map>
 #include <unordered_set>
+#include "Z3Prover.h"
 
 #include <llvm/IR/Instructions.h>
 
-#include <z3++.h>
+
 
 #include "splitmix64.h"
+
+
 
 namespace llvm {
 class DominatorTree;

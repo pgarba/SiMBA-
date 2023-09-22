@@ -6,6 +6,8 @@ if(${CMAKE_SYSTEM_NAME} MATCHES "Windows")
     set(BuildDir "c:/dev")
     set(LLVM_DIR "${BuildDir}/llvm-15.0.3-win64/lib/cmake/llvm/")
     set(CMAKE_PREFIX_PATH "${BuildDir}/z3/")
+    set(Z3_INCLUDE_DIRS "${BuildDir}/z3/include/")
+    set(Z3_LIBRARIES "${BuildDir}/z3/lib/libz3.lib")
 endif()
 
 if(${CMAKE_SYSTEM_NAME} MATCHES "Linux")
@@ -106,7 +108,7 @@ target_link_libraries(SiMBA++
 )
 
 # SiMBA++ static
-add_library(LSiMBA++ STATIC "LLVMParser.cpp" "LLVMParser.h" "Simplifier.h" "MBAChecker.cpp" "MBAChecker.h" "Simplifier.cpp" "ShuttingYard.cpp" "Modulo.cpp" "Modulo.h" "Z3Prover.cpp" "Z3Prover.h")
+add_library(LSiMBA++ STATIC  "Z3Prover.cpp" "Z3Prover.h" "LLVMParser.cpp" "LLVMParser.h" "Simplifier.h" "MBAChecker.cpp" "MBAChecker.h" "Simplifier.cpp" "ShuttingYard.cpp" "Modulo.cpp" "Modulo.h")
 
 # No rtti
 #set_target_properties(LSiMBA++ PROPERTIES
@@ -157,6 +159,7 @@ elseif(WIN32)
             LLVMBitReader
             LLVMCore
             LLVMSupport
+            ${Z3_LIBRARIES}
     )
 endif()
 
