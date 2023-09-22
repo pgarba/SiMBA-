@@ -19,16 +19,32 @@ jobs:
 
     steps:
     - uses: actions/checkout@v3
-    
     # sudo apt-get update -qq
     - name: Install Ubuntu dependencies
-      run: sudo apt-get update ; sudo apt-get install libz3-dev z3
-
+      run: |
+          sudo apt update
+          sudo apt upgrade
+          sudo apt install cmake git wget clang llvm
+          sudo apt install python-setuptools libboost-dev libgmp-dev
+    - name: Set up Python 3.8
+      uses: actions/setup-python@v4
+      with:
+          python-version: 3.8
+    - name: Upgrade pip version
+      run: |
+          python -m pip install -U pip
+    - name: Install Z3
+      run: |
+          sudo apt-get install libz3-dev
+          python -m pip install z3-solver
     - name: Configure CMake
+      env:
+          CC: clang
+          CXX: clang++
       # Configure CMake in a 'build' subdirectory. `CMAKE_BUILD_TYPE` is only required if you are using a single-configuration generator such as make.
       # See https://cmake.org/cmake/help/latest/variable/CMAKE_BUILD_TYPE.html?highlight=cmake_build_type
-      run: cmake -B ${{github.workspace}}/build -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}}
-
+      run: |
+          cmake -B ${{github.workspace}}/build -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}}
     - name: Build
       # Build your program with the given configuration
       run: cmake --build ${{github.workspace}}/build --config ${{env.BUILD_TYPE}}
