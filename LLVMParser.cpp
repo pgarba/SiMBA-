@@ -795,7 +795,6 @@ void LLVMParser::extractCandidates(llvm::Function &F,
         }
       }
     } break;
-    /* Disable as no use for now
     case Instruction::Add:
     case Instruction::Sub:
     case Instruction::Xor:
@@ -804,14 +803,16 @@ void LLVMParser::extractCandidates(llvm::Function &F,
     case Instruction::Shl:
     case Instruction::LShr:
     case Instruction::AShr:
-    case Instruction::Mul: {
+    case Instruction::Mul:
+    case Instruction::URem:
+    case Instruction::SRem:
+    case Instruction::IntToPtr:
+    case Instruction::BitCast: {
       MBACandidate Cand;
       Cand.Candidate = dyn_cast<BinaryOperator>(&*I);
       Candidates.push_back(Cand);
     }
-    */
     default: {
-      // Skip
     }
     }
   }
