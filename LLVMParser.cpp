@@ -809,7 +809,7 @@ void LLVMParser::extractCandidates(llvm::Function &F,
     case Instruction::IntToPtr:
     case Instruction::BitCast: {
       MBACandidate Cand;
-      Cand.Candidate = dyn_cast<BinaryOperator>(&*I);
+      Cand.Candidate = dyn_cast<Instruction>(&*I);
       Candidates.push_back(Cand);
     }
     default: {
