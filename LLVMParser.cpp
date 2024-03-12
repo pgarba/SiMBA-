@@ -670,25 +670,29 @@ bool LLVMParser::rewriteIntrinsics() {
       // Create the builder to build
       llvm::IRBuilder<> Builder(CI);
 
+      Mtx.lock();
       auto Op = CI->getArgOperand(0);
       auto Count = CI->getArgOperand(2);
       auto t3 = Builder.CreateShl(Op, Count);
       auto t4 = Builder.CreateSub(
-          llvm::ConstantInt::get(Count->getType(),
-                                 Count->getType()->getIntegerBitWidth()),
+          getConstantInt(Count->getType(),
+                         Count->getType()->getIntegerBitWidth()),
           Count);
       auto t5 = Builder.CreateLShr(Op, t4);
       auto t6 = Builder.CreateOr(t5, t3);
 
       CI->replaceAllUsesWith(t6);
+      Mtx.unlock();
 
       ToDelete.push_back(CI);
     }
 
     // Cleanup
+    Mtx.lock();
     for (auto CI : ToDelete) {
       CI->eraseFromParent();
     }
+    Mtx.unlock();
 
     return true;
   });
@@ -833,99 +837,116 @@ bool LLVMParser::findReplacements(llvm::DominatorTree *DT,
 
   // Search for replacements
   std::vector<MBACandidate> SubASTCandidates;
+  std::vector<std::thread> Threads;
   for (int i = 0; i < Candidates.size(); i++) {
-    auto &Cand = Candidates[i];
-    getAST(DT, Cand.Candidate, Cand.AST, Cand.Variables, true);
 
-    int s = Cand.AST.size();
-    if (Cand.AST.size() < 2) {
-      continue;
-    }
+    Threads.push_back(std::thread([this, &DT, &Candidates, &SubASTCandidates, i,
+                                   &ReplacementFound]() {
+      auto &Cand = Candidates[i];
+      getAST(DT, Cand.Candidate, Cand.AST, Cand.Variables, true);
+
+      int s = Cand.AST.size();
+      if (Cand.AST.size() < 2) {
+        return;
+      }
 
 #ifdef DEBUG_SIMPLIFICATION
-    // Debug out
-    printAST(Cand.AST);
+      // Debug out
+      printAST(Cand.AST);
 
-    // Debug print variables
-    outs() << "[*] Variables:\n";
-    for (auto Var : Cand.Variables) {
-      Var->print(outs());
-      outs() << "\n";
-    }
+      // Debug print variables
+      outs() << "[*] Variables:\n";
+      for (auto Var : Cand.Variables) {
+        Var->print(outs());
+        outs() << "\n";
+      }
 #endif
 
-    // Only handle max 6 Vars
-    if (Cand.Variables.size() > 6) {
-      Cand.isValid = false;
-      continue;
-    }
-
-    // Dont work on vector types
-    if (Cand.AST.front().I->getType()->isVectorTy()) {
-      Cand.isValid = false;
-      continue;
-    }
-
-    // Try to simplify the whole AST
-    int BitWidth = Cand.AST.front().I->getType()->getIntegerBitWidth();
-    if (BitWidth == 0 || BitWidth > 64) {
-      // If BitWidth is zero then stop here
-      return false;
-    }
-    auto Modulus = getModulus(BitWidth);
-
-    std::vector<APInt> ResultVector;
-    initResultVectorFromAST(Cand.AST, ResultVector, Modulus, Cand.Variables);
-
-    // Simpify MBA
-    Simplifier S(BitWidth, false, Cand.Variables.size(), ResultVector);
-    bool SkipVerify = false;
-
-    if (!UseExternalSimplifier.empty()) {
-      std::string &Path = UseExternalSimplifier;
-      auto Expr = getASTAsString(Cand.AST, Cand.Variables);
-
-      if (this->Debug) {
-        outs() << "[*] Using external simplifier\n";
-        outs() << "[*] External simplified expression (BitWidth: " << BitWidth
-               << ") from '" << Expr << "'\n";
+      // Only handle max 20 Vars
+      if (Cand.Variables.size() > 20) {
+        Cand.isValid = false;
+        return;
       }
 
-      auto R = S.external_simplifier(Expr, Cand.Replacement, false, false, Path,
-                                     BitWidth, this->Debug);
-      if (R) {
+      // Dont work on vector types
+      if (Cand.AST.front().I->getType()->isVectorTy()) {
+        Cand.isValid = false;
+        return;
+      }
+
+      // Try to simplify the whole AST
+      int BitWidth = Cand.AST.front().I->getType()->getIntegerBitWidth();
+      if (BitWidth == 0 || BitWidth > 64) {
+        // If BitWidth is zero then stop here
+        return;
+      }
+      auto Modulus = getModulus(BitWidth);
+
+      std::vector<APInt> ResultVector;
+      initResultVectorFromAST(Cand.AST, ResultVector, Modulus, Cand.Variables);
+
+      // Simpify MBA
+      Simplifier S(BitWidth, false, Cand.Variables.size(), ResultVector);
+      bool SkipVerify = false;
+
+      if (!UseExternalSimplifier.empty()) {
+        std::string &Path = UseExternalSimplifier;
+        auto Expr = getASTAsString(Cand.AST, Cand.Variables);
+
         if (this->Debug) {
-          outs() << "[*] to '" << Cand.Replacement << "'\n";
+          outs() << "[*] Using external simplifier\n";
+          outs() << "[*] External simplified expression (BitWidth: " << BitWidth
+                 << ") from '" << Expr << "'\n";
+        }
+
+        auto R = S.external_simplifier(Expr, Cand.Replacement, false, false,
+                                       Path, BitWidth, this->Debug);
+        if (R) {
+          if (this->Debug) {
+            outs() << "[*] to '" << Cand.Replacement << "'\n";
+          }
+        } else {
+          // Skip verify and walk sub ast
+          Cand.isValid = false;
+          SkipVerify = true;
+
+          if (this->Debug) {
+            outs() << "[*] Failed!\n";
+          }
         }
       } else {
-        // Skip verify and walk sub ast
-        Cand.isValid = false;
-        SkipVerify = true;
+        S.simplify(Cand.Replacement, false, false);
+      }
 
+      // Verify is replacement is valid
+      if (!SkipVerify) {
+        Cand.isValid = this->verify(Cand.AST, Cand.Replacement, Cand.Variables);
+      }
+
+      if (Cand.isValid == false) {
+        // Could not simplify the whole AST so walk through SubASTs
+        ReplacementFound = walkSubAST(DT, Cand.AST, SubASTCandidates);
+      } else {
         if (this->Debug) {
-          outs() << "[*] Failed!\n";
+          outs() << "[*] Full AST Simplified Expression: " << Cand.Replacement
+                 << "\n";
         }
+
+        ReplacementFound = true;
       }
-    } else {
-      S.simplify(Cand.Replacement, false, false);
-    }
+    }));
 
-    // Verify is replacement is valid
-    if (!SkipVerify) {
-      Cand.isValid = this->verify(Cand.AST, Cand.Replacement, Cand.Variables);
+    // Join one thread if we have more than MaxThreadCount
+    if (Threads.size() >= this->MaxThreadCount) {
+        // Join one thread
+        Threads.front().join();
+        Threads.erase(Threads.begin());
     }
+  }
 
-    if (Cand.isValid == false) {
-      // Could not simplify the whole AST so walk through SubASTs
-      ReplacementFound = walkSubAST(DT, Cand.AST, SubASTCandidates);
-    } else {
-      if (this->Debug) {
-        outs() << "[*] Full AST Simplified Expression: " << Cand.Replacement
-               << "\n";
-      }
-
-      ReplacementFound = true;
-    }
+  // Wait until  all threads are done
+  for (auto &T : Threads) {
+    T.join();
   }
 
   // Clean up Candidates and keep only valid ones
@@ -1018,7 +1039,9 @@ bool LLVMParser::walkSubAST(llvm::DominatorTree *DT,
 
       if (C.isValid) {
         // Store valid replacement
+        Mtx.lock();
         Candidates.push_back(C);
+        Mtx.unlock();
 
         Valid = true;
 
@@ -1358,6 +1381,8 @@ LLVMParser::evaluateAST(llvm::SmallVectorImpl<BFSEntry> &AST,
   Constant *InstResult = nullptr;
   llvm::DenseMap<llvm::Value *, llvm::Constant *> ValueStack;
 
+  std::lock_guard<std::recursive_mutex> guard(Mtx);
+
   for (auto E = AST.rbegin(); E != AST.rend(); ++E) {
     auto CurInst = E->I;
 
@@ -1423,13 +1448,13 @@ LLVMParser::getVal(llvm::Value *V,
 
     // Check if Type is different
     if (Par[i].getBitWidth() > V->getType()->getIntegerBitWidth()) {
-      return llvm::ConstantInt::get(
-          V->getType(), Par[i].trunc(V->getType()->getIntegerBitWidth()));
+      return getConstantInt(V->getType(),
+                            Par[i].trunc(V->getType()->getIntegerBitWidth()));
     } else if (Par[i].getBitWidth() < V->getType()->getIntegerBitWidth()) {
-      return llvm::ConstantInt::get(
-          V->getType(), Par[i].zext(V->getType()->getIntegerBitWidth()));
+      return getConstantInt(V->getType(),
+                            Par[i].zext(V->getType()->getIntegerBitWidth()));
     } else {
-      return llvm::ConstantInt::get(V->getType(), Par[i]);
+      return getConstantInt(V->getType(), Par[i]);
     }
   }
 
@@ -1438,6 +1463,18 @@ LLVMParser::getVal(llvm::Value *V,
   }
 
   return ValueStack[V];
+}
+
+llvm::Constant *LLVMParser::getConstantInt(llvm::Type *Ty, uint64_t Value) {
+  std::lock_guard<std::recursive_mutex> guard(Mtx);
+  auto C = llvm::ConstantInt::get(Ty, Value);
+  return C;
+}
+
+llvm::Constant *LLVMParser::getConstantInt(llvm::Type *Ty, APInt &Value) {
+  std::lock_guard<std::recursive_mutex> guard(Mtx);
+  auto C = llvm::ConstantInt::get(Ty, Value);
+  return C;
 }
 
 bool LLVMParser::doesDominateInst(DominatorTree *DT, const Instruction *InstA,

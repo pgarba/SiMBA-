@@ -22,15 +22,15 @@ cl::opt<bool>
                  cl::desc("Verify MBA with random values (Default true)"),
                  cl::value_desc("fastcheck"), cl::init(true));
 
-cl::opt<bool> RunOptimizer(
-    "optimize", cl::Optional,
-    cl::desc("Optimize LLVM IR before simplification (Default true)"),
-    cl::value_desc("optimize"), cl::init(true));
+cl::opt<bool> Prove("prove", cl::Optional,
+                    cl::desc("Verify MBA with SAT solving (Default true)"),
+                    cl::value_desc("prove"), cl::init(true));
 
 bool SiMBAPass::runOnModule(Module &M) {
   outs() << "[+] Loading LLVM Module: '" << M.getName() << "'\n";
 
-  LSiMBA::LLVMParser Parser(&M, false, UseFastCheck, false);
+  LSiMBA::LLVMParser Parser(&M, false, UseFastCheck, false, false, false,
+                            Prove);
 
   auto start = high_resolution_clock::now();
 
@@ -48,7 +48,7 @@ bool SiMBAPass::runOnModule(Module &M) {
 bool SiMBAPass::runOnModuleStatic(Module &M) {
   outs() << "[+] Loading LLVM Module: '" << M.getName() << "'\n";
 
-  LSiMBA::LLVMParser Parser(&M, false, UseFastCheck, false, true, true);
+  LSiMBA::LLVMParser Parser(&M, false, UseFastCheck, false, true, Prove);
 
   auto start = high_resolution_clock::now();
 

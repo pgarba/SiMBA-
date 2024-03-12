@@ -7,17 +7,15 @@
 #ifndef LLVMPARSER_H
 #define LLVMPARSER_H
 
+#include "Z3Prover.h"
+
 #include <map>
 #include <unordered_set>
-#include "Z3Prover.h"
+#include <mutex>
 
 #include <llvm/IR/Instructions.h>
 
-
-
 #include "splitmix64.h"
-
-
 
 namespace llvm {
 class DominatorTree;
@@ -85,6 +83,8 @@ public:
   int getInstructionCountAfter();
 
 private:
+  std::recursive_mutex Mtx;
+
   std::string OutputFile = "";
 
   bool Parallel;
@@ -179,6 +179,12 @@ private:
          llvm::DenseMap<llvm::Value *, llvm::Constant *> &ValueStack,
          llvm::SmallVectorImpl<llvm::Value *> &Variables,
          llvm::SmallVectorImpl<llvm::APInt> &Par);
+
+  /*
+    Thread safe
+  */
+  llvm::Constant *getConstantInt(llvm::Type *Ty, uint64_t Value);
+  llvm::Constant *getConstantInt(llvm::Type *Ty, llvm::APInt &Value);
 
   bool doesDominateInst(llvm::DominatorTree *DT, const llvm::Instruction *InstA,
                         const llvm::Instruction *InstB);
