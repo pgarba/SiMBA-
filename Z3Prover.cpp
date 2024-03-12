@@ -17,9 +17,8 @@ llvm::cl::opt<bool>
 bool prove(z3::expr conjecture) {
   z3::context &c = conjecture.ctx();
 
-  // z3::solver s(c);
-
-  z3::tactic t(c, "qflia");
+  auto t = (z3::tactic(c, "simplify") & z3::tactic(c, "bit-blast") &
+            z3::tactic(c, "smt"));
   auto s = t.mk_solver();
 
   s.add(!conjecture);
