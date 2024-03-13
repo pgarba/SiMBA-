@@ -47,13 +47,14 @@ llvm::cl::opt<std::string>
                                    "simplification (Supports: SiMBA/GAMBA"),
                           cl::value_desc("external-simplifier"), cl::init(""));
 
-llvm::cl::opt<int> MaxVarCount("max-var-count", cl::Optional,
-    							   cl::desc("Max variable count for simplification"),
-    							   cl::value_desc("max-var-count"), cl::init(20));
+llvm::cl::opt<int>
+    MaxVarCount("max-var-count", cl::Optional,
+                cl::desc("Max variable count for simplification"),
+                cl::value_desc("max-var-count"), cl::init(5));
 
 llvm::cl::opt<int> MinASTSize("min-ast-size", cl::Optional,
-    								   cl::desc("Minimum AST size for simplification"),
-    								   cl::value_desc("min-ast-size"), cl::init(3));
+                              cl::desc("Minimum AST size for simplification"),
+                              cl::value_desc("min-ast-size"), cl::init(4));
 
 namespace LSiMBA {
 
@@ -286,10 +287,6 @@ int LLVMParser::extractAndSimplify() {
 
     DominatorTree DT(*F);
 
-    // Clone function to compare
-    ValueToValueMapTy VMap;
-    auto FClone = CloneFunction(F, VMap);
-
     // Measure Time
     auto start = high_resolution_clock::now();
 
@@ -327,9 +324,6 @@ int LLVMParser::extractAndSimplify() {
       MBASimplified++;
       MBACount++;
     }
-
-    // When we reach this here, replacements are valid
-    FClone->eraseFromParent();
   }
 
   auto stop = high_resolution_clock::now();
@@ -501,12 +495,10 @@ bool LLVMParser::verify(llvm::SmallVectorImpl<BFSEntry> &AST,
   int Operations = 0;
 
   llvm::SmallVector<APInt, 16> par;
-  llvm::SmallVector<int64_t, 16> parInt;
   for (int i = 0; i < NUM_TEST_CASES; i++) {
     for (int j = 0; j < VNumber; j++) {
       auto v = SP64.next();
       par.push_back(APInt(BitWidth, v));
-      parInt.push_back(v);
     }
 
     // Eval AST
@@ -516,24 +508,17 @@ bool LLVMParser::verify(llvm::SmallVectorImpl<BFSEntry> &AST,
       return false;
     }
 
-    // Mod
-    /*
-    if (AP_R0.isSignBitSet()) {
-      AP_R0 = AP_R0.srem(Modulus);
-    } else {
-      AP_R0 = AP_R0.urem(Modulus);
-    }
-    */
-
     // Eval replacement
     auto AP_R1 = eval(Expr1_replVar, par, BitWidth, &Operations);
-    /*
-    if (AP_R1.isSignBitSet()) {
-      AP_R1 = AP_R1.srem(Modulus);
-    } else {
-      AP_R1 = AP_R1.urem(Modulus);
+
+    // Check if replacement is cheaper than original expression
+    if (AST.size() <= Operations) {
+#ifdef DEBUG_SIMPLIFICATION
+      outs() << "[!] Simplification is no improvement: AST: " << AST.size()
+             << " Operations: " << Operations << "\n";
+#endif
+      return false;
     }
-    */
 
     if (AP_R0.getSExtValue() != AP_R1.getSExtValue()) {
 #ifdef DEBUG_SIMPLIFICATION
@@ -543,15 +528,6 @@ bool LLVMParser::verify(llvm::SmallVectorImpl<BFSEntry> &AST,
     }
 
     par.clear();
-  }
-
-  // Check if replacement is cheaper than original expression
-  if (AST.size() <= Operations) {
-#ifdef DEBUG_SIMPLIFICATION
-    outs() << "[!] Simpl is no improvement! (" << AST.size()
-           << " <= " << Operations << ")\n";
-#endif
-    return false;
   }
 
   // Prove with z3
@@ -731,6 +707,12 @@ bool LLVMParser::isSupportedInstruction(llvm::Value *V) {
 
 void LLVMParser::extractCandidates(llvm::Function &F,
                                    std::vector<MBACandidate> &Candidates) {
+
+  std::set<llvm::Value *> Visited;
+  auto isVisited = [&](llvm::Value *I) -> bool {
+    return Visited.find(I) != Visited.end();
+  };
+
   // Instruction to look for 'store', 'select', 'gep', 'icmp', 'ret'
   for (inst_iterator I = inst_begin(F), E = inst_end(F); I != E; ++I) {
     switch (I->getOpcode()) {
@@ -738,20 +720,25 @@ void LLVMParser::extractCandidates(llvm::Function &F,
       // Check Candidate
       auto SI = dyn_cast<StoreInst>(&*I);
       auto Op = SI->getValueOperand();
-      if (isSupportedInstruction(Op)) {
+      if (!isVisited(Op) && isSupportedInstruction(Op)) {
         MBACandidate Cand;
         Cand.Candidate = dyn_cast<Instruction>(Op);
         Candidates.push_back(Cand);
+        Visited.insert(Op);
       }
     } break;
     case Instruction::Call: {
       auto CI = dyn_cast<CallInst>(&*I);
       for (unsigned int i = 0; i < CI->arg_size(); i++) {
         if (isSupportedInstruction(CI->getArgOperand(i)->stripPointerCasts())) {
+          if (isVisited(CI->getArgOperand(i)->stripPointerCasts()))
+            continue;
+
           MBACandidate Cand;
           Cand.Candidate =
               dyn_cast<Instruction>(CI->getArgOperand(i)->stripPointerCasts());
           Candidates.push_back(Cand);
+          Visited.insert(CI->getArgOperand(i)->stripPointerCasts());
         }
       }
     } break;
@@ -759,10 +746,13 @@ void LLVMParser::extractCandidates(llvm::Function &F,
     case Instruction::Select: {
       for (unsigned int i = 0; i < I->getNumOperands(); i++) {
         if (isSupportedInstruction(I->getOperand(i)->stripPointerCasts())) {
+          if (isVisited(I->getOperand(i)->stripPointerCasts()))
+            continue;
           MBACandidate Cand;
           Cand.Candidate =
               dyn_cast<Instruction>(I->getOperand(i)->stripPointerCasts());
           Candidates.push_back(Cand);
+          Visited.insert(I->getOperand(i)->stripPointerCasts());
         }
       }
     } break;
@@ -771,9 +761,13 @@ void LLVMParser::extractCandidates(llvm::Function &F,
       auto Index = GEP->getOperand(GEP->getNumOperands() - 1);
 
       if (isSupportedInstruction(Index->stripPointerCasts())) {
+        if (isVisited(Index->stripPointerCasts()))
+          continue;
+
         MBACandidate Cand;
         Cand.Candidate = dyn_cast<Instruction>(Index->stripPointerCasts());
         Candidates.push_back(Cand);
+        Visited.insert(Index->stripPointerCasts());
       }
     } break;
     case Instruction::Ret: {
@@ -782,19 +776,25 @@ void LLVMParser::extractCandidates(llvm::Function &F,
         continue;
 
       if (isSupportedInstruction(RI->getReturnValue()->stripPointerCasts())) {
+        if (isVisited(RI->getReturnValue()->stripPointerCasts()))
+          continue;
         MBACandidate Cand;
         Cand.Candidate =
             dyn_cast<Instruction>(RI->getReturnValue()->stripPointerCasts());
         Candidates.push_back(Cand);
+        Visited.insert(RI->getReturnValue()->stripPointerCasts());
       }
     } break;
     case Instruction::PHI: {
       auto Phi = dyn_cast<PHINode>(&*I);
       for (auto &Inc : Phi->incoming_values()) {
         if (isSupportedInstruction(Inc->stripPointerCasts())) {
+          if (isVisited(Inc->stripPointerCasts()))
+            continue;
           MBACandidate Cand;
           Cand.Candidate = dyn_cast<Instruction>(Inc->stripPointerCasts());
           Candidates.push_back(Cand);
+          Visited.insert(Inc->stripPointerCasts());
         }
       }
     } break;
@@ -811,14 +811,22 @@ void LLVMParser::extractCandidates(llvm::Function &F,
     case Instruction::SRem:
     case Instruction::IntToPtr:
     case Instruction::BitCast: {
+      if (isVisited(&*I))
+        continue;
       MBACandidate Cand;
       Cand.Candidate = dyn_cast<Instruction>(&*I);
       Candidates.push_back(Cand);
+      Visited.insert(&*I);
     }
     default: {
     }
     }
   }
+#ifdef DEBUG_SIMPLIFICATION
+  outs() << "[*] Found " << Candidates.size()
+         << " candidates Duplicates: " << (Visited.size() - Candidates.size())
+         << "\n";
+#endif
 }
 
 bool LLVMParser::findReplacements(llvm::DominatorTree *DT,
@@ -836,10 +844,21 @@ bool LLVMParser::findReplacements(llvm::DominatorTree *DT,
 
   // Search for replacements
   std::vector<MBACandidate> SubASTCandidates;
+  auto StartTime = high_resolution_clock::now();
   for (int i = 0; i < Candidates.size(); i++) {
     auto &Cand = Candidates[i];
     getAST(DT, Cand.Candidate, Cand.AST, Cand.Variables, true);
+  }
 
+  auto EndTime = high_resolution_clock::now();
+  auto Duration = duration_cast<milliseconds>(EndTime - StartTime);
+#ifdef DEBUG_SIMPLIFICATION
+  outs() << "[*] Extracted ASTs in " << Duration.count() << " ms\n";
+
+#endif
+
+  for (int i = 0; i < Candidates.size(); i++) {
+    auto &Cand = Candidates[i];
     int s = Cand.AST.size();
     if (Cand.AST.size() < MinASTSize) {
       continue;
@@ -857,7 +876,7 @@ bool LLVMParser::findReplacements(llvm::DominatorTree *DT,
     }
 #endif
 
-    // Only handle max 20 Vars
+    // Only handle max xx Vars
     if (Cand.Variables.size() > MaxVarCount) {
       Cand.isValid = false;
       continue;
@@ -920,14 +939,14 @@ bool LLVMParser::findReplacements(llvm::DominatorTree *DT,
 
     if (Cand.isValid == false) {
       // Could not simplify the whole AST so walk through SubASTs
-      ReplacementFound = walkSubAST(DT, Cand.AST, SubASTCandidates);
+      ReplacementFound |= walkSubAST(DT, Cand.AST, SubASTCandidates);
     } else {
       if (this->Debug) {
         outs() << "[*] Full AST Simplified Expression: " << Cand.Replacement
                << "\n";
       }
 
-      ReplacementFound = true;
+      ReplacementFound |= true;
     }
   }
 
@@ -979,6 +998,8 @@ bool LLVMParser::walkSubAST(llvm::DominatorTree *DT,
         continue;
 
       int BitWidth = C.AST.front().I->getType()->getIntegerBitWidth();
+      if (BitWidth == 0 || BitWidth > 64)
+        continue;
 
       auto Modulus = getModulus(BitWidth);
 
@@ -1016,8 +1037,9 @@ bool LLVMParser::walkSubAST(llvm::DominatorTree *DT,
       }
 #endif
 
-      if (!SkipVerify)
+      if (!SkipVerify) {
         C.isValid = this->verify(C.AST, C.Replacement, C.Variables);
+      }
 
       if (C.isValid) {
         // Store valid replacement

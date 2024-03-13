@@ -14,8 +14,16 @@ llvm::cl::opt<bool>
              llvm::cl::desc("Print SMT2 formula for debugging purposes"),
              llvm::cl::value_desc("print-smt"), llvm::cl::init(false));
 
+// Add timeout parameter as string
+llvm::cl::opt<std::string>
+	timeout("timeout", llvm::cl::Optional,
+        			llvm::cl::desc("Timeout for Z3 solver (Default 100)"),
+        			llvm::cl::value_desc("timeout"), llvm::cl::init("100"));
+
 bool prove(z3::expr conjecture) {
   z3::context &c = conjecture.ctx();
+
+  Z3_global_param_set("timeout", timeout.c_str());
 
   auto t = (z3::tactic(c, "simplify") & z3::tactic(c, "bit-blast") &
             z3::tactic(c, "smt"));

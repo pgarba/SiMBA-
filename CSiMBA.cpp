@@ -94,7 +94,7 @@ cl::opt<bool>
 cl::opt<bool> RunOptimizer(
     "optimize", cl::Optional,
     cl::desc("Optimize LLVM IR before simplification (Default true)"),
-    cl::value_desc("optimize"), cl::init(false));
+    cl::value_desc("optimize"), cl::init(true));
 
 cl::opt<bool> Debug("simba-debug", cl::Optional,
                     cl::desc("Print debug information (Default false)"),
