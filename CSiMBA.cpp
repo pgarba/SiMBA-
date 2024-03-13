@@ -94,7 +94,7 @@ cl::opt<bool>
 cl::opt<bool> RunOptimizer(
     "optimize", cl::Optional,
     cl::desc("Optimize LLVM IR before simplification (Default true)"),
-    cl::value_desc("optimize"), cl::init(true));
+    cl::value_desc("optimize"), cl::init(false));
 
 cl::opt<bool> Debug("simba-debug", cl::Optional,
                     cl::desc("Print debug information (Default false)"),
@@ -288,8 +288,8 @@ void SimplifyLLVMDataBase() {
 void SimplifyLLVMModule() {
   outs() << "[+] Loading LLVM Module: '" << StrIR << "'\n";
 
-  LSiMBA::LLVMParser Parser(StrIR, Output, BitCount, RunParallel, UseFastCheck,
-                            RunOptimizer, Debug, ProveZ3);
+  LSiMBA::LLVMParser Parser(StrIR, Output, RunParallel, UseFastCheck,
+                            RunOptimizer, RunOptimizer, Debug, ProveZ3);
 
   auto start = high_resolution_clock::now();
 

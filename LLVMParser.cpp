@@ -704,10 +704,6 @@ bool LLVMParser::rewriteIntrinsics() {
 bool LLVMParser::isSupportedInstruction(llvm::Value *V) {
   // We dont support AShr as GAMBA does not support it, for now
   if (auto BO = dyn_cast<BinaryOperator>(V)) {
-    if (BO->getOpcode() == Instruction::AShr) {
-      return false;
-    }
-
     return ConstantExpr::isSupportedBinOp(BO->getOpcode());
   }
 
