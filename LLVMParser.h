@@ -11,7 +11,6 @@
 
 #include <map>
 #include <unordered_set>
-#include <mutex>
 
 #include <llvm/IR/Instructions.h>
 
@@ -83,8 +82,6 @@ public:
   int getInstructionCountAfter();
 
 private:
-  std::recursive_mutex Mtx;
-
   std::string OutputFile = "";
 
   bool Parallel;
