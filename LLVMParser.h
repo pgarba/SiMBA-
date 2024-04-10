@@ -12,6 +12,7 @@
 #include <map>
 #include <unordered_set>
 
+#include <llvm/ADT/SmallPtrSet.h>
 #include <llvm/IR/Instructions.h>
 
 #include "splitmix64.h"
@@ -147,6 +148,10 @@ private:
   void extractCandidates(llvm::Function &F,
                          std::vector<MBACandidate> &Candidates);
 
+  bool constainsReplacedInstructions(
+      llvm::SmallPtrSet<llvm::Instruction *, 16> &ReplacedInstructions,
+      MBACandidate &Cand);
+
   bool findReplacements(llvm::DominatorTree *DT,
                         std::vector<MBACandidate> &Candidates);
 
@@ -190,6 +195,9 @@ private:
       z3::context &Z3Ctx, llvm::SmallVectorImpl<BFSEntry> &AST,
       llvm::SmallVectorImpl<llvm::Value *> &Variables,
       std::map<std::string, z3::expr *> &VarMap, int OverrideBitWidth = 0);
+
+  z3::expr LLVMParser::boolToBV(z3::context &Z3Ctx, z3::expr &BoolExpr,
+                                int BitWidth);
 
   z3::expr *getZ3Val(z3::context &Z3Ctx, llvm::Value *V,
                      llvm::DenseMap<llvm::Value *, z3::expr *> &ValueMap,

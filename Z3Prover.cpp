@@ -16,9 +16,9 @@ llvm::cl::opt<bool>
 
 // Add timeout parameter as string
 llvm::cl::opt<std::string>
-	timeout("timeout", llvm::cl::Optional,
-        			llvm::cl::desc("Timeout for Z3 solver (Default 100)"),
-        			llvm::cl::value_desc("timeout"), llvm::cl::init("100"));
+    timeout("timeout", llvm::cl::Optional,
+            llvm::cl::desc("Timeout for Z3 solver (Default 500)"),
+            llvm::cl::value_desc("timeout"), llvm::cl::init("500"));
 
 bool prove(z3::expr conjecture) {
   z3::context &c = conjecture.ctx();
@@ -29,13 +29,13 @@ bool prove(z3::expr conjecture) {
             z3::tactic(c, "smt"));
   auto s = t.mk_solver();
 
-  s.add(!conjecture);
+  s.add(conjecture);
 
   if (PrintSMT) {
     llvm::outs() << "[SMT2 Start]\n" << s.to_smt2() << "[SMT2 End]\n";
   }
 
-  if (s.check() == z3::unsat) {
+  if (s.check() == z3::sat) {
     return true;
   } else {
     return false;

@@ -116,7 +116,7 @@ LLVMParser::LLVMParser(llvm::Function *F, bool Parallel, bool Verify,
 LLVMParser::~LLVMParser() {}
 
 int LLVMParser::simplify() {
-  int Count = this->extractAndSimplify();
+  auto Count = this->extractAndSimplify();
 
   this->InstructionCountAfter = getInstructionCount(M);
 
@@ -249,6 +249,10 @@ int LLVMParser::extractAndSimplify() {
   for (auto &F : *M) {
     // If F set only work on F
     if (this->F && (&F != this->F)) {
+      continue;
+    }
+
+    if (F.isDeclaration()) {
       continue;
     }
 
@@ -568,7 +572,7 @@ bool LLVMParser::verify(llvm::SmallVectorImpl<BFSEntry> &AST,
 
     // Prove expressions
     auto start = high_resolution_clock::now();
-    auto Result = prove(((Z3Exp0 == Z3Exp1)));
+    auto Result = prove((((Z3Exp0 - Z3Exp1) == 0)));
     auto stop = high_resolution_clock::now();
 
     if (this->Debug) {
@@ -601,8 +605,8 @@ bool LLVMParser::runLLVMOptimizer(bool Initial) {
   builder.LibraryInfo = TLII;
   builder.DisableUnrollLoops = true;
   builder.MergeFunctions = false;
-  builder.VerifyInput = false;
-  builder.VerifyOutput = false;
+  builder.VerifyInput = true;
+  builder.VerifyOutput = true;
 
   builder.populateModulePassManager(module_manager);
 
@@ -699,6 +703,14 @@ bool LLVMParser::isSupportedInstruction(llvm::Value *V) {
   }
 
   if (isa<SExtInst>(V)) {
+    return true;
+  }
+
+  if (isa<SelectInst>(V)) {
+    return true;
+  }
+
+  if (isa<ICmpInst>(V)) {
     return true;
   }
 
@@ -829,6 +841,17 @@ void LLVMParser::extractCandidates(llvm::Function &F,
 #endif
 }
 
+bool LLVMParser::constainsReplacedInstructions(
+    SmallPtrSet<llvm::Instruction *, 16> &ReplacedInstructions,
+    MBACandidate &Cand) {
+  for (auto &E : Cand.AST) {
+    if (ReplacedInstructions.find(E.I) != ReplacedInstructions.end()) {
+      return true;
+    }
+  }
+  return false;
+}
+
 bool LLVMParser::findReplacements(llvm::DominatorTree *DT,
                                   std::vector<MBACandidate> &Candidates) {
   if (Candidates.empty()) {
@@ -857,6 +880,15 @@ bool LLVMParser::findReplacements(llvm::DominatorTree *DT,
 
 #endif
 
+  // Sort Candidates by AST size
+  std::sort(Candidates.begin(), Candidates.end(),
+            [](const MBACandidate &A, const MBACandidate &B) {
+              return A.AST.size() > B.AST.size();
+            });
+
+  // To not solve things twice we keep track of replaced instructions
+  llvm::SmallPtrSet<llvm::Instruction *, 16> ReplacedInstructions;
+
   for (int i = 0; i < Candidates.size(); i++) {
     auto &Cand = Candidates[i];
     int s = Cand.AST.size();
@@ -884,6 +916,15 @@ bool LLVMParser::findReplacements(llvm::DominatorTree *DT,
 
     // Dont work on vector types
     if (Cand.AST.front().I->getType()->isVectorTy()) {
+      Cand.isValid = false;
+      continue;
+    }
+
+    // Check if we already replaced this instruction
+    if (constainsReplacedInstructions(ReplacedInstructions, Cand)) {
+#ifdef DEBUG_SIMPLIFICATION
+      outs() << "[*] Skipping already replaced instruction\n";
+#endif
       Cand.isValid = false;
       continue;
     }
@@ -944,6 +985,13 @@ bool LLVMParser::findReplacements(llvm::DominatorTree *DT,
       if (this->Debug) {
         outs() << "[*] Full AST Simplified Expression: " << Cand.Replacement
                << "\n";
+      }
+
+      // Fill vector with replaced instructions to not solve them again
+      for (auto &E : Cand.AST) {
+        if (E.I->getType()->isIntegerTy()) {
+          ReplacedInstructions.insert(E.I);
+        }
       }
 
       ReplacementFound |= true;
@@ -1410,6 +1458,16 @@ LLVMParser::evaluateAST(llvm::SmallVectorImpl<BFSEntry> &AST,
       InstResult = ConstantExpr::getSExt(
           getVal(SExt->getOperand(0), ValueStack, Variables, Par),
           SExt->getType());
+    } else if (auto SI = dyn_cast<SelectInst>(CurInst)) {
+      InstResult = ConstantExpr::getSelect(
+          getVal(SI->getOperand(0), ValueStack, Variables, Par),
+          getVal(SI->getOperand(1), ValueStack, Variables, Par),
+          getVal(SI->getOperand(2), ValueStack, Variables, Par));
+    } else if (auto CI = dyn_cast<ICmpInst>(CurInst)) {
+      InstResult = ConstantExpr::getICmp(
+          CI->getPredicate(),
+          getVal(CI->getOperand(0), ValueStack, Variables, Par),
+          getVal(CI->getOperand(1), ValueStack, Variables, Par));
     } else {
       CurInst->dump();
       report_fatal_error("[!] Not supported instruction!", false);
@@ -1603,6 +1661,78 @@ z3::expr LLVMParser::getZ3ExpressionFromAST(
           SExt->getType()->getIntegerBitWidth() -
               SExt->getOperand(0)->getType()->getIntegerBitWidth());
       ValueMAP[SExt] = new z3::expr(exp);
+    } else if (auto SI = dyn_cast<SelectInst>(CurInst)) {
+      // Select
+      auto Cond = getZ3Val(Z3Ctx, SI->getCondition(), ValueMAP, false);
+      auto VTrue = getZ3Val(Z3Ctx, SI->getTrueValue(), ValueMAP, false);
+      auto VFalse = getZ3Val(Z3Ctx, SI->getFalseValue(), ValueMAP, false);
+
+      // Get BitWidth
+      int VTrueBitWidth = SI->getTrueValue()->getType()->getIntegerBitWidth();
+      int VFalseBitWidth = SI->getFalseValue()->getType()->getIntegerBitWidth();
+
+      // Cast to bool if needed
+      if (Cond->get_sort().is_bool() == false) {
+        Cond = new z3::expr(Cond->bit2bool(0));
+      }
+
+      // Cast bool to bv if needed
+      if (VTrueBitWidth == 1 && VTrue->get_sort().is_bool() == false) {
+        VTrue = new z3::expr(VTrue->bit2bool(0));
+      }
+
+      // Check is cast to bool is needed
+      if (VFalseBitWidth == 1 && VFalse->get_sort().is_bool() == false) {
+        VFalse = new z3::expr(VFalse->bit2bool(0));
+      }
+
+      auto Res = z3::ite(*Cond, *VTrue, *VFalse);
+
+      ValueMAP[SI] = new z3::expr(
+          boolToBV(Z3Ctx, Res, SI->getType()->getIntegerBitWidth()));
+    } else if (auto ICmp = dyn_cast<ICmpInst>(CurInst)) {
+      // ICmp
+      auto V0 = getZ3Val(Z3Ctx, ICmp->getOperand(0), ValueMAP, false);
+      auto V1 = getZ3Val(Z3Ctx, ICmp->getOperand(1), ValueMAP, false);
+
+      z3::expr *Res = nullptr;
+      switch (ICmp->getPredicate()) {
+      case llvm::ICmpInst::ICMP_EQ: {
+        Res = new z3::expr(*V0 == *V1);
+      } break;
+      case llvm::ICmpInst::ICMP_NE:
+        Res = new z3::expr(*V0 != *V1);
+        break;
+      case llvm::ICmpInst::ICMP_UGT:
+        Res = new z3::expr(z3::ugt(*V0, *V1));
+        break;
+      case llvm::ICmpInst::ICMP_UGE:
+        Res = new z3::expr(z3::uge(*V0, *V1));
+        break;
+      case llvm::ICmpInst::ICMP_ULT:
+        Res = new z3::expr(z3::ult(*V0, *V1));
+        break;
+      case llvm::ICmpInst::ICMP_ULE:
+        Res = new z3::expr(z3::ule(*V0, *V1));
+        break;
+      case llvm::ICmpInst::ICMP_SGT:
+        Res = new z3::expr(*V0 > *V1);
+        break;
+      case llvm::ICmpInst::ICMP_SGE:
+        Res = new z3::expr(*V0 >= *V1);
+        break;
+      case llvm::ICmpInst::ICMP_SLT:
+        Res = new z3::expr(*V0 < *V1);
+        break;
+      case llvm::ICmpInst::ICMP_SLE:
+        Res = new z3::expr(*V0 > *V1);
+        break;
+      default:
+        report_fatal_error("Unsupported Predicate!", false);
+      }
+
+      ValueMAP[ICmp] = new z3::expr(
+          boolToBV(Z3Ctx, *Res, CurInst->getType()->getIntegerBitWidth()));
     } else {
       CurInst->dump();
       report_fatal_error("[getZ3ExpressionFromAST] Unsupported instruction!");
@@ -1632,6 +1762,19 @@ z3::expr LLVMParser::getZ3ExpressionFromAST(
   }
 
   return Result;
+}
+
+z3::expr LLVMParser::boolToBV(z3::context &Z3Ctx, z3::expr &BoolExpr,
+                              int BitWidth) {
+  // Do nothing if already bv
+  if (!BoolExpr.get_sort().is_bool()) {
+    return BoolExpr;
+  }
+
+  auto One = Z3Ctx.bv_val(1, BitWidth);
+  auto Zero = Z3Ctx.bv_val(0, BitWidth);
+
+  return z3::ite(BoolExpr, One, Zero);
 }
 
 z3::expr *
