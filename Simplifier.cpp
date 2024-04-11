@@ -834,7 +834,12 @@ void Simplifier::subtract_coefficient(const llvm::APInt &coeff, int firstStart,
       // The first variable is true by design of the for loops.
       if (i != firstStart && (variables.size() == 1 ||
                               this->are_variables_true(i, variables, 1))) {
-        this->resultVector[i] -= coeff;
+        if (coeff.getBitWidth() == this->resultVector[i].getBitWidth()) {
+          this->resultVector[i] -= coeff;
+        } else {
+          this->resultVector[i] -=
+              coeff.sextOrTrunc(this->resultVector[i].getBitWidth());
+        }
       }
     }
   }
