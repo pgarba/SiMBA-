@@ -701,7 +701,13 @@ void Simplifier::try_refine(std::string &expr) {
   auto constant = this->resultVector[0];
   if (constant != 0) {
     for (int i = 0; i < this->resultVector.size(); i++) {
-      this->resultVector[i] -= constant;
+      if (this->resultVector[i].getBitWidth() != constant.getBitWidth()) {
+        this->resultVector[i] -=
+            constant.sextOrTrunc(this->resultVector[i].getBitWidth());
+      } else {
+        this->resultVector[i] -= constant;
+      }
+
       this->resultVector[i] = this->mod_red(
           this->resultVector[i], this->resultVector[i].isSignBitSet());
     }
@@ -732,8 +738,13 @@ void Simplifier::try_refine(std::string &expr) {
       uniqueValues.push_back(r);
     }
   }
-  std::sort(uniqueValues.begin(), uniqueValues.end(),
-            [](APInt &L, APInt &R) { return !R.ule(L); });
+  std::sort(uniqueValues.begin(), uniqueValues.end(), [](APInt &L, APInt &R) {
+    if (L.getBitWidth() != R.getBitWidth()) {
+      !R.ule(L.sextOrTrunc(R.getBitWidth()));
+    } else {
+      return !R.ule(L);
+    }
+  });
 
   if (l == 4 && constant == 0) {
     // (6) We can still come down to 2 expressions if we can express one

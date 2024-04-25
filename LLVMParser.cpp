@@ -56,6 +56,11 @@ llvm::cl::opt<int> MinASTSize("min-ast-size", cl::Optional,
                               cl::desc("Minimum AST size for simplification"),
                               cl::value_desc("min-ast-size"), cl::init(4));
 
+llvm::cl::opt<bool>
+    ShouldWalkSubAST("walk-sub-ast", cl::Optional,
+                     cl::desc("Walk sub AST if full AST to not match"),
+                     cl::value_desc("walk-sub-aste"), cl::init(false));
+
 namespace LSiMBA {
 
 llvm::LLVMContext LLVMParser::Context;
@@ -980,7 +985,8 @@ bool LLVMParser::findReplacements(llvm::DominatorTree *DT,
 
     if (Cand.isValid == false) {
       // Could not simplify the whole AST so walk through SubASTs
-      ReplacementFound |= walkSubAST(DT, Cand.AST, SubASTCandidates);
+      if (ShouldWalkSubAST)
+        ReplacementFound |= walkSubAST(DT, Cand.AST, SubASTCandidates);
     } else {
       if (this->Debug) {
         outs() << "[*] Full AST Simplified Expression: " << Cand.Replacement
