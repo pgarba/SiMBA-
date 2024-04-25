@@ -740,7 +740,7 @@ void Simplifier::try_refine(std::string &expr) {
   }
   std::sort(uniqueValues.begin(), uniqueValues.end(), [](APInt &L, APInt &R) {
     if (L.getBitWidth() != R.getBitWidth()) {
-      !R.ule(L.sextOrTrunc(R.getBitWidth()));
+      return !R.ule(L.sextOrTrunc(R.getBitWidth()));
     } else {
       return !R.ule(L);
     }
