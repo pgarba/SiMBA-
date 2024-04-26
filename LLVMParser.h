@@ -159,6 +159,8 @@ private:
               llvm::SmallVectorImpl<BFSEntry> &AST,
               llvm::SmallVectorImpl<llvm::Value *> &Variables, bool KeepRoot);
 
+  int getASTSize(llvm::SmallVectorImpl<BFSEntry> &AST);
+
   bool walkSubAST(llvm::DominatorTree *DT, llvm::SmallVectorImpl<BFSEntry> &AST,
                   std::vector<MBACandidate> &Candidates);
 

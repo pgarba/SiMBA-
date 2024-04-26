@@ -9,16 +9,16 @@
 #include "llvm/IRReader/IRReader.h"
 #include "llvm/Support/CommandLine.h"
 
-llvm::cl::opt<bool>
-    PrintSMT("print-smt", llvm::cl::Optional,
-             llvm::cl::desc("Print SMT2 formula for debugging purposes"),
-             llvm::cl::value_desc("print-smt"), llvm::cl::init(false));
+llvm::cl::opt<bool> PrintSMT(
+    "print-smt", llvm::cl::Optional,
+    llvm::cl::desc("Print SMT2 formula for debugging purposes"),
+    llvm::cl::value_desc("print-smt"), llvm::cl::init(false));
 
 // Add timeout parameter as string
-llvm::cl::opt<std::string>
-    timeout("timeout", llvm::cl::Optional,
-            llvm::cl::desc("Timeout for Z3 solver (Default 500)"),
-            llvm::cl::value_desc("timeout"), llvm::cl::init("500"));
+llvm::cl::opt<std::string> timeout(
+    "timeout", llvm::cl::Optional,
+    llvm::cl::desc("Timeout for Z3 solver (Default 500)"),
+    llvm::cl::value_desc("timeout"), llvm::cl::init("500"));
 
 bool prove(z3::expr conjecture) {
   z3::context &c = conjecture.ctx();
@@ -35,7 +35,8 @@ bool prove(z3::expr conjecture) {
     llvm::outs() << "[SMT2 Start]\n" << s.to_smt2() << "[SMT2 End]\n";
   }
 
-  if (s.check() == z3::sat) {
+  auto R = s.check();
+  if (R == z3::unsat) {
     return true;
   } else {
     return false;
@@ -56,7 +57,7 @@ bool proveReplacement(std::string &expr0, std::string &expr1, int BitWidth,
       getZ3ExprFromString(Z3Ctx, expr1, BitWidth, Variables, VarTypes, VarMap);
 
   // Prove
-  auto Result = prove(((Z3Exp0 == Z3Exp1)));
+  auto Result = prove(((Z3Exp0 != Z3Exp1)));
 
   // Clean up variables
   for (auto v : VarMap) {
