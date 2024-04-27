@@ -367,7 +367,7 @@ int LLVMParser::extractAndSimplify() {
   }
 
   // Optimize if any replacements
-  if (MBASimplified && this->OptimizeBefore) {
+  if (MBASimplified && this->OptimizeAfter) {
     this->runLLVMOptimizer();
   }
 
@@ -506,7 +506,7 @@ bool LLVMParser::verify(llvm::Function *F0, llvm::Function *F1,
   return true;
 }
 
-bool LLVMParser::verify(llvm::SmallVectorImpl<BFSEntry> &AST,
+bool LLVMParser::verify(int ASTSize, llvm::SmallVectorImpl<BFSEntry> &AST,
                         std::string &SimpExpr,
                         llvm::SmallVectorImpl<llvm::Value *> &Variables) {
   int VNumber = Variables.size();
@@ -543,9 +543,9 @@ bool LLVMParser::verify(llvm::SmallVectorImpl<BFSEntry> &AST,
     auto AP_R1 = eval(Expr1_replVar, par, BitWidth, &Operations);
 
     // Check if replacement is cheaper than original expression
-    if (getASTSize(AST) <= Operations) {
+    if (ASTSize <= Operations) {
 #ifdef DEBUG_SIMPLIFICATION
-      outs() << "[!] Simplification is no improvement: AST: " << getASTSize(AST)
+      outs() << "[!] Simplification is no improvement: AST: " << ASTSize
              << " Operations: " << Operations << "\n";
 #endif
       return false;
@@ -905,6 +905,7 @@ bool LLVMParser::findReplacements(llvm::DominatorTree *DT,
   for (int i = 0; i < Candidates.size(); i++) {
     auto &Cand = Candidates[i];
     getAST(DT, Cand.Candidate, Cand.AST, Cand.Variables, true);
+    Cand.ASTSize = getASTSize(Cand.AST);
   }
 
   auto EndTime = high_resolution_clock::now();
@@ -925,8 +926,7 @@ bool LLVMParser::findReplacements(llvm::DominatorTree *DT,
 
   for (int i = 0; i < Candidates.size(); i++) {
     auto &Cand = Candidates[i];
-    int s = getASTSize(Cand.AST);
-    if (s < MinASTSize) {
+    if (Cand.ASTSize < MinASTSize) {
       continue;
     }
 
@@ -1009,7 +1009,8 @@ bool LLVMParser::findReplacements(llvm::DominatorTree *DT,
 
     // Verify is replacement is valid
     if (!SkipVerify) {
-      Cand.isValid = this->verify(Cand.AST, Cand.Replacement, Cand.Variables);
+      Cand.isValid = this->verify(Cand.ASTSize, Cand.AST, Cand.Replacement,
+                                  Cand.Variables);
     }
 
     if (Cand.isValid == false) {
@@ -1083,8 +1084,9 @@ bool LLVMParser::walkSubAST(llvm::DominatorTree *DT,
       MBACandidate C;
       C.Candidate = BinOp;
       this->getAST(DT, BinOp, C.AST, C.Variables, true);
+      C.ASTSize = getASTSize(C.AST);
 
-      if (getASTSize(C.AST) < MinASTSize) continue;
+      if (C.ASTSize < MinASTSize) continue;
 
       int BitWidth = C.AST.front().I->getType()->getIntegerBitWidth();
       if (BitWidth == 0 || BitWidth > 64) continue;
@@ -1126,7 +1128,7 @@ bool LLVMParser::walkSubAST(llvm::DominatorTree *DT,
 #endif
 
       if (!SkipVerify) {
-        C.isValid = this->verify(C.AST, C.Replacement, C.Variables);
+        C.isValid = this->verify(C.ASTSize, C.AST, C.Replacement, C.Variables);
       }
 
       if (C.isValid) {

@@ -289,7 +289,7 @@ void SimplifyLLVMModule() {
   outs() << "[+] Loading LLVM Module: '" << StrIR << "'\n";
 
   LSiMBA::LLVMParser Parser(StrIR, Output, RunParallel, UseFastCheck,
-                            RunOptimizer, RunOptimizer, Debug, ProveZ3);
+                            false, RunOptimizer, Debug, ProveZ3);
 
   auto start = high_resolution_clock::now();
 

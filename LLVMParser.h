@@ -40,6 +40,7 @@ typedef struct BFSEntry {
 typedef struct MBACandidate {
   llvm::Instruction *Candidate;
 
+  int ASTSize = 0;
   llvm::SmallVector<BFSEntry, 16> AST;
 
   llvm::SmallVector<llvm::Value *, 8> Variables;
@@ -53,15 +54,15 @@ class LLVMParser {
 public:
   LLVMParser(const std::string &filename, const std::string &OutputFile,
              bool Parallel = true, bool Verify = true,
-             bool OptimizeBefore = true, bool OptimizeAfter = true,
+             bool OptimizeBefore = false, bool OptimizeAfter = true,
              bool Debug = false, bool Prove = false);
 
   LLVMParser(llvm::Module *M, bool Parallel = true, bool Verify = true,
-             bool OptimizeBefore = true, bool OptimizeAfter = true,
+             bool OptimizeBefore = false, bool OptimizeAfter = true,
              bool Debug = false, bool Prove = false);
 
   LLVMParser(llvm::Function *F, bool Parallel = true, bool Verify = true,
-             bool OptimizeBefore = true, bool OptimizeAfter = true,
+             bool OptimizeBefore = false, bool OptimizeAfter = true,
              bool Debug = false, bool Prove = false);
 
   ~LLVMParser();
@@ -127,7 +128,7 @@ private:
 
   bool verify(llvm::Function *F0, llvm::Function *F1, llvm::APInt &Modulus);
 
-  bool verify(llvm::SmallVectorImpl<BFSEntry> &AST, std::string &SimpExpr,
+  bool verify(int ASTSize, llvm::SmallVectorImpl<BFSEntry> &AST, std::string &SimpExpr,
               llvm::SmallVectorImpl<llvm::Value *> &Variables);
 
   llvm::Instruction *getSingleTerminator(llvm::Function &F);
