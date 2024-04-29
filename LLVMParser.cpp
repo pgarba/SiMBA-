@@ -22,6 +22,7 @@
 #include "llvm/Transforms/Utils/Evaluator.h"
 
 #include <z3++.h>
+#include <thread>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -1563,7 +1564,7 @@ llvm::Constant *LLVMParser::getConstantInt(llvm::Type *Ty, uint64_t Value) {
   return C;
 }
 
-llvm::Constant *LLVMParser::getConstantInt(llvm::Type *Ty, APInt &Value) {
+llvm::Constant *LLVMParser::getConstantInt(llvm::Type *Ty, APInt Value) {
   auto C = llvm::ConstantInt::get(Ty, Value);
   return C;
 }

@@ -189,7 +189,7 @@ private:
     Thread safe
   */
   llvm::Constant *getConstantInt(llvm::Type *Ty, uint64_t Value);
-  llvm::Constant *getConstantInt(llvm::Type *Ty, llvm::APInt &Value);
+  llvm::Constant *getConstantInt(llvm::Type *Ty, llvm::APInt Value);
 
   bool doesDominateInst(llvm::DominatorTree *DT, const llvm::Instruction *InstA,
                         const llvm::Instruction *InstB);
@@ -199,7 +199,7 @@ private:
       llvm::SmallVectorImpl<llvm::Value *> &Variables,
       std::map<std::string, z3::expr *> &VarMap, int OverrideBitWidth = 0);
 
-  z3::expr LLVMParser::boolToBV(z3::context &Z3Ctx, z3::expr &BoolExpr,
+  z3::expr boolToBV(z3::context &Z3Ctx, z3::expr &BoolExpr,
                                 int BitWidth);
 
   z3::expr *getZ3Val(z3::context &Z3Ctx, llvm::Value *V,
