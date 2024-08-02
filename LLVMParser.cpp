@@ -343,7 +343,7 @@ int LLVMParser::extractAndSimplify() {
   }
 
   // Optimize if any replacements
-  if (MBASimplified && this->OptimizeBefore) {
+  if (MBASimplified && this->OptimizeAfter) {
     this->runLLVMOptimizer();
   }
 
@@ -1075,8 +1075,6 @@ bool LLVMParser::walkSubAST(llvm::DominatorTree *DT,
       C.Candidate = BinOp;
 
       this->getAST(DT, BinOp, C.AST, C.Variables, true);
-
-      // Set Size
       C.ASTSize = getASTSize(C.AST);
 
       if (C.ASTSize < MinASTSize)
@@ -1561,7 +1559,7 @@ llvm::Constant *LLVMParser::getConstantInt(llvm::Type *Ty, uint64_t Value) {
   return C;
 }
 
-llvm::Constant *LLVMParser::getConstantInt(llvm::Type *Ty, APInt &Value) {
+llvm::Constant *LLVMParser::getConstantInt(llvm::Type *Ty, APInt Value) {
   auto C = llvm::ConstantInt::get(Ty, Value);
   return C;
 }
