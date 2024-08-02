@@ -21,12 +21,12 @@
 #include "llvm/Transforms/Utils/Cloning.h"
 #include "llvm/Transforms/Utils/Evaluator.h"
 
-#include <z3++.h>
 #include <memory>
 #include <mutex>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
+#include <z3++.h>
 
 #include "CSiMBA.h"
 #include "Modulo.h"
@@ -35,31 +35,31 @@
 #include "Z3Prover.h"
 #include "veque.h"
 
-// #define DEBUG_SIMPLIFICATION
+#define DEBUG_SIMPLIFICATION
 
 using namespace llvm;
 using namespace std;
 using namespace std::chrono;
 
-llvm::cl::opt<std::string> UseExternalSimplifier(
-    "external-simplifier", cl::Optional,
-    cl::desc("Path to external simplifier script for "
-             "simplification (Supports: SiMBA/GAMBA"),
-    cl::value_desc("external-simplifier"), cl::init(""));
+llvm::cl::opt<std::string>
+    UseExternalSimplifier("external-simplifier", cl::Optional,
+                          cl::desc("Path to external simplifier script for "
+                                   "simplification (Supports: SiMBA/GAMBA"),
+                          cl::value_desc("external-simplifier"), cl::init(""));
 
-llvm::cl::opt<int> MaxVarCount(
-    "max-var-count", cl::Optional,
-    cl::desc("Max variable count for simplification"),
-    cl::value_desc("max-var-count"), cl::init(5));
+llvm::cl::opt<int>
+    MaxVarCount("max-var-count", cl::Optional,
+                cl::desc("Max variable count for simplification"),
+                cl::value_desc("max-var-count"), cl::init(5));
 
 llvm::cl::opt<int> MinASTSize("min-ast-size", cl::Optional,
                               cl::desc("Minimum AST size for simplification"),
                               cl::value_desc("min-ast-size"), cl::init(4));
 
-llvm::cl::opt<bool> ShouldWalkSubAST(
-    "walk-sub-ast", cl::Optional,
-    cl::desc("Walk sub AST if full AST to not match"),
-    cl::value_desc("walk-sub-ast"), cl::init(false));
+llvm::cl::opt<bool>
+    ShouldWalkSubAST("walk-sub-ast", cl::Optional,
+                     cl::desc("Walk sub AST if full AST to not match"),
+                     cl::value_desc("walk-sub-ast"), cl::init(false));
 
 namespace LSiMBA {
 
@@ -69,18 +69,10 @@ LLVMParser::LLVMParser(const std::string &filename,
                        const std::string &OutputFile, bool Parallel,
                        bool Verify, bool OptimizeBefore, bool OptimizeAfter,
                        bool Debug, bool Prove)
-    : OutputFile(OutputFile),
-      Parallel(Parallel),
-      Verify(Verify),
-      OptimizeBefore(OptimizeBefore),
-      OptimizeAfter(OptimizeAfter),
-      Debug(Debug),
-      Prove(Prove),
-      SP64(filename.length()),
-      TLII(nullptr),
-      TLI(nullptr),
-      M(nullptr),
-      F(nullptr) {
+    : OutputFile(OutputFile), Parallel(Parallel), Verify(Verify),
+      OptimizeBefore(OptimizeBefore), OptimizeAfter(OptimizeAfter),
+      Debug(Debug), Prove(Prove), SP64(filename.length()), TLII(nullptr),
+      TLI(nullptr), M(nullptr), F(nullptr) {
   if (!this->parse(filename)) {
     llvm::errs() << "[!] Error: Could not parse file " << filename << "\n";
     return;
@@ -97,16 +89,9 @@ LLVMParser::LLVMParser(const std::string &filename,
 LLVMParser::LLVMParser(llvm::Module *M, bool Parallel, bool Verify,
                        bool OptimizeBefore, bool OptimizeAfter, bool Debug,
                        bool Prove)
-    : M(M),
-      F(nullptr),
-      Parallel(Parallel),
-      Verify(Verify),
-      OptimizeBefore(OptimizeBefore),
-      OptimizeAfter(OptimizeAfter),
-      Debug(Debug),
-      Prove(Prove),
-      SP64((uint64_t)M),
-      TLII(nullptr),
+    : M(M), F(nullptr), Parallel(Parallel), Verify(Verify),
+      OptimizeBefore(OptimizeBefore), OptimizeAfter(OptimizeAfter),
+      Debug(Debug), Prove(Prove), SP64((uint64_t)M), TLII(nullptr),
       TLI(nullptr) {
   // Create evaluator
 
@@ -120,16 +105,9 @@ LLVMParser::LLVMParser(llvm::Module *M, bool Parallel, bool Verify,
 LLVMParser::LLVMParser(llvm::Function *F, bool Parallel, bool Verify,
                        bool OptimizeBefore, bool OptimizeAfter, bool Debug,
                        bool Prove)
-    : M(F->getParent()),
-      F(F),
-      Parallel(Parallel),
-      Verify(Verify),
-      OptimizeBefore(OptimizeBefore),
-      OptimizeAfter(OptimizeAfter),
-      Debug(Debug),
-      Prove(Prove),
-      SP64((uint64_t)M),
-      TLII(nullptr),
+    : M(F->getParent()), F(F), Parallel(Parallel), Verify(Verify),
+      OptimizeBefore(OptimizeBefore), OptimizeAfter(OptimizeAfter),
+      Debug(Debug), Prove(Prove), SP64((uint64_t)M), TLII(nullptr),
       TLI(nullptr) {
   // Create evaluator
 
@@ -166,7 +144,8 @@ int LLVMParser::simplifyMBAFunctionsOnly() {
 }
 
 void LLVMParser::writeModule() {
-  if (this->OutputFile.empty()) return;
+  if (this->OutputFile.empty())
+    return;
 
   std::error_code EC;
   llvm::raw_fd_ostream OS(this->OutputFile, EC, llvm::sys::fs::OF_None);
@@ -297,7 +276,8 @@ int LLVMParser::extractAndSimplify() {
 
   auto start = high_resolution_clock::now();
   for (auto F : Functions) {
-    if (F->isDeclaration()) continue;
+    if (F->isDeclaration())
+      continue;
 
     if (F->getName().contains("_keep")) {
       if (this->Debug) {
@@ -328,7 +308,8 @@ int LLVMParser::extractAndSimplify() {
 
     // Apply replacements and optimize
     for (int i = 0; i < Candidates.size(); i++) {
-      if (Candidates[i].isValid == false) continue;
+      if (Candidates[i].isValid == false)
+        continue;
 
       if (this->Debug) {
         printAST(Candidates[i].AST);
@@ -337,11 +318,6 @@ int LLVMParser::extractAndSimplify() {
                  << " with " << countOperators(Candidates[i].Replacement)
                  << " operators!\n";
         }
-
-        /*
-        auto Input = getASTAsString(Candidates[i].AST, Candidates[i].Variables);
-        outs() << "Before Simba: '" << Input << "'\n";
-        */
       }
 
       std::vector<std::string> VNames;
@@ -378,10 +354,12 @@ int LLVMParser::simplifyMBAModule() {
   // Collect all functions
   std::vector<llvm::Function *> Functions;
   for (auto &F : *M) {
-    if (this->F && (&F != this->F)) continue;
+    if (this->F && (&F != this->F))
+      continue;
 
     // Skip simplifed functions
-    if (F.getName().startswith("MBA_Simp")) continue;
+    if (F.getName().startswith("MBA_Simp"))
+      continue;
 
     // Check if any load/stores are in the function
     if (hasLoadStores(F))
@@ -506,7 +484,7 @@ bool LLVMParser::verify(llvm::Function *F0, llvm::Function *F1,
   return true;
 }
 
-bool LLVMParser::verify(llvm::SmallVectorImpl<BFSEntry> &AST,
+bool LLVMParser::verify(int ASTSize, llvm::SmallVectorImpl<BFSEntry> &AST,
                         std::string &SimpExpr,
                         llvm::SmallVectorImpl<llvm::Value *> &Variables) {
   int VNumber = Variables.size();
@@ -543,9 +521,9 @@ bool LLVMParser::verify(llvm::SmallVectorImpl<BFSEntry> &AST,
     auto AP_R1 = eval(Expr1_replVar, par, BitWidth, &Operations);
 
     // Check if replacement is cheaper than original expression
-    if (getASTSize(AST) <= Operations) {
+    if (ASTSize <= Operations) {
 #ifdef DEBUG_SIMPLIFICATION
-      outs() << "[!] Simplification is no improvement: AST: " << getASTSize(AST)
+      outs() << "[!] Simplification is no improvement: AST: " << ASTSize
              << " Operations: " << Operations << "\n";
 #endif
       return false;
@@ -661,16 +639,19 @@ bool LLVMParser::rewriteIntrinsics() {
   // Transform llvm.fshl.i64 to rotate left code (if possible)
   Transformations.emplace("llvm.fshl.i64", [&]() -> bool {
     auto Intri = this->M->getFunction("llvm.fshl.i64");
-    if (!Intri) return false;
+    if (!Intri)
+      return false;
 
     SmallVector<llvm::Instruction *, 4> ToDelete;
 
     for (auto U : Intri->users()) {
       auto CI = dyn_cast<CallInst>(U);
-      if (!CI) continue;
+      if (!CI)
+        continue;
 
       // Arg0 and Arg1 has to be equal to be a rotl
-      if (CI->getArgOperand(0) != CI->getArgOperand(0)) continue;
+      if (CI->getArgOperand(0) != CI->getArgOperand(0))
+        continue;
 
       /*
         %3 = shl i64 %0, %1
@@ -751,121 +732,122 @@ void LLVMParser::extractCandidates(llvm::Function &F,
   // Instruction to look for 'store', 'select', 'gep', 'icmp', 'ret'
   for (inst_iterator I = inst_begin(F), E = inst_end(F); I != E; ++I) {
     switch (I->getOpcode()) {
-      case Instruction::Store: {
-        // Check Candidate
-        auto SI = dyn_cast<StoreInst>(&*I);
-        auto Op = SI->getValueOperand();
-        if (!isVisited(Op) && isSupportedInstruction(Op)) {
-          MBACandidate Cand;
-          Cand.Candidate = dyn_cast<Instruction>(Op);
-          Candidates.push_back(Cand);
-          Visited.insert(Op);
-        }
-      } break;
-      case Instruction::GetElementPtr: {
-        auto GEP = dyn_cast<GetElementPtrInst>(&*I);
-        auto Index = GEP->getOperand(GEP->getNumOperands() - 1);
+    case Instruction::Store: {
+      // Check Candidate
+      auto SI = dyn_cast<StoreInst>(&*I);
+      auto Op = SI->getValueOperand();
+      if (!isVisited(Op) && isSupportedInstruction(Op)) {
+        MBACandidate Cand;
+        Cand.Candidate = dyn_cast<Instruction>(Op);
+        Candidates.push_back(Cand);
+        Visited.insert(Op);
+      }
+    } break;
+    case Instruction::GetElementPtr: {
+      auto GEP = dyn_cast<GetElementPtrInst>(&*I);
+      auto Index = GEP->getOperand(GEP->getNumOperands() - 1);
 
-        if (isSupportedInstruction(Index->stripPointerCasts())) {
-          if (isVisited(Index->stripPointerCasts())) continue;
+      if (isSupportedInstruction(Index->stripPointerCasts())) {
+        if (isVisited(Index->stripPointerCasts()))
+          continue;
 
-          MBACandidate Cand;
-          Cand.Candidate = dyn_cast<Instruction>(Index->stripPointerCasts());
-          Candidates.push_back(Cand);
-          Visited.insert(Index->stripPointerCasts());
-        }
-      } break;
-      case Instruction::ICmp: {
-        for (unsigned int i = 0; i < I->getNumOperands(); i++) {
-          if (isSupportedInstruction(I->getOperand(i)->stripPointerCasts())) {
-            if (isVisited(I->getOperand(i)->stripPointerCasts())) continue;
-            MBACandidate Cand;
-            Cand.Candidate =
-                dyn_cast<Instruction>(I->getOperand(i)->stripPointerCasts());
-            Candidates.push_back(Cand);
-            Visited.insert(I->getOperand(i)->stripPointerCasts());
-          }
-        }
-      } break;
-      case Instruction::Ret: {
-        auto RI = dyn_cast<ReturnInst>(&*I);
-        if (!RI->getReturnValue()) continue;
-
-        if (isSupportedInstruction(RI->getReturnValue()->stripPointerCasts())) {
-          if (isVisited(RI->getReturnValue()->stripPointerCasts())) continue;
+        MBACandidate Cand;
+        Cand.Candidate = dyn_cast<Instruction>(Index->stripPointerCasts());
+        Candidates.push_back(Cand);
+        Visited.insert(Index->stripPointerCasts());
+      }
+    } break;
+    case Instruction::ICmp: {
+      for (unsigned int i = 0; i < I->getNumOperands(); i++) {
+        if (isSupportedInstruction(I->getOperand(i)->stripPointerCasts())) {
+          if (isVisited(I->getOperand(i)->stripPointerCasts()))
+            continue;
           MBACandidate Cand;
           Cand.Candidate =
-              dyn_cast<Instruction>(RI->getReturnValue()->stripPointerCasts());
+              dyn_cast<Instruction>(I->getOperand(i)->stripPointerCasts());
           Candidates.push_back(Cand);
-          Visited.insert(RI->getReturnValue()->stripPointerCasts());
+          Visited.insert(I->getOperand(i)->stripPointerCasts());
         }
-      } break;
-        /*
-      case Instruction::Call: {
-        auto CI = dyn_cast<CallInst>(&*I);
-        for (unsigned int i = 0; i < CI->arg_size(); i++) {
-          if (isSupportedInstruction(
-                  CI->getArgOperand(i)->stripPointerCasts())) {
-            if (isVisited(CI->getArgOperand(i)->stripPointerCasts())) continue;
-
-            MBACandidate Cand;
-            Cand.Candidate = dyn_cast<Instruction>(
-                CI->getArgOperand(i)->stripPointerCasts());
-            Candidates.push_back(Cand);
-            Visited.insert(CI->getArgOperand(i)->stripPointerCasts());
-          }
-        }
-      } break;
-      case Instruction::Select: {
-        for (unsigned int i = 0; i < I->getNumOperands(); i++) {
-          if (isSupportedInstruction(I->getOperand(i)->stripPointerCasts())) {
-            if (isVisited(I->getOperand(i)->stripPointerCasts())) continue;
-            MBACandidate Cand;
-            Cand.Candidate =
-                dyn_cast<Instruction>(I->getOperand(i)->stripPointerCasts());
-            Candidates.push_back(Cand);
-            Visited.insert(I->getOperand(i)->stripPointerCasts());
-          }
-        }
-      } break;
-      case Instruction::PHI: {
-        auto Phi = dyn_cast<PHINode>(&*I);
-        for (auto &Inc : Phi->incoming_values()) {
-          if (isSupportedInstruction(Inc->stripPointerCasts())) {
-            if (isVisited(Inc->stripPointerCasts())) continue;
-            MBACandidate Cand;
-            Cand.Candidate = dyn_cast<Instruction>(Inc->stripPointerCasts());
-            Candidates.push_back(Cand);
-            Visited.insert(Inc->stripPointerCasts());
-          }
-        }
-      } break;
-      */
-      case Instruction::Add:
-      case Instruction::Sub:
-      case Instruction::Mul:
-      case Instruction::Shl:
-      case Instruction::Xor:
-        /*
-        case Instruction::Or:
-        case Instruction::And:
-        case Instruction::LShr:
-        case Instruction::AShr:
-        case Instruction::URem:
-        case Instruction::SRem:
-        case Instruction::IntToPtr:
-        case Instruction::BitCast:
-        */
-        {
-          if (isVisited(&*I)) continue;
-          MBACandidate Cand;
-          Cand.Candidate = dyn_cast<Instruction>(&*I);
-          Candidates.push_back(Cand);
-          Visited.insert(&*I);
-        }
-        break;
-      default: {
       }
+    } break;
+    case Instruction::Ret: {
+      auto RI = dyn_cast<ReturnInst>(&*I);
+      if (!RI->getReturnValue())
+        continue;
+
+      if (isSupportedInstruction(RI->getReturnValue()->stripPointerCasts())) {
+        if (isVisited(RI->getReturnValue()->stripPointerCasts()))
+          continue;
+        MBACandidate Cand;
+        Cand.Candidate =
+            dyn_cast<Instruction>(RI->getReturnValue()->stripPointerCasts());
+        Candidates.push_back(Cand);
+        Visited.insert(RI->getReturnValue()->stripPointerCasts());
+      }
+    } break;
+      /*
+    case Instruction::Call: {
+      auto CI = dyn_cast<CallInst>(&*I);
+      for (unsigned int i = 0; i < CI->arg_size(); i++) {
+        if (isSupportedInstruction(
+                CI->getArgOperand(i)->stripPointerCasts())) {
+          if (isVisited(CI->getArgOperand(i)->stripPointerCasts())) continue;
+
+          MBACandidate Cand;
+          Cand.Candidate = dyn_cast<Instruction>(
+              CI->getArgOperand(i)->stripPointerCasts());
+          Candidates.push_back(Cand);
+          Visited.insert(CI->getArgOperand(i)->stripPointerCasts());
+        }
+      }
+    } break;
+    case Instruction::Select: {
+      for (unsigned int i = 0; i < I->getNumOperands(); i++) {
+        if (isSupportedInstruction(I->getOperand(i)->stripPointerCasts())) {
+          if (isVisited(I->getOperand(i)->stripPointerCasts())) continue;
+          MBACandidate Cand;
+          Cand.Candidate =
+              dyn_cast<Instruction>(I->getOperand(i)->stripPointerCasts());
+          Candidates.push_back(Cand);
+          Visited.insert(I->getOperand(i)->stripPointerCasts());
+        }
+      }
+    } break;
+    case Instruction::PHI: {
+      auto Phi = dyn_cast<PHINode>(&*I);
+      for (auto &Inc : Phi->incoming_values()) {
+        if (isSupportedInstruction(Inc->stripPointerCasts())) {
+          if (isVisited(Inc->stripPointerCasts())) continue;
+          MBACandidate Cand;
+          Cand.Candidate = dyn_cast<Instruction>(Inc->stripPointerCasts());
+          Candidates.push_back(Cand);
+          Visited.insert(Inc->stripPointerCasts());
+        }
+      }
+    } break;
+       */
+    // case Instruction::Add:
+    // case Instruction::Sub:
+    // case Instruction::Mul:
+    // case Instruction::Shl:
+    case Instruction::Xor:
+    // case Instruction::Or:
+    // case Instruction::And:
+    // case Instruction::LShr:
+    // case Instruction::AShr:
+    // case Instruction::URem:
+    // case Instruction::SRem:
+    // case Instruction::IntToPtr:
+    case Instruction::BitCast: {
+      if (isVisited(&*I))
+        continue;
+      MBACandidate Cand;
+      Cand.Candidate = dyn_cast<Instruction>(&*I);
+      Candidates.push_back(Cand);
+      Visited.insert(&*I);
+    } break;
+    default: {
+    }
     }
   }
 #ifdef DEBUG_SIMPLIFICATION
@@ -896,7 +878,7 @@ bool LLVMParser::findReplacements(llvm::DominatorTree *DT,
 
 #ifdef DEBUG_SIMPLIFICATION
   // Debug out
-  Candidates.front().Candidate->getFunction()->print(outs());
+  // Candidates.front().Candidate->getFunction()->print(outs());
 #endif
 
   // Search for replacements
@@ -905,6 +887,7 @@ bool LLVMParser::findReplacements(llvm::DominatorTree *DT,
   for (int i = 0; i < Candidates.size(); i++) {
     auto &Cand = Candidates[i];
     getAST(DT, Cand.Candidate, Cand.AST, Cand.Variables, true);
+    Cand.ASTSize = getASTSize(Cand.AST);
   }
 
   auto EndTime = high_resolution_clock::now();
@@ -925,8 +908,7 @@ bool LLVMParser::findReplacements(llvm::DominatorTree *DT,
 
   for (int i = 0; i < Candidates.size(); i++) {
     auto &Cand = Candidates[i];
-    int s = getASTSize(Cand.AST);
-    if (s < MinASTSize) {
+    if (Cand.ASTSize < MinASTSize) {
       continue;
     }
 
@@ -978,6 +960,9 @@ bool LLVMParser::findReplacements(llvm::DominatorTree *DT,
     Simplifier S(BitWidth, false, Cand.Variables.size(), ResultVector);
     bool SkipVerify = false;
 
+    auto Expr = getASTAsString(Cand.AST, Cand.Variables);
+    outs() << "[*] Simplifying Expression: " << Expr << "\n";
+
     if (!UseExternalSimplifier.empty()) {
       std::string &Path = UseExternalSimplifier;
       auto Expr = getASTAsString(Cand.AST, Cand.Variables);
@@ -1009,7 +994,8 @@ bool LLVMParser::findReplacements(llvm::DominatorTree *DT,
 
     // Verify is replacement is valid
     if (!SkipVerify) {
-      Cand.isValid = this->verify(Cand.AST, Cand.Replacement, Cand.Variables);
+      Cand.isValid = this->verify(Cand.ASTSize, Cand.AST, Cand.Replacement,
+                                  Cand.Variables);
     }
 
     if (Cand.isValid == false) {
@@ -1037,14 +1023,16 @@ bool LLVMParser::findReplacements(llvm::DominatorTree *DT,
   std::vector<MBACandidate> ValidCandidates;
 
   for (auto &C : Candidates) {
-    if (!C.isValid) continue;
+    if (!C.isValid)
+      continue;
 
     ValidCandidates.push_back(C);
   }
 
   // Merge candidates with new candidates
   for (auto &C : SubASTCandidates) {
-    if (!C.isValid) continue;
+    if (!C.isValid)
+      continue;
 
     ValidCandidates.push_back(C);
   }
@@ -1058,7 +1046,8 @@ int LLVMParser::getASTSize(llvm::SmallVectorImpl<BFSEntry> &AST) {
   int Size = 0;
   for (auto e : AST) {
     // Dont count cast/sext/zext
-    if (e.I->isCast()) continue;
+    if (e.I->isCast())
+      continue;
 
     Size++;
   }
@@ -1075,19 +1064,27 @@ bool LLVMParser::walkSubAST(llvm::DominatorTree *DT,
     // Walk the operands
     for (auto &Op : E.I->operands()) {
       auto BinOp = dyn_cast<BinaryOperator>(Op);
-      if (!BinOp) continue;
+      if (!BinOp)
+        continue;
 
       // Only work on supported operands
-      if (ConstantExpr::isSupportedBinOp(BinOp->getOpcode()) == false) continue;
+      if (ConstantExpr::isSupportedBinOp(BinOp->getOpcode()) == false)
+        continue;
 
       MBACandidate C;
       C.Candidate = BinOp;
+
       this->getAST(DT, BinOp, C.AST, C.Variables, true);
 
-      if (getASTSize(C.AST) < MinASTSize) continue;
+      // Set Size
+      C.ASTSize = getASTSize(C.AST);
+
+      if (C.ASTSize < MinASTSize)
+        continue;
 
       int BitWidth = C.AST.front().I->getType()->getIntegerBitWidth();
-      if (BitWidth == 0 || BitWidth > 64) continue;
+      if (BitWidth == 0 || BitWidth > 64)
+        continue;
 
       auto Modulus = getModulus(BitWidth);
 
@@ -1126,7 +1123,7 @@ bool LLVMParser::walkSubAST(llvm::DominatorTree *DT,
 #endif
 
       if (!SkipVerify) {
-        C.isValid = this->verify(C.AST, C.Replacement, C.Variables);
+        C.isValid = this->verify(C.ASTSize, C.AST, C.Replacement, C.Variables);
       }
 
       if (C.isValid) {
@@ -1189,9 +1186,9 @@ void LLVMParser::printAST(llvm::SmallVectorImpl<BFSEntry> &AST) {
   }
 }
 
-std::string LLVMParser::getASTAsString(
-    llvm::SmallVectorImpl<BFSEntry> &AST,
-    llvm::SmallVectorImpl<llvm::Value *> &Variables) {
+std::string
+LLVMParser::getASTAsString(llvm::SmallVectorImpl<BFSEntry> &AST,
+                           llvm::SmallVectorImpl<llvm::Value *> &Variables) {
   // Variable map
   std::map<llvm::Value *, std::string> VariableMap;
   char VStr = 'a';
@@ -1212,94 +1209,94 @@ std::string LLVMParser::getASTAsString(
 
     if (auto BinOp = dyn_cast<BinaryOperator>(e.I)) {
       switch (BinOp->getNumOperands()) {
+      // Add later
+      case 1:
         // Add later
-        case 1:
-          // Add later
-          report_fatal_error("Unsupported number of operands!");
-          break;
-        case 2:
-          if (auto C = dyn_cast<ConstantInt>(BinOp->getOperand(0))) {
-            SmallString<16> StrC;
-            C->getValue().toString(StrC, 10, true);
-            Expr += StrC;
-          } else {
-            Expr += VariableMap[BinOp->getOperand(0)];
-          }
-          break;
-        default:
-          e.I->dump();
-          report_fatal_error("Unsupported number of operands!");
+        report_fatal_error("Unsupported number of operands!");
+        break;
+      case 2:
+        if (auto C = dyn_cast<ConstantInt>(BinOp->getOperand(0))) {
+          SmallString<16> StrC;
+          C->getValue().toString(StrC, 10, true);
+          Expr += StrC;
+        } else {
+          Expr += VariableMap[BinOp->getOperand(0)];
+        }
+        break;
+      default:
+        e.I->dump();
+        report_fatal_error("Unsupported number of operands!");
       }
 
       switch (BinOp->getOpcode()) {
-        case Instruction::Add:
-          Expr += " + ";
-          break;
-        case Instruction::Sub:
-          Expr += " - ";
-          break;
-        case Instruction::Mul:
-          Expr += " * ";
-          break;
-        case Instruction::UDiv:
-          Expr += " / ";
-          break;
-        case Instruction::SDiv:
-          Expr += " / ";
-          break;
-        case Instruction::URem:
-          Expr += " % ";
-          break;
-        case Instruction::SRem:
-          Expr += " % ";
-          break;
-        case Instruction::Shl:
-          Expr += " << ";
-          break;
-        case Instruction::LShr:
-          Expr += " >> ";
-          break;
-        case Instruction::AShr:
-          // Should work in python...
-          Expr += " >> ";
-          break;
-        case Instruction::Xor:
-          Expr += " ^ ";
-          break;
-        case Instruction::And:
-          Expr += " & ";
-          break;
-        case Instruction::Or:
-          Expr += " | ";
-          break;
-        default:
-          e.I->dump();
-          report_fatal_error("[getASTAsString] Unsupported binary operator!");
+      case Instruction::Add:
+        Expr += " + ";
+        break;
+      case Instruction::Sub:
+        Expr += " - ";
+        break;
+      case Instruction::Mul:
+        Expr += " * ";
+        break;
+      case Instruction::UDiv:
+        Expr += " / ";
+        break;
+      case Instruction::SDiv:
+        Expr += " / ";
+        break;
+      case Instruction::URem:
+        Expr += " % ";
+        break;
+      case Instruction::SRem:
+        Expr += " % ";
+        break;
+      case Instruction::Shl:
+        Expr += " << ";
+        break;
+      case Instruction::LShr:
+        Expr += " >> ";
+        break;
+      case Instruction::AShr:
+        // Should work in python...
+        Expr += " >> ";
+        break;
+      case Instruction::Xor:
+        Expr += " ^ ";
+        break;
+      case Instruction::And:
+        Expr += " & ";
+        break;
+      case Instruction::Or:
+        Expr += " | ";
+        break;
+      default:
+        e.I->dump();
+        report_fatal_error("[getASTAsString] Unsupported binary operator!");
       }
 
       switch (CurInst->getNumOperands()) {
-        case 1:
-          // Print operand
-          if (auto C = dyn_cast<ConstantInt>(CurInst->getOperand(0))) {
-            SmallString<16> StrC;
-            C->getValue().toString(StrC, 10, true);
-            Expr += StrC;
-          } else {
-            Expr += VariableMap[CurInst->getOperand(0)];
-          }
-          break;
-        case 2:
-          if (auto C = dyn_cast<ConstantInt>(CurInst->getOperand(1))) {
-            SmallString<16> StrC;
-            C->getValue().toString(StrC, 10, true);
-            Expr += StrC;
-          } else {
-            Expr += VariableMap[CurInst->getOperand(1)];
-          }
-          break;
-        default:
-          e.I->dump();
-          report_fatal_error("Unsupported number of operands!");
+      case 1:
+        // Print operand
+        if (auto C = dyn_cast<ConstantInt>(CurInst->getOperand(0))) {
+          SmallString<16> StrC;
+          C->getValue().toString(StrC, 10, true);
+          Expr += StrC;
+        } else {
+          Expr += VariableMap[CurInst->getOperand(0)];
+        }
+        break;
+      case 2:
+        if (auto C = dyn_cast<ConstantInt>(CurInst->getOperand(1))) {
+          SmallString<16> StrC;
+          C->getValue().toString(StrC, 10, true);
+          Expr += StrC;
+        } else {
+          Expr += VariableMap[CurInst->getOperand(1)];
+        }
+        break;
+      default:
+        e.I->dump();
+        report_fatal_error("Unsupported number of operands!");
       }
     } else if (auto Trunc = dyn_cast<TruncInst>(CurInst)) {
       Expr += " (";
@@ -1322,28 +1319,28 @@ std::string LLVMParser::getASTAsString(
       // 32bit: (x & 0x7fffffff) - (x & 0x80000000)
       // 64bit: (x & 0x7fffffffffffffff) - (x & 0x8000000000000000)
       switch (SExt->getSrcTy()->getIntegerBitWidth()) {
-        case 8:
-          Expr += " & 0x7f) - (";
-          Expr += VariableMap[Op0];
-          Expr += " & 0x80)";
-          break;
-        case 16:
-          Expr += " & 0x7fff) - (";
-          Expr += VariableMap[Op0];
-          Expr += " & 0x8000)";
-          break;
-        case 32:
-          Expr += " & 0x7fffffff) - (";
-          Expr += VariableMap[Op0];
-          Expr += " & 0x80000000)";
-          break;
-        case 64:
-          Expr += " & 0x7fffffffffffffff) - (";
-          Expr += VariableMap[Op0];
-          Expr += " & 0x8000000000000000)";
-          break;
-        default:
-          report_fatal_error("Unsupported bit width!");
+      case 8:
+        Expr += " & 0x7f) - (";
+        Expr += VariableMap[Op0];
+        Expr += " & 0x80)";
+        break;
+      case 16:
+        Expr += " & 0x7fff) - (";
+        Expr += VariableMap[Op0];
+        Expr += " & 0x8000)";
+        break;
+      case 32:
+        Expr += " & 0x7fffffff) - (";
+        Expr += VariableMap[Op0];
+        Expr += " & 0x80000000)";
+        break;
+      case 64:
+        Expr += " & 0x7fffffffffffffff) - (";
+        Expr += VariableMap[Op0];
+        Expr += " & 0x8000000000000000)";
+        break;
+      default:
+        report_fatal_error("Unsupported bit width!");
       }
     } else {
       CurInst->dump();
@@ -1409,10 +1406,12 @@ void LLVMParser::getAST(llvm::DominatorTree *DT, llvm::Instruction *I,
 
     // We are only following instructions
     auto Ins = dyn_cast<Instruction>(v);
-    if (!Ins) continue;
+    if (!Ins)
+      continue;
 
     for (auto &O : Ins->operands()) {
-      if (isa<Constant>(O)) continue;
+      if (isa<Constant>(O))
+        continue;
 
       // Must be a variable
       if (isa<Argument>(O)) {
@@ -1459,10 +1458,10 @@ void LLVMParser::getAST(llvm::DominatorTree *DT, llvm::Instruction *I,
   std::sort(Variables.begin(), Variables.end());
 }
 
-llvm::APInt LLVMParser::evaluateAST(
-    llvm::SmallVectorImpl<BFSEntry> &AST,
-    llvm::SmallVectorImpl<llvm::Value *> &Variables,
-    llvm::SmallVectorImpl<APInt> &Par, bool &Error) {
+llvm::APInt
+LLVMParser::evaluateAST(llvm::SmallVectorImpl<BFSEntry> &AST,
+                        llvm::SmallVectorImpl<llvm::Value *> &Variables,
+                        llvm::SmallVectorImpl<APInt> &Par, bool &Error) {
   Constant *InstResult = nullptr;
   llvm::DenseMap<llvm::Value *, llvm::Constant *> ValueStack;
 
@@ -1471,7 +1470,6 @@ llvm::APInt LLVMParser::evaluateAST(
 
     if (auto BO = dyn_cast<BinaryOperator>(CurInst)) {
       if (ConstantExpr::isSupportedBinOp(BO->getOpcode()) == false) {
-        CurInst->dump();
         report_fatal_error("[!] Not supported binary operator!", false);
         Error = true;
         return APInt(1, 0);
@@ -1523,11 +1521,13 @@ llvm::APInt LLVMParser::evaluateAST(
   return CI->getValue();
 }
 
-llvm::Constant *LLVMParser::getVal(
-    llvm::Value *V, llvm::DenseMap<llvm::Value *, llvm::Constant *> &ValueStack,
-    llvm::SmallVectorImpl<llvm::Value *> &Variables,
-    llvm::SmallVectorImpl<llvm::APInt> &Par) {
-  if (Constant *CV = dyn_cast<Constant>(V)) return CV;
+llvm::Constant *
+LLVMParser::getVal(llvm::Value *V,
+                   llvm::DenseMap<llvm::Value *, llvm::Constant *> &ValueStack,
+                   llvm::SmallVectorImpl<llvm::Value *> &Variables,
+                   llvm::SmallVectorImpl<llvm::APInt> &Par) {
+  if (Constant *CV = dyn_cast<Constant>(V))
+    return CV;
 
   // Check if variable
   int i = 0;
@@ -1611,70 +1611,70 @@ z3::expr LLVMParser::getZ3ExpressionFromAST(
     auto BO = dyn_cast<BinaryOperator>(CurInst);
     if (BO) {
       switch (BO->getOpcode()) {
-        case Instruction::BinaryOps::Add: {
-          auto exp =
-              *getZ3Val(Z3Ctx, BO->getOperand(0), ValueMAP, OverrideBitWidth) +
-              *getZ3Val(Z3Ctx, BO->getOperand(1), ValueMAP, OverrideBitWidth);
-          ValueMAP[BO] = new z3::expr(exp);
-        } break;
-        case Instruction::BinaryOps::Sub: {
-          auto exp =
-              *getZ3Val(Z3Ctx, BO->getOperand(0), ValueMAP, OverrideBitWidth) -
-              *getZ3Val(Z3Ctx, BO->getOperand(1), ValueMAP, OverrideBitWidth);
-          ValueMAP[BO] = new z3::expr(exp);
-        } break;
-        case Instruction::BinaryOps::Mul: {
-          auto exp =
-              *getZ3Val(Z3Ctx, BO->getOperand(0), ValueMAP, OverrideBitWidth) *
-              *getZ3Val(Z3Ctx, BO->getOperand(1), ValueMAP, OverrideBitWidth);
-          ValueMAP[BO] = new z3::expr(exp);
-        } break;
-        case Instruction::BinaryOps::SDiv: {
-          auto exp =
-              *getZ3Val(Z3Ctx, BO->getOperand(0), ValueMAP, OverrideBitWidth) /
-              *getZ3Val(Z3Ctx, BO->getOperand(1), ValueMAP, OverrideBitWidth);
-          ValueMAP[BO] = new z3::expr(exp);
-        } break;
-        case Instruction::BinaryOps::Xor: {
-          auto exp =
-              *getZ3Val(Z3Ctx, BO->getOperand(0), ValueMAP, OverrideBitWidth) ^
-              *getZ3Val(Z3Ctx, BO->getOperand(1), ValueMAP, OverrideBitWidth);
-          ValueMAP[BO] = new z3::expr(exp);
-        } break;
-        case Instruction::BinaryOps::And: {
-          auto exp =
-              *getZ3Val(Z3Ctx, BO->getOperand(0), ValueMAP, OverrideBitWidth) &
-              *getZ3Val(Z3Ctx, BO->getOperand(1), ValueMAP, OverrideBitWidth);
-          ValueMAP[BO] = new z3::expr(exp);
-        } break;
-        case Instruction::BinaryOps::Or: {
-          auto exp =
-              *getZ3Val(Z3Ctx, BO->getOperand(0), ValueMAP, OverrideBitWidth) |
-              *getZ3Val(Z3Ctx, BO->getOperand(1), ValueMAP, OverrideBitWidth);
-          ValueMAP[BO] = new z3::expr(exp);
-        } break;
-        case Instruction::BinaryOps::Shl: {
-          auto exp = z3::shl(
-              *getZ3Val(Z3Ctx, BO->getOperand(0), ValueMAP, OverrideBitWidth),
-              *getZ3Val(Z3Ctx, BO->getOperand(1), ValueMAP, OverrideBitWidth));
-          ValueMAP[BO] = new z3::expr(exp);
-        } break;
-        case Instruction::BinaryOps::LShr: {
-          auto exp = z3::lshr(
-              *getZ3Val(Z3Ctx, BO->getOperand(0), ValueMAP, OverrideBitWidth),
-              *getZ3Val(Z3Ctx, BO->getOperand(1), ValueMAP, OverrideBitWidth));
-          ValueMAP[BO] = new z3::expr(exp);
-        } break;
-        case Instruction::BinaryOps::AShr: {
-          auto exp = z3::ashr(
-              *getZ3Val(Z3Ctx, BO->getOperand(0), ValueMAP, OverrideBitWidth),
-              *getZ3Val(Z3Ctx, BO->getOperand(1), ValueMAP, OverrideBitWidth));
-          ValueMAP[BO] = new z3::expr(exp);
-        } break;
-        default: {
-          BO->print(outs());
-          report_fatal_error("Unknown opcode!");
-        }
+      case Instruction::BinaryOps::Add: {
+        auto exp =
+            *getZ3Val(Z3Ctx, BO->getOperand(0), ValueMAP, OverrideBitWidth) +
+            *getZ3Val(Z3Ctx, BO->getOperand(1), ValueMAP, OverrideBitWidth);
+        ValueMAP[BO] = new z3::expr(exp);
+      } break;
+      case Instruction::BinaryOps::Sub: {
+        auto exp =
+            *getZ3Val(Z3Ctx, BO->getOperand(0), ValueMAP, OverrideBitWidth) -
+            *getZ3Val(Z3Ctx, BO->getOperand(1), ValueMAP, OverrideBitWidth);
+        ValueMAP[BO] = new z3::expr(exp);
+      } break;
+      case Instruction::BinaryOps::Mul: {
+        auto exp =
+            *getZ3Val(Z3Ctx, BO->getOperand(0), ValueMAP, OverrideBitWidth) *
+            *getZ3Val(Z3Ctx, BO->getOperand(1), ValueMAP, OverrideBitWidth);
+        ValueMAP[BO] = new z3::expr(exp);
+      } break;
+      case Instruction::BinaryOps::SDiv: {
+        auto exp =
+            *getZ3Val(Z3Ctx, BO->getOperand(0), ValueMAP, OverrideBitWidth) /
+            *getZ3Val(Z3Ctx, BO->getOperand(1), ValueMAP, OverrideBitWidth);
+        ValueMAP[BO] = new z3::expr(exp);
+      } break;
+      case Instruction::BinaryOps::Xor: {
+        auto exp =
+            *getZ3Val(Z3Ctx, BO->getOperand(0), ValueMAP, OverrideBitWidth) ^
+            *getZ3Val(Z3Ctx, BO->getOperand(1), ValueMAP, OverrideBitWidth);
+        ValueMAP[BO] = new z3::expr(exp);
+      } break;
+      case Instruction::BinaryOps::And: {
+        auto exp =
+            *getZ3Val(Z3Ctx, BO->getOperand(0), ValueMAP, OverrideBitWidth) &
+            *getZ3Val(Z3Ctx, BO->getOperand(1), ValueMAP, OverrideBitWidth);
+        ValueMAP[BO] = new z3::expr(exp);
+      } break;
+      case Instruction::BinaryOps::Or: {
+        auto exp =
+            *getZ3Val(Z3Ctx, BO->getOperand(0), ValueMAP, OverrideBitWidth) |
+            *getZ3Val(Z3Ctx, BO->getOperand(1), ValueMAP, OverrideBitWidth);
+        ValueMAP[BO] = new z3::expr(exp);
+      } break;
+      case Instruction::BinaryOps::Shl: {
+        auto exp = z3::shl(
+            *getZ3Val(Z3Ctx, BO->getOperand(0), ValueMAP, OverrideBitWidth),
+            *getZ3Val(Z3Ctx, BO->getOperand(1), ValueMAP, OverrideBitWidth));
+        ValueMAP[BO] = new z3::expr(exp);
+      } break;
+      case Instruction::BinaryOps::LShr: {
+        auto exp = z3::lshr(
+            *getZ3Val(Z3Ctx, BO->getOperand(0), ValueMAP, OverrideBitWidth),
+            *getZ3Val(Z3Ctx, BO->getOperand(1), ValueMAP, OverrideBitWidth));
+        ValueMAP[BO] = new z3::expr(exp);
+      } break;
+      case Instruction::BinaryOps::AShr: {
+        auto exp = z3::ashr(
+            *getZ3Val(Z3Ctx, BO->getOperand(0), ValueMAP, OverrideBitWidth),
+            *getZ3Val(Z3Ctx, BO->getOperand(1), ValueMAP, OverrideBitWidth));
+        ValueMAP[BO] = new z3::expr(exp);
+      } break;
+      default: {
+        BO->print(outs());
+        report_fatal_error("Unknown opcode!");
+      }
       }
 
     } else if (auto Trunc = dyn_cast<llvm::TruncInst>(CurInst)) {
@@ -1731,38 +1731,38 @@ z3::expr LLVMParser::getZ3ExpressionFromAST(
 
       z3::expr *Res = nullptr;
       switch (ICmp->getPredicate()) {
-        case llvm::ICmpInst::ICMP_EQ: {
-          Res = new z3::expr(*V0 == *V1);
-        } break;
-        case llvm::ICmpInst::ICMP_NE:
-          Res = new z3::expr(*V0 != *V1);
-          break;
-        case llvm::ICmpInst::ICMP_UGT:
-          Res = new z3::expr(z3::ugt(*V0, *V1));
-          break;
-        case llvm::ICmpInst::ICMP_UGE:
-          Res = new z3::expr(z3::uge(*V0, *V1));
-          break;
-        case llvm::ICmpInst::ICMP_ULT:
-          Res = new z3::expr(z3::ult(*V0, *V1));
-          break;
-        case llvm::ICmpInst::ICMP_ULE:
-          Res = new z3::expr(z3::ule(*V0, *V1));
-          break;
-        case llvm::ICmpInst::ICMP_SGT:
-          Res = new z3::expr(*V0 > *V1);
-          break;
-        case llvm::ICmpInst::ICMP_SGE:
-          Res = new z3::expr(*V0 >= *V1);
-          break;
-        case llvm::ICmpInst::ICMP_SLT:
-          Res = new z3::expr(*V0 < *V1);
-          break;
-        case llvm::ICmpInst::ICMP_SLE:
-          Res = new z3::expr(*V0 > *V1);
-          break;
-        default:
-          report_fatal_error("Unsupported Predicate!", false);
+      case llvm::ICmpInst::ICMP_EQ: {
+        Res = new z3::expr(*V0 == *V1);
+      } break;
+      case llvm::ICmpInst::ICMP_NE:
+        Res = new z3::expr(*V0 != *V1);
+        break;
+      case llvm::ICmpInst::ICMP_UGT:
+        Res = new z3::expr(z3::ugt(*V0, *V1));
+        break;
+      case llvm::ICmpInst::ICMP_UGE:
+        Res = new z3::expr(z3::uge(*V0, *V1));
+        break;
+      case llvm::ICmpInst::ICMP_ULT:
+        Res = new z3::expr(z3::ult(*V0, *V1));
+        break;
+      case llvm::ICmpInst::ICMP_ULE:
+        Res = new z3::expr(z3::ule(*V0, *V1));
+        break;
+      case llvm::ICmpInst::ICMP_SGT:
+        Res = new z3::expr(*V0 > *V1);
+        break;
+      case llvm::ICmpInst::ICMP_SGE:
+        Res = new z3::expr(*V0 >= *V1);
+        break;
+      case llvm::ICmpInst::ICMP_SLT:
+        Res = new z3::expr(*V0 < *V1);
+        break;
+      case llvm::ICmpInst::ICMP_SLE:
+        Res = new z3::expr(*V0 > *V1);
+        break;
+      default:
+        report_fatal_error("Unsupported Predicate!", false);
       }
 
       ValueMAP[ICmp] = new z3::expr(
@@ -1789,7 +1789,8 @@ z3::expr LLVMParser::getZ3ExpressionFromAST(
       }
     }
 
-    if (Found) continue;
+    if (Found)
+      continue;
 
     delete V.second;
   }
@@ -1810,9 +1811,10 @@ z3::expr LLVMParser::boolToBV(z3::context &Z3Ctx, z3::expr &BoolExpr,
   return z3::ite(BoolExpr, One, Zero);
 }
 
-z3::expr *LLVMParser::getZ3Val(
-    z3::context &Z3Ctx, llvm::Value *V,
-    llvm::DenseMap<llvm::Value *, z3::expr *> &ValueMap, int OverrideBitWidth) {
+z3::expr *
+LLVMParser::getZ3Val(z3::context &Z3Ctx, llvm::Value *V,
+                     llvm::DenseMap<llvm::Value *, z3::expr *> &ValueMap,
+                     int OverrideBitWidth) {
   if (ConstantInt *CV = dyn_cast<ConstantInt>(V)) {
     int BitWidth = 0;
     if (OverrideBitWidth) {
@@ -1859,4 +1861,4 @@ int LLVMParser::getInstructionCountAfter() {
   return this->InstructionCountAfter;
 }
 
-}  // namespace LSiMBA
+} // namespace LSiMBA
