@@ -66,9 +66,9 @@ else()
     #message(FATAL_ERROR "Unexpected Z3 package search outcome: neither target z3::libz3 not variable Z3_INCLUDE_DIRS exists.")
 endif()
 
-message(STATUS "Z3 include directory: " ${Z3_CXX_INCLUDE_DIRS})
+message(STATUS "Z3 include directory: " ${Z3_INCLUDE_DIRS})
 message(STATUS "Z3 library: " ${Z3_LIBRARIES})
-include_directories(${Z3_CXX_INCLUDE_DIRS} "include")
+include_directories(${Z3_INCLUDE_DIRS} "include")
 
 # Disable some LLVM warnings for Visual Studio
 if(WIN32)
