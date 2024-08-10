@@ -173,7 +173,6 @@ int exec(std::string &cmd, std::string &output) {
   char buffer[10000];
   while (!feof(pipe.get())) {
     if (fgets(buffer, 10000, pipe.get()) != NULL) {
-
       std::string temp = buffer;
 
       // Check for "*** ... simplified to"
@@ -226,8 +225,16 @@ bool Simplifier::external_simplifier(
 
   // Execute external simplifier
   std::string output = "";
-  std::string cmd = PythonPath + " " + ExternalSimplifierPath.str() + " \"" +
-                    expr.str() + "\"" + " -b " + to_string(BitWidth);
+  std::string cmd = "";
+
+  // Check if ExternalSimplifierPath end with py
+  if (ExternalSimplifierPath.contains(".py")) {
+    cmd = PythonPath + " " + ExternalSimplifierPath.str() + " \"" + expr.str() +
+          "\"" + " -b " + to_string(BitWidth);
+  } else {
+    cmd = ExternalSimplifierPath.str() + " \"" + expr.str() + "\"" + " -b " +
+          to_string(BitWidth);
+  }
 
   if (RedisCache) {
     cmd += " -r";

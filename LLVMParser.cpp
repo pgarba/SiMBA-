@@ -813,11 +813,13 @@ void LLVMParser::extractCandidates(llvm::Function &F,
         }
       }
     } break;
+    */
     case Instruction::PHI: {
       auto Phi = dyn_cast<PHINode>(&*I);
       for (auto &Inc : Phi->incoming_values()) {
         if (isSupportedInstruction(Inc->stripPointerCasts())) {
-          if (isVisited(Inc->stripPointerCasts())) continue;
+          if (isVisited(Inc->stripPointerCasts()))
+            continue;
           MBACandidate Cand;
           Cand.Candidate = dyn_cast<Instruction>(Inc->stripPointerCasts());
           Candidates.push_back(Cand);
@@ -825,19 +827,18 @@ void LLVMParser::extractCandidates(llvm::Function &F,
         }
       }
     } break;
-       */
-    // case Instruction::Add:
-    // case Instruction::Sub:
-    // case Instruction::Mul:
-    // case Instruction::Shl:
+    case Instruction::Add:
+    case Instruction::Sub:
+    case Instruction::Mul:
+    case Instruction::Shl:
     case Instruction::Xor:
-    // case Instruction::Or:
-    // case Instruction::And:
-    // case Instruction::LShr:
+    case Instruction::Or:
+    case Instruction::And:
+    case Instruction::LShr:
     // case Instruction::AShr:
-    // case Instruction::URem:
-    // case Instruction::SRem:
-    // case Instruction::IntToPtr:
+    case Instruction::URem:
+    case Instruction::SRem:
+    case Instruction::IntToPtr:
     case Instruction::BitCast: {
       if (isVisited(&*I))
         continue;
