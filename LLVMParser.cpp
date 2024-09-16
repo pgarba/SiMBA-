@@ -35,7 +35,7 @@
 #include "Z3Prover.h"
 #include "veque.h"
 
-#define DEBUG_SIMPLIFICATION
+// #define DEBUG_SIMPLIFICATION
 
 using namespace llvm;
 using namespace std;
@@ -84,6 +84,8 @@ LLVMParser::LLVMParser(const std::string &filename,
   this->Eval = std::make_unique<Evaluator>(M->getDataLayout(), TLI.get());
 
   this->MaxThreadCount = thread::hardware_concurrency();
+
+  this->IsExternalSimplifier = !UseExternalSimplifier.empty();
 }
 
 LLVMParser::LLVMParser(llvm::Module *M, bool Parallel, bool Verify,
@@ -100,6 +102,8 @@ LLVMParser::LLVMParser(llvm::Module *M, bool Parallel, bool Verify,
   this->Eval = std::make_unique<Evaluator>(M->getDataLayout(), TLI.get());
 
   this->MaxThreadCount = thread::hardware_concurrency();
+
+  this->IsExternalSimplifier = !UseExternalSimplifier.empty();
 }
 
 LLVMParser::LLVMParser(llvm::Function *F, bool Parallel, bool Verify,
@@ -116,11 +120,14 @@ LLVMParser::LLVMParser(llvm::Function *F, bool Parallel, bool Verify,
   this->Eval = std::make_unique<Evaluator>(M->getDataLayout(), TLI.get());
 
   this->MaxThreadCount = thread::hardware_concurrency();
+
+  this->IsExternalSimplifier = !UseExternalSimplifier.empty();
 }
 
 LLVMParser::~LLVMParser() {}
 
 int LLVMParser::simplify() {
+  // Simplify MBAs
   auto Count = this->extractAndSimplify();
 
   this->InstructionCountAfter = getInstructionCount(M);
@@ -622,75 +629,9 @@ bool LLVMParser::runLLVMOptimizer(bool Initial) {
   auto stop = high_resolution_clock::now();
   auto duration = duration_cast<milliseconds>(stop - start);
 
-  rewriteIntrinsics();
-
   outs() << " Done! (" << duration.count() << " ms)\n";
 
   return true;
-}
-
-bool LLVMParser::rewriteIntrinsics() {
-  bool Changes = false;
-
-  std::map<std::string, std::function<bool()>> Transformations;
-
-  // Todo: %39 = tail call i64 @llvm.bswap.i64(i64 %38)
-
-  // Transform llvm.fshl.i64 to rotate left code (if possible)
-  Transformations.emplace("llvm.fshl.i64", [&]() -> bool {
-    auto Intri = this->M->getFunction("llvm.fshl.i64");
-    if (!Intri)
-      return false;
-
-    SmallVector<llvm::Instruction *, 4> ToDelete;
-
-    for (auto U : Intri->users()) {
-      auto CI = dyn_cast<CallInst>(U);
-      if (!CI)
-        continue;
-
-      // Arg0 and Arg1 has to be equal to be a rotl
-      if (CI->getArgOperand(0) != CI->getArgOperand(0))
-        continue;
-
-      /*
-        %3 = shl i64 %0, %1
-        %4 = sub i64 64, %1
-        %5 = lshr i64 %0, %4
-        %6 = or i64 %5, %3
-      */
-      // Create the builder to build
-      llvm::IRBuilder<> Builder(CI);
-
-      auto Op = CI->getArgOperand(0);
-      auto Count = CI->getArgOperand(2);
-      auto t3 = Builder.CreateShl(Op, Count);
-      auto t4 = Builder.CreateSub(
-          getConstantInt(Count->getType(),
-                         Count->getType()->getIntegerBitWidth()),
-          Count);
-      auto t5 = Builder.CreateLShr(Op, t4);
-      auto t6 = Builder.CreateOr(t5, t3);
-
-      CI->replaceAllUsesWith(t6);
-
-      ToDelete.push_back(CI);
-    }
-
-    // Cleanup
-    for (auto CI : ToDelete) {
-      CI->eraseFromParent();
-    }
-
-    return true;
-  });
-
-  // Apply transformation
-  for (auto T : Transformations) {
-    Changes |= T.second();
-  }
-
-  return Changes;
 }
 
 bool LLVMParser::isSupportedInstruction(llvm::Value *V) {
@@ -712,11 +653,29 @@ bool LLVMParser::isSupportedInstruction(llvm::Value *V) {
   }
 
   if (isa<SelectInst>(V)) {
+    if (IsExternalSimplifier)
+      return false;
+
     return true;
   }
 
   if (isa<ICmpInst>(V)) {
+    if (IsExternalSimplifier)
+      return false;
+
     return true;
+  }
+
+  if (isa<CallInst>(V)) {
+    // check if intrinsic
+    auto CI = dyn_cast<CallInst>(V);
+    if (this->IsExternalSimplifier == false &&
+        CI->getCalledFunction()->getName().startswith("llvm.fshl.")) {
+      return true;
+    }
+
+    // Unknown intrinsic
+    return false;
   }
 
   return false;
@@ -758,6 +717,9 @@ void LLVMParser::extractCandidates(llvm::Function &F,
       }
     } break;
     case Instruction::ICmp: {
+      if (IsExternalSimplifier)
+        continue;
+
       for (unsigned int i = 0; i < I->getNumOperands(); i++) {
         if (isSupportedInstruction(I->getOperand(i)->stripPointerCasts())) {
           if (isVisited(I->getOperand(i)->stripPointerCasts()))
@@ -785,26 +747,60 @@ void LLVMParser::extractCandidates(llvm::Function &F,
         Visited.insert(RI->getReturnValue()->stripPointerCasts());
       }
     } break;
-      /*
     case Instruction::Call: {
       auto CI = dyn_cast<CallInst>(&*I);
+
+      // Check if intrinsic
+      if (this->IsExternalSimplifier == false &&
+          CI->getCalledFunction()->getName().startswith("llvm.fshl.")) {
+        if (isVisited(CI))
+          continue;
+
+        MBACandidate Cand;
+        Cand.Candidate = dyn_cast<Instruction>(CI);
+        Candidates.push_back(Cand);
+        Visited.insert(CI);
+      }
+
       for (unsigned int i = 0; i < CI->arg_size(); i++) {
-        if (isSupportedInstruction(
-                CI->getArgOperand(i)->stripPointerCasts())) {
-          if (isVisited(CI->getArgOperand(i)->stripPointerCasts())) continue;
+        if (isSupportedInstruction(CI->getArgOperand(i)->stripPointerCasts())) {
+          if (isVisited(CI->getArgOperand(i)->stripPointerCasts()))
+            continue;
 
           MBACandidate Cand;
-          Cand.Candidate = dyn_cast<Instruction>(
-              CI->getArgOperand(i)->stripPointerCasts());
+          Cand.Candidate =
+              dyn_cast<Instruction>(CI->getArgOperand(i)->stripPointerCasts());
           Candidates.push_back(Cand);
           Visited.insert(CI->getArgOperand(i)->stripPointerCasts());
         }
       }
     } break;
     case Instruction::Select: {
+      // Add Instruction
+      auto SI = dyn_cast<SelectInst>(&*I);
+      if (!isVisited(SI)) {
+        MBACandidate Cand;
+        Cand.Candidate = dyn_cast<Instruction>(SI);
+        Candidates.push_back(Cand);
+        Visited.insert(SI);
+      }
+
+      // Add Condition
+      if (isSupportedInstruction(SI->getCondition()->stripPointerCasts())) {
+        if (isVisited(SI->getCondition()->stripPointerCasts()))
+          continue;
+        MBACandidate Cand;
+        Cand.Candidate =
+            dyn_cast<Instruction>(SI->getCondition()->stripPointerCasts());
+        Candidates.push_back(Cand);
+        Visited.insert(SI->getCondition()->stripPointerCasts());
+      }
+
+      // Add Operands
       for (unsigned int i = 0; i < I->getNumOperands(); i++) {
         if (isSupportedInstruction(I->getOperand(i)->stripPointerCasts())) {
-          if (isVisited(I->getOperand(i)->stripPointerCasts())) continue;
+          if (isVisited(I->getOperand(i)->stripPointerCasts()))
+            continue;
           MBACandidate Cand;
           Cand.Candidate =
               dyn_cast<Instruction>(I->getOperand(i)->stripPointerCasts());
@@ -813,7 +809,6 @@ void LLVMParser::extractCandidates(llvm::Function &F,
         }
       }
     } break;
-    */
     case Instruction::PHI: {
       auto Phi = dyn_cast<PHINode>(&*I);
       for (auto &Inc : Phi->incoming_values()) {
@@ -832,10 +827,9 @@ void LLVMParser::extractCandidates(llvm::Function &F,
     case Instruction::Mul:
     case Instruction::Shl:
     case Instruction::Xor:
+    case Instruction::Trunc:
     case Instruction::Or:
     case Instruction::And:
-    case Instruction::LShr:
-    // case Instruction::AShr:
     case Instruction::URem:
     case Instruction::SRem:
     case Instruction::IntToPtr:
@@ -847,6 +841,17 @@ void LLVMParser::extractCandidates(llvm::Function &F,
       Candidates.push_back(Cand);
       Visited.insert(&*I);
     } break;
+
+    case Instruction::LShr:
+    case Instruction::AShr: {
+      if (IsExternalSimplifier || isVisited(&*I))
+        continue;
+      MBACandidate Cand;
+      Cand.Candidate = dyn_cast<Instruction>(&*I);
+      Candidates.push_back(Cand);
+      Visited.insert(&*I);
+    } break;
+
     default: {
     }
     }
@@ -961,8 +966,8 @@ bool LLVMParser::findReplacements(llvm::DominatorTree *DT,
     Simplifier S(BitWidth, false, Cand.Variables.size(), ResultVector);
     bool SkipVerify = false;
 
-    auto Expr = getASTAsString(Cand.AST, Cand.Variables);
-    outs() << "[*] Simplifying Expression: " << Expr << "\n";
+    // auto Expr = getASTAsString(Cand.AST, Cand.Variables);
+    // outs() << "[*] Simplifying Expression: " << Expr << "\n";
 
     if (!UseExternalSimplifier.empty()) {
       std::string &Path = UseExternalSimplifier;
@@ -1317,7 +1322,13 @@ LLVMParser::getASTAsString(llvm::SmallVectorImpl<BFSEntry> &AST,
       // 16bit: (x & 0x7fff) - (x & 0x8000)
       // 32bit: (x & 0x7fffffff) - (x & 0x80000000)
       // 64bit: (x & 0x7fffffffffffffff) - (x & 0x8000000000000000)
+      // 1bit: (x & 0x1) - (x & 0x2)
       switch (SExt->getSrcTy()->getIntegerBitWidth()) {
+      case 1:
+        Expr += " & 0x1) - (";
+        Expr += VariableMap[Op0];
+        Expr += " & 0x2)";
+        break;
       case 8:
         Expr += " & 0x7f) - (";
         Expr += VariableMap[Op0];
@@ -1339,6 +1350,8 @@ LLVMParser::getASTAsString(llvm::SmallVectorImpl<BFSEntry> &AST,
         Expr += " & 0x8000000000000000)";
         break;
       default:
+        outs() << "BitWidth: " << SExt->getSrcTy()->getIntegerBitWidth()
+               << "\n";
         report_fatal_error("Unsupported bit width!");
       }
     } else {
@@ -1501,11 +1514,37 @@ LLVMParser::evaluateAST(llvm::SmallVectorImpl<BFSEntry> &AST,
           CI->getPredicate(),
           getVal(CI->getOperand(0), ValueStack, Variables, Par),
           getVal(CI->getOperand(1), ValueStack, Variables, Par));
+    } else if (auto Call = dyn_cast<CallInst>(CurInst)) {
+      // Check if intrinsic
+      if (Call->getCalledFunction()->getName().startswith("llvm.fshl.")) {
+        // Implement as rotate left algorithm
+        auto Op0 = getVal(Call->getArgOperand(0), ValueStack, Variables, Par);
+        auto Op1 = getVal(Call->getArgOperand(1), ValueStack, Variables, Par);
+        auto Op2 = getVal(Call->getArgOperand(2), ValueStack, Variables, Par);
+
+        // Get constant value
+        auto a = dyn_cast<ConstantInt>(Op0)->getZExtValue();
+        auto b = dyn_cast<ConstantInt>(Op1)->getZExtValue();
+        auto c = dyn_cast<ConstantInt>(Op2)->getZExtValue();
+
+        auto width = Op0->getType()->getIntegerBitWidth();
+        auto c_mod_width = c % width;
+
+        // Rotate left
+        auto r = a << c_mod_width | (b >> (width - c_mod_width));
+
+        // Set result
+        InstResult = ConstantInt::get(Op0->getType(), r);
+      } else {
+        Call->dump();
+        report_fatal_error("[!] Not supported call instruction!", false);
+      }
     } else {
       CurInst->dump();
       report_fatal_error("[!] Not supported instruction!", false);
     }
 
+  Done:
     ValueStack[CurInst] = InstResult;
   }
 
@@ -1549,6 +1588,7 @@ LLVMParser::getVal(llvm::Value *V,
   }
 
   if (ValueStack.count(V) == 0) {
+    V->dump();
     report_fatal_error("V not found!");
   }
 
@@ -1766,6 +1806,31 @@ z3::expr LLVMParser::getZ3ExpressionFromAST(
 
       ValueMAP[ICmp] = new z3::expr(
           boolToBV(Z3Ctx, *Res, CurInst->getType()->getIntegerBitWidth()));
+    } else if (auto Call = dyn_cast<CallInst>(CurInst)) {
+      // Must be intrinsic llvm.fshl
+      if (Call->getCalledFunction()->getName().startswith("llvm.fshl.")) {
+        // Implement as rotate left algorithm
+        auto a = getZ3Val(Z3Ctx, Call->getArgOperand(0), ValueMAP, false);
+        auto b = getZ3Val(Z3Ctx, Call->getArgOperand(1), ValueMAP, false);
+        auto c = getZ3Val(Z3Ctx, Call->getArgOperand(2), ValueMAP, false);
+
+        auto width = a->get_sort().bv_size();
+        auto expr_width = z3::expr(Z3Ctx.bv_val(width, width));
+
+        // c mod width
+        auto c_mod_width = new z3::expr(*c % expr_width);
+
+        // Rotate left
+        auto r = z3::shl(*a, *c_mod_width) |
+                 z3::lshr(*b, (expr_width - *c_mod_width));
+
+        // Set result
+        ValueMAP[Call] = new z3::expr(r);
+      } else {
+        Call->dump();
+        report_fatal_error(
+            "[getZ3ExpressionFromAST] Unsupported call instruction!");
+      }
     } else {
       CurInst->dump();
       report_fatal_error("[getZ3ExpressionFromAST] Unsupported instruction!");

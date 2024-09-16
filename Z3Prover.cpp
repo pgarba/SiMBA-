@@ -9,16 +9,22 @@
 #include "llvm/IRReader/IRReader.h"
 #include "llvm/Support/CommandLine.h"
 
-llvm::cl::opt<bool> PrintSMT(
-    "print-smt", llvm::cl::Optional,
-    llvm::cl::desc("Print SMT2 formula for debugging purposes"),
-    llvm::cl::value_desc("print-smt"), llvm::cl::init(false));
+llvm::cl::opt<bool>
+    PrintSMT("print-smt", llvm::cl::Optional,
+             llvm::cl::desc("Print SMT2 formula for debugging purposes"),
+             llvm::cl::value_desc("print-smt"), llvm::cl::init(false));
 
 // Add timeout parameter as string
-llvm::cl::opt<std::string> timeout(
-    "timeout", llvm::cl::Optional,
-    llvm::cl::desc("Timeout for Z3 solver (Default 500)"),
-    llvm::cl::value_desc("timeout"), llvm::cl::init("500"));
+llvm::cl::opt<std::string>
+    timeout("timeout", llvm::cl::Optional,
+            llvm::cl::desc("Timeout for Z3 solver (Default 500)"),
+            llvm::cl::value_desc("timeout"), llvm::cl::init("500"));
+
+// Accept unknown as unsat
+llvm::cl::opt<bool>
+    AcceptUnknown("accept-unknown", llvm::cl::Optional,
+                  llvm::cl::desc("Accept unknown as unsat (Needed on timeout)"),
+                  llvm::cl::value_desc("accept-unknown"), llvm::cl::init(true));
 
 bool prove(z3::expr conjecture) {
   z3::context &c = conjecture.ctx();
@@ -38,6 +44,12 @@ bool prove(z3::expr conjecture) {
   auto R = s.check();
   if (R == z3::unsat) {
     return true;
+  } else if (R == z3::unknown) {
+    // Accept unknown as true
+    if (AcceptUnknown) {
+      return true;
+    }
+    return false;
   } else {
     return false;
   }

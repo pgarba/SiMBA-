@@ -100,6 +100,8 @@ private:
 
   int MaxThreadCount;
 
+  bool IsExternalSimplifier = false;
+
   int InstructionCountBefore = 0;
 
   int InstructionCountAfter = 0;
@@ -141,8 +143,6 @@ private:
                         llvm::Type *IntType);
 
   bool runLLVMOptimizer(bool Initial = false);
-
-  bool rewriteIntrinsics();
 
   bool isSupportedInstruction(llvm::Value *V);
 
