@@ -102,6 +102,8 @@ private:
 
   bool IsExternalSimplifier = false;
 
+  bool CountInstructions = true;
+
   int InstructionCountBefore = 0;
 
   int InstructionCountAfter = 0;
@@ -209,6 +211,7 @@ private:
   uint64_t getMASK(llvm::Type *Ty);
 
   static int getInstructionCount(llvm::Module *M);
+  static int getInstructionCount(llvm::Function *F);
 };
 
 } // namespace LSiMBA

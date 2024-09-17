@@ -122,6 +122,9 @@ LLVMParser::LLVMParser(llvm::Function *F, bool Parallel, bool Verify,
   this->MaxThreadCount = thread::hardware_concurrency();
 
   this->IsExternalSimplifier = !UseExternalSimplifier.empty();
+
+  // Disable instruction count as it has a big performance impact
+  this->CountInstructions = false;
 }
 
 LLVMParser::~LLVMParser() {}
@@ -130,7 +133,9 @@ int LLVMParser::simplify() {
   // Simplify MBAs
   auto Count = this->extractAndSimplify();
 
-  this->InstructionCountAfter = getInstructionCount(M);
+  if (this->CountInstructions) {
+    this->InstructionCountAfter = getInstructionCount(M);
+  }
 
   writeModule();
 
@@ -244,7 +249,9 @@ bool LLVMParser::parse(const std::string &filename) {
     llvm::report_fatal_error("[!] Could not read llvm ir file!", false);
   }
 
-  this->InstructionCountBefore = getInstructionCount(M);
+  if (this->CountInstructions) {
+	this->InstructionCountBefore = getInstructionCount(M);
+  }
 
   if (this->OptimizeBefore) {
     runLLVMOptimizer(true);
