@@ -21,6 +21,7 @@
 #include "llvm/Transforms/Utils/Cloning.h"
 #include "llvm/Transforms/Utils/Evaluator.h"
 
+#include <thread>
 #include <memory>
 #include <mutex>
 #include <string>
