@@ -49,8 +49,6 @@ string(STRIP ${LDF} LDF)
 set(LLVM_LIBS ${LLVM_LIBS} ${SYS_LIBS})
 set(LLVM_LIBS ${LLVM_LIBS} ${LDF})
 
-
-
 # z3
 message(STATUS "Compiling with Z3 SMT solver")
 find_package(Z3 REQUIRED)
@@ -85,6 +83,8 @@ list(APPEND PROJECT_LIBRARIES ${LLVM_LIBS})
 list(APPEND PROJECT_DEFINITIONS ${LLVM_DEFINITIONS})
 list(APPEND PROJECT_INCLUDEDIRECTORIES ${LLVM_INCLUDE_DIRS})
 
+# set CXX flags
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -O3 -pipe -fomit-frame-pointer -march=native")
 
 add_executable(SiMBA++ "CSiMBA.cpp" "CSiMBA.h" "LLVMParser.cpp" "LLVMParser.h" "Simplifier.h" "MBAChecker.cpp" "MBAChecker.h" "Simplifier.cpp" "ShuttingYard.cpp" "Modulo.cpp" "Modulo.h" "Z3Prover.cpp" "Z3Prover.h")
 

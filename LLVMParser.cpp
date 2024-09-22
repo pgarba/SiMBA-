@@ -1,6 +1,7 @@
 #include "LLVMParser.h"
 
-#include "llvm/ADT/Triple.h"
+#include "llvm/TargetParser/Triple.h"
+
 #include "llvm/Analysis/TargetLibraryInfo.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/Dominators.h"
@@ -17,16 +18,17 @@
 #include "llvm/Support/SourceMgr.h"
 #include "llvm/Support/TargetSelect.h"
 #include "llvm/Support/Threading.h"
-#include "llvm/Transforms/IPO/PassManagerBuilder.h"
 #include "llvm/Transforms/Utils/Cloning.h"
 #include "llvm/Transforms/Utils/Evaluator.h"
+#include "llvm/IR/Module.h"
 
+#include <cmath>
 #include <thread>
 #include <memory>
-#include <mutex>
 #include <string>
-#include <unordered_map>
-#include <unordered_set>
+#include <stack>
+
+#include <llvm/IR/ConstantFold.h>
 #include <z3++.h>
 
 #include "CSiMBA.h"
@@ -34,6 +36,7 @@
 #include "ShuttingYard.h"
 #include "Simplifier.h"
 #include "Z3Prover.h"
+
 #include "veque.h"
 
 // #define DEBUG_SIMPLIFICATION
@@ -277,7 +280,7 @@ int LLVMParser::extractAndSimplify() {
     }
 
     // Skip simplifed functions
-    if (F.getName().startswith("MBA_Simp")) {
+    if (F.getName().starts_with("MBA_Simp")) {
       continue;
     }
 
@@ -373,7 +376,7 @@ int LLVMParser::simplifyMBAModule() {
       continue;
 
     // Skip simplifed functions
-    if (F.getName().startswith("MBA_Simp"))
+    if (F.getName().starts_with("MBA_Simp"))
       continue;
 
     // Check if any load/stores are in the function
@@ -619,6 +622,7 @@ bool LLVMParser::runLLVMOptimizer(bool Initial) {
     outs() << "[+] Running LLVM optimizer ...\t\t";
   }
 
+  /*
   llvm::PassManagerBuilder builder;
   builder.OptLevel = 3;
   builder.SizeLevel = 2;
@@ -638,6 +642,8 @@ bool LLVMParser::runLLVMOptimizer(bool Initial) {
   auto duration = duration_cast<milliseconds>(stop - start);
 
   outs() << " Done! (" << duration.count() << " ms)\n";
+
+  */
 
   return true;
 }
@@ -678,7 +684,7 @@ bool LLVMParser::isSupportedInstruction(llvm::Value *V) {
     // check if intrinsic
     auto CI = dyn_cast<CallInst>(V);
     if (this->IsExternalSimplifier == false &&
-        CI->getCalledFunction()->getName().startswith("llvm.fshl.")) {
+        CI->getCalledFunction()->getName().starts_with("llvm.fshl.")) {
       return true;
     }
 
@@ -760,7 +766,7 @@ void LLVMParser::extractCandidates(llvm::Function &F,
 
       // Check if intrinsic
       if (this->IsExternalSimplifier == false &&
-          CI->getCalledFunction()->getName().startswith("llvm.fshl.")) {
+          CI->getCalledFunction()->getName().starts_with("llvm.fshl.")) {
         if (isVisited(CI))
           continue;
 
@@ -1505,26 +1511,20 @@ LLVMParser::evaluateAST(llvm::SmallVectorImpl<BFSEntry> &AST,
           getVal(Trunc->getOperand(0), ValueStack, Variables, Par),
           Trunc->getType());
     } else if (auto ZExt = dyn_cast<ZExtInst>(CurInst)) {
-      InstResult = ConstantExpr::getZExt(
-          getVal(ZExt->getOperand(0), ValueStack, Variables, Par),
-          ZExt->getType());
+      InstResult = ConstantFoldCastInstruction(Instruction::ZExt, getVal(ZExt->getOperand(0), ValueStack, Variables, Par), ZExt->getType());
     } else if (auto SExt = dyn_cast<SExtInst>(CurInst)) {
-      InstResult = ConstantExpr::getSExt(
-          getVal(SExt->getOperand(0), ValueStack, Variables, Par),
-          SExt->getType());
+      InstResult = ConstantFoldCastInstruction(Instruction::SExt, getVal(ZExt->getOperand(0), ValueStack, Variables, Par), ZExt->getType());
     } else if (auto SI = dyn_cast<SelectInst>(CurInst)) {
-      InstResult = ConstantExpr::getSelect(
-          getVal(SI->getOperand(0), ValueStack, Variables, Par),
-          getVal(SI->getOperand(1), ValueStack, Variables, Par),
-          getVal(SI->getOperand(2), ValueStack, Variables, Par));
+      auto a = getVal(SI->getOperand(0), ValueStack, Variables, Par);
+      auto b = getVal(SI->getOperand(1), ValueStack, Variables, Par);
+      auto c = getVal(SI->getOperand(2), ValueStack, Variables, Par);
+
+      InstResult = ConstantFoldSelectInstruction(a, b, c);
     } else if (auto CI = dyn_cast<ICmpInst>(CurInst)) {
-      InstResult = ConstantExpr::getICmp(
-          CI->getPredicate(),
-          getVal(CI->getOperand(0), ValueStack, Variables, Par),
-          getVal(CI->getOperand(1), ValueStack, Variables, Par));
+      InstResult = ConstantFoldCompareInstruction(CI->getPredicate(), getVal(CI->getOperand(0), ValueStack, Variables, Par), getVal(CI->getOperand(1), ValueStack, Variables, Par));
     } else if (auto Call = dyn_cast<CallInst>(CurInst)) {
       // Check if intrinsic
-      if (Call->getCalledFunction()->getName().startswith("llvm.fshl.")) {
+      if (Call->getCalledFunction()->getName().starts_with("llvm.fshl.")) {
         // Implement as rotate left algorithm
         auto Op0 = getVal(Call->getArgOperand(0), ValueStack, Variables, Par);
         auto Op1 = getVal(Call->getArgOperand(1), ValueStack, Variables, Par);
@@ -1816,7 +1816,7 @@ z3::expr LLVMParser::getZ3ExpressionFromAST(
           boolToBV(Z3Ctx, *Res, CurInst->getType()->getIntegerBitWidth()));
     } else if (auto Call = dyn_cast<CallInst>(CurInst)) {
       // Must be intrinsic llvm.fshl
-      if (Call->getCalledFunction()->getName().startswith("llvm.fshl.")) {
+      if (Call->getCalledFunction()->getName().starts_with("llvm.fshl.")) {
         // Implement as rotate left algorithm
         auto a = getZ3Val(Z3Ctx, Call->getArgOperand(0), ValueMAP, false);
         auto b = getZ3Val(Z3Ctx, Call->getArgOperand(1), ValueMAP, false);
