@@ -1513,7 +1513,7 @@ LLVMParser::evaluateAST(llvm::SmallVectorImpl<BFSEntry> &AST,
     } else if (auto ZExt = dyn_cast<ZExtInst>(CurInst)) {
       InstResult = ConstantFoldCastInstruction(Instruction::ZExt, getVal(ZExt->getOperand(0), ValueStack, Variables, Par), ZExt->getType());
     } else if (auto SExt = dyn_cast<SExtInst>(CurInst)) {
-      InstResult = ConstantFoldCastInstruction(Instruction::SExt, getVal(ZExt->getOperand(0), ValueStack, Variables, Par), ZExt->getType());
+      InstResult = ConstantFoldCastInstruction(Instruction::SExt, getVal(SExt->getOperand(0), ValueStack, Variables, Par), SExt->getType());
     } else if (auto SI = dyn_cast<SelectInst>(CurInst)) {
       auto a = getVal(SI->getOperand(0), ValueStack, Variables, Par);
       auto b = getVal(SI->getOperand(1), ValueStack, Variables, Par);
