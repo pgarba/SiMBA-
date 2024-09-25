@@ -1988,8 +1988,6 @@ z3::expr LLVMParser::getOptimizedZ3Expression(
   // Now optimize
   optimizeFunction(*F);
 
-  F->dump();
-
   // check if proved
   Proved = false;
   if (F->getEntryBlock().size() == 1) {
