@@ -34,7 +34,7 @@ typedef struct BFSEntry {
   int Depth;
   llvm::Instruction *I;
 
-  BFSEntry(int Depth, llvm::Instruction *I) : Depth(Depth), I(I){};
+  BFSEntry(int Depth, llvm::Instruction *I) : Depth(Depth), I(I) {};
 } BFSEntry;
 
 typedef struct MBACandidate {
@@ -132,7 +132,8 @@ private:
 
   bool verify(llvm::Function *F0, llvm::Function *F1, llvm::APInt &Modulus);
 
-  bool verify(int ASTSize, llvm::SmallVectorImpl<BFSEntry> &AST, std::string &SimpExpr,
+  bool verify(int ASTSize, llvm::SmallVectorImpl<BFSEntry> &AST,
+              std::string &SimpExpr,
               llvm::SmallVectorImpl<llvm::Value *> &Variables);
 
   llvm::Instruction *getSingleTerminator(llvm::Function &F);
@@ -144,7 +145,7 @@ private:
                         const llvm::APInt &Modulus, int VNumber,
                         llvm::Type *IntType);
 
-  bool runLLVMOptimizer(bool Initial = false);
+  void optimizeFunction(llvm::Function &F);
 
   bool isSupportedInstruction(llvm::Value *V);
 
@@ -201,8 +202,12 @@ private:
       llvm::SmallVectorImpl<llvm::Value *> &Variables,
       std::map<std::string, z3::expr *> &VarMap, int OverrideBitWidth = 0);
 
-  z3::expr boolToBV(z3::context &Z3Ctx, z3::expr &BoolExpr,
-                                int BitWidth);
+  z3::expr getOptimizedZ3Expression(
+      z3::context &Z3Ctx, std::string &SimpExpr,
+      std::vector<std::string> &VNames, llvm::SmallVectorImpl<BFSEntry> &AST,
+      llvm::SmallVectorImpl<llvm::Value *> &Variables, bool &Proved);
+
+  z3::expr boolToBV(z3::context &Z3Ctx, z3::expr &BoolExpr, int BitWidth);
 
   z3::expr *getZ3Val(z3::context &Z3Ctx, llvm::Value *V,
                      llvm::DenseMap<llvm::Value *, z3::expr *> &ValueMap,

@@ -1,5 +1,8 @@
 #include "LLVMParser.h"
 
+#include "llvm/ADT/SmallVector.h"
+#include "llvm/IR/Function.h"
+#include "llvm/Support/raw_ostream.h"
 #include "llvm/TargetParser/Triple.h"
 
 #include "llvm/Analysis/TargetLibraryInfo.h"
@@ -10,23 +13,26 @@
 #include "llvm/IR/Instruction.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/LegacyPassManager.h"
+#include "llvm/IR/Module.h"
 #include "llvm/IRReader/IRReader.h"
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/SourceMgr.h"
-#include "llvm/Support/TargetSelect.h"
 #include "llvm/Support/Threading.h"
 #include "llvm/Transforms/Utils/Cloning.h"
 #include "llvm/Transforms/Utils/Evaluator.h"
-#include "llvm/IR/Module.h"
+
+// add new pass manager builder
+#include "llvm/IR/PassManager.h"
+#include "llvm/Passes/PassBuilder.h"
 
 #include <cmath>
-#include <thread>
 #include <memory>
-#include <string>
 #include <stack>
+#include <string>
+#include <thread>
 
 #include <llvm/IR/ConstantFold.h>
 #include <z3++.h>
@@ -54,7 +60,7 @@ llvm::cl::opt<std::string>
 llvm::cl::opt<int>
     MaxVarCount("max-var-count", cl::Optional,
                 cl::desc("Max variable count for simplification"),
-                cl::value_desc("max-var-count"), cl::init(5));
+                cl::value_desc("max-var-count"), cl::init(6));
 
 llvm::cl::opt<int> MinASTSize("min-ast-size", cl::Optional,
                               cl::desc("Minimum AST size for simplification"),
@@ -148,11 +154,6 @@ int LLVMParser::simplify() {
 
 int LLVMParser::simplifyMBAFunctionsOnly() {
   int Count = this->simplifyMBAModule();
-
-  // Disable as it leads to strange crash
-  if (this->OptimizeAfter) {
-    runLLVMOptimizer();
-  }
 
   writeModule();
 
@@ -254,11 +255,7 @@ bool LLVMParser::parse(const std::string &filename) {
   }
 
   if (this->CountInstructions) {
-	this->InstructionCountBefore = getInstructionCount(M);
-  }
-
-  if (this->OptimizeBefore) {
-    runLLVMOptimizer(true);
+    this->InstructionCountBefore = getInstructionCount(M);
   }
 
   return true;
@@ -309,6 +306,11 @@ int LLVMParser::extractAndSimplify() {
       outs() << "[*] Simplifying function: " << F->getName() << "\n";
     }
 
+    // Optimize before if asked for
+    if (this->OptimizeBefore) {
+      optimizeFunction(*F);
+    }
+
     int MBACount = 0;
     bool Found = false;
 
@@ -325,6 +327,7 @@ int LLVMParser::extractAndSimplify() {
     Found = this->findReplacements(&DT, Candidates);
 
     // Apply replacements and optimize
+    bool Replaced = false;
     for (int i = 0; i < Candidates.size(); i++) {
       if (Candidates[i].isValid == false)
         continue;
@@ -350,6 +353,13 @@ int LLVMParser::extractAndSimplify() {
 
       MBASimplified++;
       MBACount++;
+
+      Replaced = true;
+    }
+
+    // Optimize if any replacements
+    if (Replaced && this->OptimizeAfter) {
+      optimizeFunction(*F);
     }
   }
 
@@ -358,11 +368,6 @@ int LLVMParser::extractAndSimplify() {
   if (this->Debug) {
     outs() << "[+] Done! " << MBASimplified << " MBAs simplified ("
            << duration.count() << " ms)\n";
-  }
-
-  // Optimize if any replacements
-  if (MBASimplified && this->OptimizeAfter) {
-    this->runLLVMOptimizer();
   }
 
   return MBASimplified;
@@ -391,6 +396,11 @@ int LLVMParser::simplifyMBAModule() {
 
   auto start = high_resolution_clock::now();
   for (auto F : Functions) {
+    // Optimize before if asked for
+    if (this->OptimizeBefore) {
+      optimizeFunction(*F);
+    }
+
     // Get the terminator
     auto Terminator = getSingleTerminator(*F);
 
@@ -532,6 +542,9 @@ bool LLVMParser::verify(int ASTSize, llvm::SmallVectorImpl<BFSEntry> &AST,
     bool Error = false;
     auto AP_R0 = this->evaluateAST(AST, Variables, par, Error);
     if (Error) {
+#ifdef DEBUG_SIMPLIFICATION
+      outs() << "[!] Error: Evaluation failed for: " << SimpExpr << "\n";
+#endif
       return false;
     }
 
@@ -544,7 +557,7 @@ bool LLVMParser::verify(int ASTSize, llvm::SmallVectorImpl<BFSEntry> &AST,
       outs() << "[!] Simplification is no improvement: AST: " << ASTSize
              << " Operations: " << Operations << "\n";
 #endif
-      return false;
+      // return false;
     }
 
     if (AP_R0.getSExtValue() != AP_R1.getSExtValue()) {
@@ -576,26 +589,23 @@ bool LLVMParser::verify(int ASTSize, llvm::SmallVectorImpl<BFSEntry> &AST,
       outs() << "[Z3] Proving ...\n";
     }
 
-    // Get Z3 expressions
-    std::map<std::string, z3::expr *> VarMap;
-    auto Z3Exp0 =
-        getZ3ExpressionFromAST(Z3Ctx, AST, Variables, VarMap, BitWidth);
-
-    // Ensure BitWidth matches
-    if (Z3Exp0.get_sort().bv_size() != BitWidth) {
-      report_fatal_error("[!] Error: Z3Exp0 BitWidth does not match!");
-    }
-
-    auto Z3Exp1 =
-        getZ3ExprFromString(Z3Ctx, SimpExpr, BitWidth, Vars, VarTypes, VarMap);
-
-    if (Z3Exp1.get_sort().bv_size() != BitWidth) {
-      report_fatal_error("[!] Error: Z3Exp1 BitWidth does not match!");
-    }
+    // New way: opt(Exp0 - Exp1) != 0
+    bool Proved = false;
+    auto Z3ExpOpt =
+        getOptimizedZ3Expression(Z3Ctx, SimpExpr, Vars, AST, Variables, Proved);
 
     // Prove expressions
     auto start = high_resolution_clock::now();
-    auto Result = prove(((Z3Exp0 != Z3Exp1)));
+
+    bool Result = false;
+    if (Proved) {
+      // Solved by optimization
+      Result = 1;
+    } else {
+      // Solve with Z3
+      Result = prove((Z3ExpOpt != 0));
+    }
+
     auto stop = high_resolution_clock::now();
 
     if (this->Debug) {
@@ -612,45 +622,18 @@ bool LLVMParser::verify(int ASTSize, llvm::SmallVectorImpl<BFSEntry> &AST,
   return true;
 }
 
-bool LLVMParser::runLLVMOptimizer(bool Initial) {
-  llvm::legacy::PassManager module_manager;
-
-  if (Initial) {
-    outs() << "[+] Running LLVM optimizer (Some MBAs might already be "
-              "simplified by that!) ...\t\t";
-  } else {
-    outs() << "[+] Running LLVM optimizer ...\t\t";
-  }
-
-  /*
-  llvm::PassManagerBuilder builder;
-  builder.OptLevel = 3;
-  builder.SizeLevel = 2;
-  builder.LibraryInfo = TLII;
-  builder.DisableUnrollLoops = true;
-  builder.MergeFunctions = false;
-  builder.VerifyInput = true;
-  builder.VerifyOutput = true;
-
-  builder.populateModulePassManager(module_manager);
-
-  auto start = high_resolution_clock::now();
-
-  module_manager.run(*this->M);
-
-  auto stop = high_resolution_clock::now();
-  auto duration = duration_cast<milliseconds>(stop - start);
-
-  outs() << " Done! (" << duration.count() << " ms)\n";
-
-  */
-
-  return true;
-}
-
 bool LLVMParser::isSupportedInstruction(llvm::Value *V) {
   // We dont support AShr as GAMBA does not support it, for now
   if (auto BO = dyn_cast<BinaryOperator>(V)) {
+    // Got removed from constant expr
+    if (BO->getOpcode() == Instruction::Shl ||
+        BO->getOpcode() == Instruction::Or ||
+        BO->getOpcode() == Instruction::And ||
+        BO->getOpcode() == Instruction::LShr ||
+        BO->getOpcode() == Instruction::AShr) {
+      return true;
+    }
+
     return ConstantExpr::isSupportedBinOp(BO->getOpcode());
   }
 
@@ -946,6 +929,10 @@ bool LLVMParser::findReplacements(llvm::DominatorTree *DT,
 
     // Only handle max xx Vars
     if (Cand.Variables.size() > MaxVarCount) {
+#ifdef DEBUG_SIMPLIFICATION
+      outs() << "[*] Skipping too many variables: " << Cand.Variables.size()
+             << "\n";
+#endif
       Cand.isValid = false;
       continue;
     }
@@ -1495,11 +1482,13 @@ LLVMParser::evaluateAST(llvm::SmallVectorImpl<BFSEntry> &AST,
     auto CurInst = E->I;
 
     if (auto BO = dyn_cast<BinaryOperator>(CurInst)) {
+      /*
       if (ConstantExpr::isSupportedBinOp(BO->getOpcode()) == false) {
         report_fatal_error("[!] Not supported binary operator!", false);
         Error = true;
         return APInt(1, 0);
       }
+      */
 
       InstResult = ConstantExpr::get(
           BO->getOpcode(),
@@ -1511,9 +1500,15 @@ LLVMParser::evaluateAST(llvm::SmallVectorImpl<BFSEntry> &AST,
           getVal(Trunc->getOperand(0), ValueStack, Variables, Par),
           Trunc->getType());
     } else if (auto ZExt = dyn_cast<ZExtInst>(CurInst)) {
-      InstResult = ConstantFoldCastInstruction(Instruction::ZExt, getVal(ZExt->getOperand(0), ValueStack, Variables, Par), ZExt->getType());
+      InstResult = ConstantFoldCastInstruction(
+          Instruction::ZExt,
+          getVal(ZExt->getOperand(0), ValueStack, Variables, Par),
+          ZExt->getType());
     } else if (auto SExt = dyn_cast<SExtInst>(CurInst)) {
-      InstResult = ConstantFoldCastInstruction(Instruction::SExt, getVal(SExt->getOperand(0), ValueStack, Variables, Par), SExt->getType());
+      InstResult = ConstantFoldCastInstruction(
+          Instruction::SExt,
+          getVal(SExt->getOperand(0), ValueStack, Variables, Par),
+          SExt->getType());
     } else if (auto SI = dyn_cast<SelectInst>(CurInst)) {
       auto a = getVal(SI->getOperand(0), ValueStack, Variables, Par);
       auto b = getVal(SI->getOperand(1), ValueStack, Variables, Par);
@@ -1521,7 +1516,10 @@ LLVMParser::evaluateAST(llvm::SmallVectorImpl<BFSEntry> &AST,
 
       InstResult = ConstantFoldSelectInstruction(a, b, c);
     } else if (auto CI = dyn_cast<ICmpInst>(CurInst)) {
-      InstResult = ConstantFoldCompareInstruction(CI->getPredicate(), getVal(CI->getOperand(0), ValueStack, Variables, Par), getVal(CI->getOperand(1), ValueStack, Variables, Par));
+      InstResult = ConstantFoldCompareInstruction(
+          CI->getPredicate(),
+          getVal(CI->getOperand(0), ValueStack, Variables, Par),
+          getVal(CI->getOperand(1), ValueStack, Variables, Par));
     } else if (auto Call = dyn_cast<CallInst>(CurInst)) {
       // Check if intrinsic
       if (Call->getCalledFunction()->getName().starts_with("llvm.fshl.")) {
@@ -1907,6 +1905,7 @@ LLVMParser::getZ3Val(z3::context &Z3Ctx, llvm::Value *V,
   }
 
   if (ValueMap.count(V) == 0) {
+    V->dump();
     report_fatal_error("[getZ3Val] Value not found!");
   }
 
@@ -1931,6 +1930,114 @@ int LLVMParser::getInstructionCountBefore() {
 
 int LLVMParser::getInstructionCountAfter() {
   return this->InstructionCountAfter;
+}
+
+z3::expr LLVMParser::getOptimizedZ3Expression(
+    z3::context &Z3Ctx, std::string &SimpExpr, std::vector<std::string> &VNames,
+    llvm::SmallVectorImpl<BFSEntry> &AST,
+    llvm::SmallVectorImpl<llvm::Value *> &Variables, bool &Proved) {
+  // Create function from simplified expression
+  auto F =
+      createLLVMFunction(this->M, Variables[0]->getType(), SimpExpr, VNames);
+
+  // Subtract candidate from return value
+  auto RetInst = dyn_cast<ReturnInst>(F->getEntryBlock().getTerminator());
+  auto V = RetInst->getReturnValue();
+
+  // Map vars
+  SmallVector<llvm::Value *, 4> FArgs;
+  std::map<llvm::Value *, llvm::Value *> VarMap;
+  int i = 0;
+  for (auto &V : Variables) {
+    auto A = F->getArg(i);
+    VarMap[V] = A;
+    FArgs.push_back(A);
+    i++;
+  }
+
+  // Clone AST instructions into F
+  Instruction *LastInst = nullptr;
+  for (auto E = AST.rbegin(); E != AST.rend(); ++E) {
+    auto &e = *E;
+
+    // Clone inst
+    auto NewI = e.I->clone();
+
+    // Replace operands
+    for (auto &Op : NewI->operands()) {
+      if (VarMap.count(Op)) {
+        Op = VarMap[Op];
+      }
+    }
+
+    // Insert instruction
+    NewI->insertBefore(F->getEntryBlock().getTerminator());
+
+    // Update VarMap
+    VarMap[e.I] = NewI;
+    LastInst = NewI;
+  }
+
+  // Subtract Candidate from Replacement
+  auto NewI = BinaryOperator::CreateSub(V, LastInst);
+  NewI->insertBefore(F->getEntryBlock().getTerminator());
+
+  // Replace return value
+  RetInst->setOperand(0, NewI);
+
+  // Now optimize
+  optimizeFunction(*F);
+
+  F->dump();
+
+  // check if proved
+  Proved = false;
+  if (F->getEntryBlock().size() == 1) {
+    auto C = dyn_cast<ConstantInt>(RetInst->getReturnValue());
+    if (C->isZero()) {
+      Proved = true;
+      F->eraseFromParent();
+      return z3::expr(Z3Ctx.bool_val(true));
+    }
+  }
+
+  // Get Z3 expression
+  SmallVector<BFSEntry, 4> OptAST;
+  i = 0;
+  for (auto I = ++F->getEntryBlock().rbegin(), E = F->getEntryBlock().rend();
+       I != E; ++I) {
+    OptAST.push_back(BFSEntry(i++, &*I));
+  }
+
+  std::map<std::string, z3::expr *> Z3VarMap;
+  auto Z3ExpOpt = getZ3ExpressionFromAST(
+      Z3Ctx, OptAST, FArgs, Z3VarMap, F->getReturnType()->getIntegerBitWidth());
+
+  // Clean up
+  F->eraseFromParent();
+
+  return Z3ExpOpt;
+}
+
+void LLVMParser::optimizeFunction(llvm::Function &F) {
+  LoopAnalysisManager LAM;
+  FunctionAnalysisManager FAM;
+  CGSCCAnalysisManager CGAM;
+  ModuleAnalysisManager MAM;
+
+  PassBuilder PB;
+
+  // Register all the basic analyses with the managers.
+  PB.registerModuleAnalyses(MAM);
+  PB.registerCGSCCAnalyses(CGAM);
+  PB.registerFunctionAnalyses(FAM);
+  PB.registerLoopAnalyses(LAM);
+  PB.crossRegisterProxies(LAM, FAM, CGAM, MAM);
+
+  FunctionPassManager FPM = PB.buildFunctionSimplificationPipeline(
+      OptimizationLevel::O3, ThinOrFullLTOPhase::None);
+
+  FPM.run(F, FAM);
 }
 
 } // namespace LSiMBA

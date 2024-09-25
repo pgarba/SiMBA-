@@ -83,8 +83,10 @@ list(APPEND PROJECT_LIBRARIES ${LLVM_LIBS})
 list(APPEND PROJECT_DEFINITIONS ${LLVM_DEFINITIONS})
 list(APPEND PROJECT_INCLUDEDIRECTORIES ${LLVM_INCLUDE_DIRS})
 
-# set CXX flags
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -O3 -pipe -fomit-frame-pointer -march=native")
+# set CXX flags for release
+if(CMAKE_BUILD_TYPE STREQUAL "Release")
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -O3 -pipe -fomit-frame-pointer -march=native")
+endif()
 
 add_executable(SiMBA++ "CSiMBA.cpp" "CSiMBA.h" "LLVMParser.cpp" "LLVMParser.h" "Simplifier.h" "MBAChecker.cpp" "MBAChecker.h" "Simplifier.cpp" "ShuttingYard.cpp" "Modulo.cpp" "Modulo.h" "Z3Prover.cpp" "Z3Prover.h")
 
@@ -104,6 +106,7 @@ target_link_libraries(SiMBA++
         LLVMBitReader
         LLVMCore
         LLVMSupport
+        LLVMPasses
         ${Z3_LIBRARIES}
 )
 

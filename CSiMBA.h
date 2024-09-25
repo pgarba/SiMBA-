@@ -10,8 +10,8 @@
 
 namespace LSiMBA {
 
-#define VERSION_MAJOR 1
-#define VERSION_MINOR 2
+#define VERSION_MAJOR 2
+#define VERSION_MINOR 0
 
 /**
  * The number of test cases to use for the verification.
