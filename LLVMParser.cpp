@@ -684,7 +684,7 @@ bool LLVMParser::isSupportedInstruction(llvm::Value *V) {
   if (isa<CallInst>(V)) {
     // check if intrinsic
     auto CI = dyn_cast<CallInst>(V);
-    if (this->IsExternalSimplifier == false &&
+    if (this->IsExternalSimplifier == false && CI->hasName() &&
         CI->getCalledFunction()->getName().starts_with("llvm.fshl.")) {
       return true;
     }
