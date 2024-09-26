@@ -162,6 +162,7 @@ elseif(WIN32)
             LLVMBitReader
             LLVMCore
             LLVMSupport
+            LLVMPasses
             ${Z3_LIBRARIES}
     )
 endif()

@@ -7,13 +7,13 @@
 #ifndef LLVMPARSER_H
 #define LLVMPARSER_H
 
-#include "Z3Prover.h"
-
 #include <map>
 #include <unordered_set>
 
 #include <llvm/ADT/SmallPtrSet.h>
 #include <llvm/IR/Instructions.h>
+
+#include <z3++.h>
 
 #include "splitmix64.h"
 
@@ -26,15 +26,21 @@ class Evaluator;
 class TargetLibraryInfoImpl;
 class TargetLibraryInfo;
 class Type;
-} // namespace llvm
+}  // namespace llvm
 
 namespace LSiMBA {
+
+enum OPTSTATUS {
+  OPT_PROVED = 0,
+  OPT_NOT_VALID = 1,
+  OPT_PROVE_ME = 2,
+};
 
 typedef struct BFSEntry {
   int Depth;
   llvm::Instruction *I;
 
-  BFSEntry(int Depth, llvm::Instruction *I) : Depth(Depth), I(I) {};
+  BFSEntry(int Depth, llvm::Instruction *I) : Depth(Depth), I(I){};
 } BFSEntry;
 
 typedef struct MBACandidate {
@@ -51,7 +57,7 @@ typedef struct MBACandidate {
 } MBACandidate;
 
 class LLVMParser {
-public:
+ public:
   LLVMParser(const std::string &filename, const std::string &OutputFile,
              bool Parallel = true, bool Verify = true,
              bool OptimizeBefore = false, bool OptimizeAfter = true,
@@ -83,7 +89,7 @@ public:
 
   int getInstructionCountAfter();
 
-private:
+ private:
   std::string OutputFile = "";
 
   bool Parallel;
@@ -182,11 +188,11 @@ private:
                           llvm::SmallVectorImpl<llvm::Value *> &Variables,
                           llvm::SmallVectorImpl<llvm::APInt> &Par, bool &Error);
 
-  llvm::Constant *
-  getVal(llvm::Value *V,
-         llvm::DenseMap<llvm::Value *, llvm::Constant *> &ValueStack,
-         llvm::SmallVectorImpl<llvm::Value *> &Variables,
-         llvm::SmallVectorImpl<llvm::APInt> &Par);
+  llvm::Constant *getVal(
+      llvm::Value *V,
+      llvm::DenseMap<llvm::Value *, llvm::Constant *> &ValueStack,
+      llvm::SmallVectorImpl<llvm::Value *> &Variables,
+      llvm::SmallVectorImpl<llvm::APInt> &Par);
 
   /*
     Thread safe
@@ -205,7 +211,7 @@ private:
   z3::expr getOptimizedZ3Expression(
       z3::context &Z3Ctx, std::string &SimpExpr,
       std::vector<std::string> &VNames, llvm::SmallVectorImpl<BFSEntry> &AST,
-      llvm::SmallVectorImpl<llvm::Value *> &Variables, bool &Proved);
+      llvm::SmallVectorImpl<llvm::Value *> &Variables, OPTSTATUS &Proved);
 
   z3::expr boolToBV(z3::context &Z3Ctx, z3::expr &BoolExpr, int BitWidth);
 
@@ -219,6 +225,6 @@ private:
   static int getInstructionCount(llvm::Function *F);
 };
 
-} // namespace LSiMBA
+}  // namespace LSiMBA
 
-#endif // LLVMPARSER_H
+#endif  // LLVMPARSER_H
