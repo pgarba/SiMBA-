@@ -1480,18 +1480,38 @@ llvm::APInt LLVMParser::evaluateAST(
     auto CurInst = E->I;
 
     if (auto BO = dyn_cast<BinaryOperator>(CurInst)) {
-      /*
-      if (ConstantExpr::isSupportedBinOp(BO->getOpcode()) == false) {
-        report_fatal_error("[!] Not supported binary operator!", false);
-        Error = true;
-        return APInt(1, 0);
-      }
-      */
-
-      InstResult = ConstantExpr::get(
-          BO->getOpcode(),
-          getVal(BO->getOperand(0), ValueStack, Variables, Par),
+      ConstantInt *Op0 = dyn_cast<ConstantInt>(
+          getVal(BO->getOperand(0), ValueStack, Variables, Par));
+      ConstantInt *Op1 = dyn_cast<ConstantInt>(
           getVal(BO->getOperand(1), ValueStack, Variables, Par));
+
+      switch (BO->getOpcode()) {
+        case Instruction::Shl:
+          InstResult = ConstantInt::get(BO->getType(),
+                                        Op0->getValue().shl(Op1->getValue()));
+          break;
+        case Instruction::LShr:
+          InstResult = ConstantInt::get(BO->getType(),
+                                        Op0->getValue().lshr(Op1->getValue()));
+          break;
+        case Instruction::AShr:
+          InstResult = ConstantInt::get(BO->getType(),
+                                        Op0->getValue().ashr(Op1->getValue()));
+          break;
+        case Instruction::And:
+          InstResult = ConstantInt::get(BO->getType(),
+                                        Op0->getValue() & Op1->getValue());
+          break;
+        case Instruction::Or:
+          InstResult = ConstantInt::get(BO->getType(),
+                                        Op0->getValue() | Op1->getValue());
+          break;
+        default: {
+          InstResult = ConstantExpr::get(
+              BO->getOpcode(), getVal(Op0, ValueStack, Variables, Par),
+              getVal(Op1, ValueStack, Variables, Par));
+        };
+      }
     } else if (auto Trunc = dyn_cast<TruncInst>(CurInst)) {
       // %27 = trunc i64 %26 to i32
       InstResult = ConstantExpr::getTrunc(
