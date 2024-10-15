@@ -950,6 +950,12 @@ bool LLVMParser::findReplacements(llvm::DominatorTree *DT,
       continue;
     }
 
+    // Skip Ptr types
+    if (Cand.AST.front().I->getType()->isPointerTy()) {
+      Cand.isValid = false;
+      continue;
+    }
+
     // Check if we already replaced this instruction
     if (constainsReplacedInstructions(ReplacedInstructions, Cand)) {
 #ifdef DEBUG_SIMPLIFICATION
