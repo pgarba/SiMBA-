@@ -4,6 +4,8 @@
 #include <filesystem>
 #include <fstream>
 
+#include "llvm/ADT/SmallVector.h"
+#include "llvm/IR/Constants.h"
 #include "llvm/IR/Module.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/FileSystem.h"
@@ -12,7 +14,6 @@
 
 #include "CSiMBA.h"
 #include "LLVMParser.h"
-#include "MBAChecker.h"
 #include "ShuttingYard.h"
 #include "Simplifier.h"
 
@@ -185,8 +186,13 @@ void ConvertToLLVMFunction(llvm::Module *M, std::string &StrMBA) {
       llvm::Type::getIntNTy(LSiMBA::LLVMParser::getLLVMContext(), BitCount);
   auto Vars = LSiMBA::Simplifier::getVariables(StrMBA);
 
+  SmallVector<Value *, 2> VarTypes;
+  for (auto &V : Vars) {
+    VarTypes.push_back(ConstantInt::get(IntTy, 0));
+  }
+
   // Create LLVM Function
-  auto F = createLLVMFunction(M, IntTy, StrMBA, Vars);
+  auto F = createLLVMFunction(M, VarTypes, StrMBA, Vars, IntTy);
 
   // Set name
   F->setName("MBA");
@@ -288,8 +294,8 @@ void SimplifyLLVMDataBase() {
 void SimplifyLLVMModule() {
   outs() << "[+] Loading LLVM Module: '" << StrIR << "'\n";
 
-  LSiMBA::LLVMParser Parser(StrIR, Output, RunParallel, UseFastCheck,
-                            false, RunOptimizer, Debug, ProveZ3);
+  LSiMBA::LLVMParser Parser(StrIR, Output, RunParallel, UseFastCheck, false,
+                            RunOptimizer, Debug, ProveZ3);
 
   auto start = high_resolution_clock::now();
 

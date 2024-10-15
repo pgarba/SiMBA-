@@ -24,9 +24,9 @@ int countOperators(std::string &expr);
 llvm::APInt eval(std::string expr, llvm::SmallVectorImpl<llvm::APInt> &par,
                  int BitWidth, int *OperationCount = nullptr);
 
-llvm::Function *createLLVMFunction(llvm::Module *M, llvm::Type *IntType,
-                                   std::string &expr,
-                                   std::vector<std::string> &VNames);
+llvm::Function *createLLVMFunction(
+    llvm::Module *M, llvm::SmallVectorImpl<llvm::Value *> &Variables,
+    std::string &expr, std::vector<std::string> &VNames, llvm::Type *RetType);
 
 void createLLVMReplacement(llvm::Instruction *InsertionPoint,
                            llvm::Type *IntType, std::string &expr,
