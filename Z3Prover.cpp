@@ -17,8 +17,8 @@ llvm::cl::opt<bool>
 // Add timeout parameter as string
 llvm::cl::opt<std::string>
     timeout("timeout", llvm::cl::Optional,
-            llvm::cl::desc("Timeout for Z3 solver (Default 500)"),
-            llvm::cl::value_desc("timeout"), llvm::cl::init("500"));
+            llvm::cl::desc("Timeout for Z3 solver (Default 700)"),
+            llvm::cl::value_desc("timeout"), llvm::cl::init("700"));
 
 // Accept unknown as unsat
 llvm::cl::opt<bool>
