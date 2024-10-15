@@ -559,7 +559,7 @@ bool LLVMParser::verify(int ASTSize, llvm::SmallVectorImpl<BFSEntry> &AST,
       // return false;
     }
 
-    if (AP_R0.getSExtValue() != AP_R1.getSExtValue()) {
+    if (AP_R0 != AP_R1) {
 #ifdef DEBUG_SIMPLIFICATION
       outs() << "[!] Error: Verification failed for: " << SimpExpr << "\n";
 #endif
