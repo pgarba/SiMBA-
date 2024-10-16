@@ -26,7 +26,7 @@ class Evaluator;
 class TargetLibraryInfoImpl;
 class TargetLibraryInfo;
 class Type;
-}  // namespace llvm
+} // namespace llvm
 
 namespace LSiMBA {
 
@@ -40,7 +40,7 @@ typedef struct BFSEntry {
   int Depth;
   llvm::Instruction *I;
 
-  BFSEntry(int Depth, llvm::Instruction *I) : Depth(Depth), I(I){};
+  BFSEntry(int Depth, llvm::Instruction *I) : Depth(Depth), I(I) {};
 } BFSEntry;
 
 typedef struct MBACandidate {
@@ -57,7 +57,7 @@ typedef struct MBACandidate {
 } MBACandidate;
 
 class LLVMParser {
- public:
+public:
   LLVMParser(const std::string &filename, const std::string &OutputFile,
              bool Parallel = true, bool Verify = true,
              bool OptimizeBefore = false, bool OptimizeAfter = true,
@@ -83,13 +83,35 @@ class LLVMParser {
   */
   int simplifyMBAFunctionsOnly();
 
+  /*
+    Get the current LLVM Context
+  */
   static llvm::LLVMContext &getLLVMContext();
 
+  /*
+    Get the instruction count before simplification
+  */
   int getInstructionCountBefore();
 
+  /*
+    Get the instruction count after simplification
+  */
   int getInstructionCountAfter();
 
- private:
+  /*
+    Get AST as LLVM Function
+  */
+  llvm::Function *
+  getASTasLLVMFunction(llvm::Module *M, llvm::SmallVectorImpl<BFSEntry> &AST,
+                       llvm::SmallVectorImpl<llvm::Value *> &Variables);
+
+  /*
+    If simplifcation fails try to replace with known patterns
+  */
+  bool replaceWithKnownPatterns(LSiMBA::MBACandidate &Cand,
+                                const std::vector<llvm::APInt> &ResultVector);
+
+private:
   std::string OutputFile = "";
 
   bool Parallel;
@@ -188,11 +210,11 @@ class LLVMParser {
                           llvm::SmallVectorImpl<llvm::Value *> &Variables,
                           llvm::SmallVectorImpl<llvm::APInt> &Par, bool &Error);
 
-  llvm::Constant *getVal(
-      llvm::Value *V,
-      llvm::DenseMap<llvm::Value *, llvm::Constant *> &ValueStack,
-      llvm::SmallVectorImpl<llvm::Value *> &Variables,
-      llvm::SmallVectorImpl<llvm::APInt> &Par);
+  llvm::Constant *
+  getVal(llvm::Value *V,
+         llvm::DenseMap<llvm::Value *, llvm::Constant *> &ValueStack,
+         llvm::SmallVectorImpl<llvm::Value *> &Variables,
+         llvm::SmallVectorImpl<llvm::APInt> &Par);
 
   /*
     Thread safe
@@ -225,6 +247,6 @@ class LLVMParser {
   static int getInstructionCount(llvm::Function *F);
 };
 
-}  // namespace LSiMBA
+} // namespace LSiMBA
 
-#endif  // LLVMPARSER_H
+#endif // LLVMPARSER_H

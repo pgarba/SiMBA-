@@ -668,13 +668,23 @@ bool LLVMParser::isSupportedInstruction(llvm::Value *V) {
   if (isa<CallInst>(V)) {
     // check if intrinsic
     auto CI = dyn_cast<CallInst>(V);
-    if (this->IsExternalSimplifier == false && CI->hasName() &&
-        CI->getCalledFunction()->getName().starts_with("llvm.fshl.")) {
+    auto Intr = CI->getIntrinsicID();
+    switch (Intr) {
+    case 0: {
+      // Not an intrinsic
+      return false;
+    }
+    case Intrinsic::fshl:
+    case Intrinsic::ctpop: {
       return true;
     }
-
-    // Unknown intrinsic
-    return false;
+    default: {
+      outs() << "[!] Unsupported intrinsic: " << "\n";
+      CI->dump();
+      // report_fatal_error("Unsupported intrinsic");
+      return false;
+    }
+    }
   }
 
   return false;
@@ -731,7 +741,6 @@ void LLVMParser::extractCandidates(llvm::Function &F,
         }
       }
     } break;
-
     case Instruction::Ret: {
       auto RI = dyn_cast<ReturnInst>(&*I);
       if (!RI->getReturnValue())
@@ -749,19 +758,6 @@ void LLVMParser::extractCandidates(llvm::Function &F,
     } break;
     case Instruction::Call: {
       auto CI = dyn_cast<CallInst>(&*I);
-
-      // Check if intrinsic
-      if (this->IsExternalSimplifier == false &&
-          CI->getCalledFunction()->getName().starts_with("llvm.fshl.")) {
-        if (isVisited(CI))
-          continue;
-
-        MBACandidate Cand;
-        Cand.Candidate = dyn_cast<Instruction>(CI);
-        Candidates.push_back(Cand);
-        Visited.insert(CI);
-      }
-
       for (unsigned int i = 0; i < CI->arg_size(); i++) {
         if (isSupportedInstruction(CI->getArgOperand(i)->stripPointerCasts())) {
           if (isVisited(CI->getArgOperand(i)->stripPointerCasts()))
@@ -874,6 +870,28 @@ bool LLVMParser::constainsReplacedInstructions(
   return false;
 }
 
+bool LLVMParser::replaceWithKnownPatterns(
+    LSiMBA::MBACandidate &Cand, const std::vector<APInt> &ResultVector) {
+#ifdef DEBUG_SIMPLIFICATION
+  for (auto V : ResultVector) {
+    outs() << V << "\n";
+  }
+#endif
+
+  if (Cand.Variables.size() == 1 && ResultVector[0].getSExtValue() == -1 &&
+      ResultVector[1] == 0) {
+    Cand.Replacement = "!!a - 1";
+    return true;
+  }
+
+  if (Cand.Variables.size() == 1 && ResultVector[0].getSExtValue() == 1 &&
+      ResultVector[1] == 0) {
+    Cand.Replacement = "!a";
+    return true;
+  }
+  return false;
+}
+
 bool LLVMParser::findReplacements(llvm::DominatorTree *DT,
                                   std::vector<MBACandidate> &Candidates) {
   if (Candidates.empty()) {
@@ -976,8 +994,15 @@ bool LLVMParser::findReplacements(llvm::DominatorTree *DT,
     Simplifier S(BitWidth, false, Cand.Variables.size(), ResultVector);
     bool SkipVerify = false;
 
-    // auto Expr = getASTAsString(Cand.AST, Cand.Variables);
-    // outs() << "[*] Simplifying Expression: " << Expr << "\n";
+    // Usefull for debugging
+#ifdef DEBUG_SIMPLIFICATION
+    auto Expr = getASTAsString(Cand.AST, Cand.Variables);
+    outs() << "[*] Simplifying Expression: " << Expr << "\n";
+
+    auto F = getASTasLLVMFunction(this->M, Cand.AST, Cand.Variables);
+    F->dump();
+    F->eraseFromParent();
+#endif
 
     if (!UseExternalSimplifier.empty()) {
       std::string &Path = UseExternalSimplifier;
@@ -1012,6 +1037,17 @@ bool LLVMParser::findReplacements(llvm::DominatorTree *DT,
     if (!SkipVerify) {
       Cand.isValid = this->verify(Cand.ASTSize, Cand.AST, Cand.Replacement,
                                   Cand.Variables);
+    }
+
+    // Match some patterns
+    // Todo: Make this more cleaver
+    if (!Cand.isValid) {
+      // 32bit: (-1+a) to icmp {-1, 0} -> a == 0 -> -1 else 0
+      bool IsRepl = replaceWithKnownPatterns(Cand, ResultVector);
+      if (IsRepl) {
+        Cand.isValid = this->verify(Cand.ASTSize, Cand.AST, Cand.Replacement,
+                                    Cand.Variables);
+      }
     }
 
     if (Cand.isValid == false) {
@@ -1193,7 +1229,8 @@ void LLVMParser::initResultVectorFromAST(
 void LLVMParser::printAST(llvm::SmallVectorImpl<BFSEntry> &AST) {
   outs() << "[*] AST (Operators: " << getASTSize(AST) << "):\n";
 
-  for (auto &e : AST) {
+  for (auto E = AST.rbegin(); E != AST.rend(); ++E) {
+    auto &e = *E;
     outs() << e.Depth << ": ";
     e.I->print(outs());
     outs() << "\n";
@@ -1365,8 +1402,11 @@ LLVMParser::getASTAsString(llvm::SmallVectorImpl<BFSEntry> &AST,
         report_fatal_error("Unsupported bit width!");
       }
     } else {
-      CurInst->dump();
-      report_fatal_error("Unsupported instruction!");
+      outs() << "[getASTAsString] Unsupported instruction! : '";
+      CurInst->print(outs());
+      outs() << "'\n";
+
+      return "";
     }
 
     Expr += ") ";
@@ -1550,8 +1590,9 @@ LLVMParser::evaluateAST(llvm::SmallVectorImpl<BFSEntry> &AST,
           getVal(CI->getOperand(0), ValueStack, Variables, Par),
           getVal(CI->getOperand(1), ValueStack, Variables, Par));
     } else if (auto Call = dyn_cast<CallInst>(CurInst)) {
-      // Check if intrinsic
-      if (Call->getCalledFunction()->getName().starts_with("llvm.fshl.")) {
+      auto CI = Call->getCalledFunction();
+      switch (CI->getIntrinsicID()) {
+      case Intrinsic::fshl: {
         // Implement as rotate left algorithm
         auto Op0 = getVal(Call->getArgOperand(0), ValueStack, Variables, Par);
         auto Op1 = getVal(Call->getArgOperand(1), ValueStack, Variables, Par);
@@ -1570,9 +1611,17 @@ LLVMParser::evaluateAST(llvm::SmallVectorImpl<BFSEntry> &AST,
 
         // Set result
         InstResult = ConstantInt::get(Op0->getType(), r);
-      } else {
-        Call->dump();
-        report_fatal_error("[!] Not supported call instruction!", false);
+      } break;
+      case Intrinsic::ctpop: {
+        auto Op0 = getVal(Call->getArgOperand(0), ValueStack, Variables, Par);
+        auto a = dyn_cast<ConstantInt>(Op0)->getZExtValue();
+        auto r = __builtin_popcount(a);
+        InstResult = ConstantInt::get(Op0->getType(), r);
+      } break;
+      default: {
+        CI->dump();
+        report_fatal_error("[!] Not supported intrinsic!", false);
+      }
       }
     } else {
       CurInst->dump();
@@ -1842,8 +1891,9 @@ z3::expr LLVMParser::getZ3ExpressionFromAST(
       ValueMAP[ICmp] = new z3::expr(
           boolToBV(Z3Ctx, *Res, CurInst->getType()->getIntegerBitWidth()));
     } else if (auto Call = dyn_cast<CallInst>(CurInst)) {
-      // Must be intrinsic llvm.fshl
-      if (Call->getCalledFunction()->getName().starts_with("llvm.fshl.")) {
+      auto CI = Call->getCalledFunction();
+      switch (CI->getIntrinsicID()) {
+      case Intrinsic::fshl: {
         // Implement as rotate left algorithm
         auto a = getZ3Val(Z3Ctx, Call->getArgOperand(0), ValueMAP, false);
         auto b = getZ3Val(Z3Ctx, Call->getArgOperand(1), ValueMAP, false);
@@ -1861,14 +1911,23 @@ z3::expr LLVMParser::getZ3ExpressionFromAST(
 
         // Set result
         ValueMAP[Call] = new z3::expr(r);
-      } else {
-        Call->dump();
-        report_fatal_error(
-            "[getZ3ExpressionFromAST] Unsupported call instruction!");
+      } break;
+      case Intrinsic::ctpop: {
+        auto Op0 = getZ3Val(Z3Ctx, Call->getArgOperand(0), ValueMAP, false);
+        auto BitWidth = Call->getArgOperand(0)->getType()->getIntegerBitWidth();
+
+        auto temp = z3::zext(Op0->extract(0, 0), BitWidth - 1);
+        for (int i = 1; i < BitWidth; i++) {
+          temp = temp + z3::zext(Op0->extract(i, i), BitWidth - 1);
+        }
+
+        ValueMAP[Call] = new z3::expr(temp);
+      } break;
+      default: {
+        CI->dump();
+        report_fatal_error("[!] Not supported call instruction!", false);
       }
-    } else {
-      CurInst->dump();
-      report_fatal_error("[getZ3ExpressionFromAST] Unsupported instruction!");
+      }
     }
 
     // Set last inst
@@ -1961,6 +2020,74 @@ int LLVMParser::getInstructionCountAfter() {
   return this->InstructionCountAfter;
 }
 
+llvm::Function *LLVMParser::getASTasLLVMFunction(
+    llvm::Module *M, llvm::SmallVectorImpl<BFSEntry> &AST,
+    llvm::SmallVectorImpl<llvm::Value *> &Variables) {
+  // Create new function
+  std::vector<llvm::Type *> ArgsTy;
+  for (int i = 0; i < Variables.size(); i++) {
+    ArgsTy.push_back(Variables[i]->getType());
+  }
+
+  auto RetType = AST.begin()->I->getType();
+
+  auto FTy = llvm::FunctionType::get(RetType, ArgsTy, false);
+  auto F = llvm::Function::Create(
+      FTy, llvm::GlobalValue::LinkageTypes::ExternalLinkage, "MBA_Simp", *M);
+
+  // Create new BB
+  auto *BB = llvm::BasicBlock::Create(M->getContext(), "MBA_BB", F);
+
+  // Create the builder to build
+  llvm::IRBuilder<> Builder(BB);
+  // Map vars
+  SmallVector<llvm::Value *, 4> FArgs;
+  std::map<llvm::Value *, llvm::Value *> VarMap;
+  int i = 0;
+  for (auto &V : Variables) {
+    auto A = F->getArg(i);
+    VarMap[V] = A;
+    FArgs.push_back(A);
+    i++;
+  }
+
+  // Clone AST instructions into F
+  Instruction *LastInst = nullptr;
+  for (auto E = AST.rbegin(); E != AST.rend(); ++E) {
+    auto &e = *E;
+
+    // Clone inst
+    auto NewI = e.I->clone();
+
+    // Replace operands
+    for (auto &Op : NewI->operands()) {
+      if (VarMap.count(Op)) {
+        // Cast to correct type
+        auto OpType = Op->getType();
+        auto VarOpType = VarMap[Op]->getType();
+        if (OpType != VarOpType) {
+          Op = CastInst::CreateIntegerCast(VarMap[Op], OpType, true, "",
+                                           &F->getEntryBlock());
+        } else {
+          Op = VarMap[Op];
+        }
+      }
+    }
+
+    // Insert instruction
+    NewI->insertAfter(&F->getEntryBlock().back());
+
+    // Update VarMap
+    VarMap[e.I] = NewI;
+    LastInst = NewI;
+  }
+
+  // Create return
+  auto RetInst = ReturnInst::Create(M->getContext(), LastInst, BB);
+
+  return F;
+}
+
 z3::expr LLVMParser::getOptimizedZ3Expression(
     z3::context &Z3Ctx, std::string &SimpExpr, std::vector<std::string> &VNames,
     llvm::SmallVectorImpl<BFSEntry> &AST,
@@ -1968,7 +2095,6 @@ z3::expr LLVMParser::getOptimizedZ3Expression(
   // Create function from simplified expression
   auto F = createLLVMFunction(this->M, Variables, SimpExpr, VNames,
                               AST.begin()->I->getType());
-
   // Subtract candidate from return value
   auto RetInst = dyn_cast<ReturnInst>(F->getEntryBlock().getTerminator());
   auto V = RetInst->getReturnValue();

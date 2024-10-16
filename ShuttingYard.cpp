@@ -53,6 +53,17 @@ public:
   int ArgIndex;
 };
 
+llvm::Value *castIfNeeded(llvm::Value *V0, llvm::Value *V1,
+                          llvm::IRBuilder<> &Builder) {
+  // Always cast to the higher type
+  if (V0->getType()->getIntegerBitWidth() <
+      V1->getType()->getIntegerBitWidth()) {
+    V0 = Builder.CreateIntCast(V0, V1->getType(), false, "CastedVar");
+  }
+
+  return V0;
+}
+
 int8_t isVariable(const char *c, std::vector<std::string> *VNames) {
   if (VNames == nullptr)
     report_fatal_error("VNames is nullptr");
@@ -408,17 +419,27 @@ void createLLVMReplacement(llvm::Instruction *InsertionPoint,
           break;
         case '!':
           // stackAP.push_back(rhsAP);
-          printf("! operator not implemented\n");
-          exit(-1);
+          /*
+          %4 = icmp ne i32 %3, 0, !dbg !19
+          %5 = xor i1 %4, true, !dbg !19
+          */
+          auto Zero = llvm::ConstantInt::get(rhsAP->getType(), 0);
+          auto Cmp = Builder.CreateICmpNE(rhsAP, Zero);
+          auto Not = Builder.CreateXor(Cmp, llvm::ConstantInt::getTrue(Builder.getContext()));
+          stackAP.push_back(Not);
           break;
         }
       } else {
         // binary operators
-        const auto rhsAP = stackAP.back();
+        auto rhsAP = stackAP.back();
         stackAP.pop_back();
 
-        const auto lhsAP = stackAP.back();
+        auto lhsAP = stackAP.back();
         stackAP.pop_back();
+
+        // Cast if needed
+        lhsAP = castIfNeeded(lhsAP, rhsAP, Builder);
+        rhsAP = castIfNeeded(rhsAP, lhsAP, Builder);
 
         switch (token.str[0]) {
         default:
@@ -483,19 +504,8 @@ void createLLVMReplacement(llvm::Instruction *InsertionPoint,
 
   // Replace MBA
   auto &ModV = stackAP.back();
-
+  ModV = castIfNeeded(ModV, InsertionPoint, Builder);
   InsertionPoint->replaceAllUsesWith(ModV);
-}
-
-llvm::Value *castIfNeeded(llvm::Value *V0, llvm::Value *V1,
-                          llvm::IRBuilder<> &Builder) {
-  // Always cast to the higher type
-  if (V0->getType()->getIntegerBitWidth() <
-      V1->getType()->getIntegerBitWidth()) {
-    V0 = Builder.CreateIntCast(V0, V1->getType(), false, "CastedVar");
-  }
-
-  return V0;
 }
 
 llvm::Function *createLLVMFunction(
@@ -563,9 +573,15 @@ llvm::Function *createLLVMFunction(
           stackAP.push_back(Builder.CreateNot(rhsAP));
           break;
         case '!':
-          // stackAP.push_back(rhsAP);
-          printf("! operator not implemented\n");
-          exit(-1);
+          // stackAP.push_back(!rhsAP);
+          /*
+          %4 = icmp ne i32 %3, 0, !dbg !19
+          %5 = xor i1 %4, true, !dbg !19
+          */
+          auto Zero = llvm::ConstantInt::get(rhsAP->getType(), 0);
+          auto Cmp = Builder.CreateICmpNE(rhsAP, Zero);
+          auto Not = Builder.CreateXor(Cmp, llvm::ConstantInt::getTrue(M->getContext()));
+          stackAP.push_back(Not);
           break;
         }
       } else {
@@ -703,9 +719,9 @@ APInt eval(std::string expr, llvm::SmallVectorImpl<APInt> &par, int BitWidth,
 
           break;
         case '!':
-          // stackAP.push_back(rhsAP);
-          printf("! operator not implemented\n");
-          exit(-1);
+          stackAP.push_back(APInt(BitWidth, !rhsAP.getZExtValue()));
+          //printf("! operator not implemented\n");
+          //exit(-1);
           break;
         }
       } else {
@@ -745,6 +761,9 @@ APInt eval(std::string expr, llvm::SmallVectorImpl<APInt> &par, int BitWidth,
           stackAP.push_back(lhsAP + rhsAP);
           break;
         case '-':
+          stackAP.push_back(lhsAP - rhsAP);
+          break;
+        case 'R':
           stackAP.push_back(lhsAP - rhsAP);
           break;
         case '#':
