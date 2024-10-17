@@ -556,7 +556,7 @@ bool LLVMParser::verify(int ASTSize, llvm::SmallVectorImpl<BFSEntry> &AST,
       outs() << "[!] Simplification is no improvement: AST: " << ASTSize
              << " Operations: " << Operations << "\n";
 #endif
-      // return false;
+      return false;
     }
 
     if (AP_R0 != AP_R1) {
@@ -675,7 +675,8 @@ bool LLVMParser::isSupportedInstruction(llvm::Value *V) {
       return false;
     }
     case Intrinsic::fshl:
-    case Intrinsic::ctpop: {
+    case Intrinsic::ctpop:
+    case Intrinsic::bswap: {
       return true;
     }
     default: {
@@ -1042,7 +1043,6 @@ bool LLVMParser::findReplacements(llvm::DominatorTree *DT,
     // Match some patterns
     // Todo: Make this more cleaver
     if (!Cand.isValid) {
-      // 32bit: (-1+a) to icmp {-1, 0} -> a == 0 -> -1 else 0
       bool IsRepl = replaceWithKnownPatterns(Cand, ResultVector);
       if (IsRepl) {
         Cand.isValid = this->verify(Cand.ASTSize, Cand.AST, Cand.Replacement,
@@ -1618,8 +1618,33 @@ LLVMParser::evaluateAST(llvm::SmallVectorImpl<BFSEntry> &AST,
         auto r = __builtin_popcount(a);
         InstResult = ConstantInt::get(Op0->getType(), r);
       } break;
+      case Intrinsic::bswap: {
+        auto Op0 = getVal(Call->getArgOperand(0), ValueStack, Variables, Par);
+        auto a = dyn_cast<ConstantInt>(Op0)->getZExtValue();
+        switch (Op0->getType()->getIntegerBitWidth()) {
+        case 16: {
+          auto r = __builtin_bswap16(a);
+          InstResult = ConstantInt::get(Op0->getType(), r);
+        } break;
+        case 32: {
+          auto r = __builtin_bswap32(a);
+          InstResult = ConstantInt::get(Op0->getType(), r);
+        } break;
+        case 64: {
+          auto r = __builtin_bswap64(a);
+          InstResult = ConstantInt::get(Op0->getType(), r);
+        } break;
+        default: {
+          CI->dump();
+          outs() << Op0->getType()->getIntegerBitWidth() << "\n";
+          report_fatal_error("[!] Not supported bswap!", false);
+        }
+        }
+        break;
+      }
       default: {
         CI->dump();
+        outs() << "getIntrinsicID: " << CI->getIntrinsicID() << "\n";
         report_fatal_error("[!] Not supported intrinsic!", false);
       }
       }
@@ -1923,6 +1948,20 @@ z3::expr LLVMParser::getZ3ExpressionFromAST(
 
         ValueMAP[Call] = new z3::expr(temp);
       } break;
+      case Intrinsic::bswap: {
+        auto Op0 = getZ3Val(Z3Ctx, Call->getArgOperand(0), ValueMAP, false);
+        auto BitWidth = Call->getArgOperand(0)->getType()->getIntegerBitWidth();
+
+        auto v = z3::expr_vector(Z3Ctx);
+        for (int i = (BitWidth / 8) - 1; i >= 0; i--) {
+          v.push_back(
+              Op0->extract(BitWidth - (8 * i) - 1, BitWidth - (8 * (i + 1))));
+        }
+
+        auto temp= z3::concat(v);
+
+        ValueMAP[Call] = new z3::expr(temp);
+      }
       default: {
         CI->dump();
         report_fatal_error("[!] Not supported call instruction!", false);
