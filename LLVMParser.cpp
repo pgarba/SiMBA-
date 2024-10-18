@@ -35,6 +35,7 @@
 #include <thread>
 
 #include <llvm/IR/ConstantFold.h>
+#include <vector>
 #include <z3++.h>
 
 #include "CSiMBA.h"
@@ -354,6 +355,8 @@ int LLVMParser::extractAndSimplify() {
 
       Replaced = true;
     }
+
+
 
     // Optimize if any replacements
     if (Replaced && this->OptimizeAfter) {
@@ -879,12 +882,6 @@ bool LLVMParser::replaceWithKnownPatterns(
   }
 #endif
 
-  if (Cand.Variables.size() == 1 && ResultVector[0].getSExtValue() == -1 &&
-      ResultVector[1] == 0) {
-    Cand.Replacement = "!!a - 1";
-    return true;
-  }
-
   if (Cand.Variables.size() == 1 && ResultVector[0].getSExtValue() == 1 &&
       ResultVector[1] == 0) {
     Cand.Replacement = "!a";
@@ -972,7 +969,6 @@ bool LLVMParser::findReplacements(llvm::DominatorTree *DT,
     }
 
     // Check if we already replaced this instruction
-    /*
     if (constainsReplacedInstructions(ReplacedInstructions, Cand)) {
 #ifdef DEBUG_SIMPLIFICATION
       outs() << "[*] Skipping already replaced instruction\n";
@@ -980,7 +976,6 @@ bool LLVMParser::findReplacements(llvm::DominatorTree *DT,
       Cand.isValid = false;
       continue;
     }
-    */
 
     // Try to simplify the whole AST
     int BitWidth = Cand.AST.front().I->getType()->getIntegerBitWidth();
