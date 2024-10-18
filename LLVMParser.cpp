@@ -972,6 +972,7 @@ bool LLVMParser::findReplacements(llvm::DominatorTree *DT,
     }
 
     // Check if we already replaced this instruction
+    /*
     if (constainsReplacedInstructions(ReplacedInstructions, Cand)) {
 #ifdef DEBUG_SIMPLIFICATION
       outs() << "[*] Skipping already replaced instruction\n";
@@ -979,6 +980,7 @@ bool LLVMParser::findReplacements(llvm::DominatorTree *DT,
       Cand.isValid = false;
       continue;
     }
+    */
 
     // Try to simplify the whole AST
     int BitWidth = Cand.AST.front().I->getType()->getIntegerBitWidth();
