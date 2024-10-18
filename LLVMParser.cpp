@@ -356,8 +356,6 @@ int LLVMParser::extractAndSimplify() {
       Replaced = true;
     }
 
-
-
     // Optimize if any replacements
     if (Replaced && this->OptimizeAfter) {
       optimizeFunction(*F);
@@ -679,7 +677,8 @@ bool LLVMParser::isSupportedInstruction(llvm::Value *V) {
     }
     case Intrinsic::fshl:
     case Intrinsic::ctpop:
-    case Intrinsic::bswap: {
+    case Intrinsic::bswap:
+    case Intrinsic::bitreverse: {
       return true;
     }
     default: {
@@ -1609,6 +1608,30 @@ LLVMParser::evaluateAST(llvm::SmallVectorImpl<BFSEntry> &AST,
         // Set result
         InstResult = ConstantInt::get(Op0->getType(), r);
       } break;
+      case Intrinsic::bitreverse: {
+        auto Op0 = getVal(Call->getArgOperand(0), ValueStack, Variables, Par);
+        auto a = dyn_cast<ConstantInt>(Op0)->getZExtValue();
+
+        switch (Op0->getType()->getIntegerBitWidth()) {
+        case 16: {
+          auto r = reverseBits<uint16_t>(a);
+          InstResult = ConstantInt::get(Op0->getType(), r);
+        } break;
+        case 32: {
+          auto r = reverseBits<uint32_t>(a);
+          InstResult = ConstantInt::get(Op0->getType(), r);
+        } break;
+        case 64: {
+          auto r = reverseBits<uint64_t>(a);
+          InstResult = ConstantInt::get(Op0->getType(), r);
+        } break;
+        default: {
+          CI->dump();
+          outs() << Op0->getType()->getIntegerBitWidth() << "\n";
+          report_fatal_error("[!] Not supported bitreverse!", false);
+        }
+        }
+      } break;
       case Intrinsic::ctpop: {
         auto Op0 = getVal(Call->getArgOperand(0), ValueStack, Variables, Par);
         auto a = dyn_cast<ConstantInt>(Op0)->getZExtValue();
@@ -1934,6 +1957,19 @@ z3::expr LLVMParser::getZ3ExpressionFromAST(
         // Set result
         ValueMAP[Call] = new z3::expr(r);
       } break;
+      case Intrinsic::bitreverse: {
+        // Reverse the order of bits
+        auto Op0 = getZ3Val(Z3Ctx, Call->getArgOperand(0), ValueMAP, false);
+        auto BitWidth = Call->getArgOperand(0)->getType()->getIntegerBitWidth();
+
+        auto v = z3::expr_vector(Z3Ctx);
+        for (int i = BitWidth - 1; i >= 0; i++) {
+          v.push_back(Op0->extract(i, i));
+        }
+        auto r = concat(v);
+
+        ValueMAP[Call] = new z3::expr(r);
+      }break;
       case Intrinsic::ctpop: {
         auto Op0 = getZ3Val(Z3Ctx, Call->getArgOperand(0), ValueMAP, false);
         auto BitWidth = Call->getArgOperand(0)->getType()->getIntegerBitWidth();
@@ -1955,7 +1991,7 @@ z3::expr LLVMParser::getZ3ExpressionFromAST(
               Op0->extract(BitWidth - (8 * i) - 1, BitWidth - (8 * (i + 1))));
         }
 
-        auto temp= z3::concat(v);
+        auto temp = z3::concat(v);
 
         ValueMAP[Call] = new z3::expr(temp);
       }
