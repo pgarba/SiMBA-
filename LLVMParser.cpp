@@ -662,6 +662,13 @@ bool LLVMParser::isSupportedInstruction(llvm::Value *V) {
     if (IsExternalSimplifier)
       return false;
 
+    // Check if operands are pointer type
+    auto IC = dyn_cast<ICmpInst>(V);
+    if (IC->getOperand(0)->getType()->isPointerTy() ||
+        IC->getOperand(1)->getType()->isPointerTy()) {
+      return false;
+    }
+
     return true;
   }
 
@@ -676,7 +683,12 @@ bool LLVMParser::isSupportedInstruction(llvm::Value *V) {
     }
     case Intrinsic::fshl:
     case Intrinsic::ctpop:
-    case Intrinsic::bswap: {
+    case Intrinsic::bswap:
+    case Intrinsic::umax:
+    case Intrinsic::umin:
+    case Intrinsic::abs:
+    case Intrinsic::smin:
+    case Intrinsic::smax: {
       return true;
     }
     default: {
@@ -700,6 +712,11 @@ void LLVMParser::extractCandidates(llvm::Function &F,
 
   // Instruction to look for 'store', 'select', 'gep', 'icmp', 'ret'
   for (inst_iterator I = inst_begin(F), E = inst_end(F); I != E; ++I) {
+    // Check if integer type
+    if (!I->getType()->isIntegerTy()) {
+      continue;
+    }
+
     switch (I->getOpcode()) {
     case Instruction::Store: {
       // Check Candidate
@@ -1642,6 +1659,48 @@ LLVMParser::evaluateAST(llvm::SmallVectorImpl<BFSEntry> &AST,
         }
         break;
       }
+      case Intrinsic::umax: {
+        auto Op0 = getVal(Call->getArgOperand(0), ValueStack, Variables, Par);
+        auto Op1 = getVal(Call->getArgOperand(1), ValueStack, Variables, Par);
+        if (Op0 <= Op1) {
+          InstResult = Op1;
+        } else {
+          InstResult = Op0;
+        }
+      } break;
+      case Intrinsic::umin: {
+        auto Op0 = getVal(Call->getArgOperand(0), ValueStack, Variables, Par);
+        auto Op1 = getVal(Call->getArgOperand(1), ValueStack, Variables, Par);
+        if (Op0 <= Op1) {
+          InstResult = Op0;
+        } else {
+          InstResult = Op1;
+        }
+      } break;
+      case Intrinsic::smin: {
+        auto Op0 = getVal(Call->getArgOperand(0), ValueStack, Variables, Par);
+        auto Op1 = getVal(Call->getArgOperand(1), ValueStack, Variables, Par);
+        if (Op0 <= Op1) {
+          InstResult = Op0;
+        } else {
+          InstResult = Op1;
+        }
+      } break;
+      case Intrinsic::smax: {
+        auto Op0 = getVal(Call->getArgOperand(0), ValueStack, Variables, Par);
+        auto Op1 = getVal(Call->getArgOperand(1), ValueStack, Variables, Par);
+        if (Op0 <= Op1) {
+          InstResult = Op1;
+        } else {
+          InstResult = Op0;
+        }
+      } break;
+      case Intrinsic::abs: {
+        auto Op0 = getVal(Call->getArgOperand(0), ValueStack, Variables, Par);
+        auto a = dyn_cast<ConstantInt>(Op0)->getZExtValue();
+        auto r = __builtin_abs(a);
+        InstResult = ConstantInt::get(Op0->getType(), r);
+      } break;
       default: {
         CI->dump();
         outs() << "getIntrinsicID: " << CI->getIntrinsicID() << "\n";
@@ -1682,6 +1741,11 @@ LLVMParser::getVal(llvm::Value *V,
     if (Var != V) {
       i++;
       continue;
+    }
+
+    if (V->getType()->isPointerTy()) {
+      llvm::Type *Ty = Type::getIntNTy(V->getContext(), Par[i].getBitWidth());
+      return getConstantInt(Ty, Par[i]);
     }
 
     // Check if Type is different
@@ -1958,10 +2022,44 @@ z3::expr LLVMParser::getZ3ExpressionFromAST(
               Op0->extract(BitWidth - (8 * i) - 1, BitWidth - (8 * (i + 1))));
         }
 
-        auto temp= z3::concat(v);
+        auto temp = z3::concat(v);
 
         ValueMAP[Call] = new z3::expr(temp);
-      }
+      } break;
+      case Intrinsic::umax: {
+        auto Op0 = getZ3Val(Z3Ctx, Call->getArgOperand(0), ValueMAP, false);
+        auto Op1 = getZ3Val(Z3Ctx, Call->getArgOperand(1), ValueMAP, false);
+
+        ValueMAP[Call] = new z3::expr(z3::ite(z3::ule(*Op0, *Op1), *Op1, *Op0));
+      } break;
+      case Intrinsic::umin: {
+        auto Op0 = getZ3Val(Z3Ctx, Call->getArgOperand(0), ValueMAP, false);
+        auto Op1 = getZ3Val(Z3Ctx, Call->getArgOperand(1), ValueMAP, false);
+
+        ValueMAP[Call] = new z3::expr(z3::ite(z3::ule(*Op0, *Op1), *Op0, *Op1));
+      } break;
+      case Intrinsic::smin: {
+        auto Op0 = getZ3Val(Z3Ctx, Call->getArgOperand(0), ValueMAP, false);
+        auto Op1 = getZ3Val(Z3Ctx, Call->getArgOperand(1), ValueMAP, false);
+
+        ValueMAP[Call] = new z3::expr(z3::ite(z3::sle(*Op0, *Op1), *Op0, *Op1));
+      } break;
+      case Intrinsic::smax: {
+        auto Op0 = getZ3Val(Z3Ctx, Call->getArgOperand(0), ValueMAP, false);
+        auto Op1 = getZ3Val(Z3Ctx, Call->getArgOperand(1), ValueMAP, false);
+
+        ValueMAP[Call] = new z3::expr(z3::ite(z3::sle(*Op0, *Op1), *Op1, *Op0));
+      } break;
+      case Intrinsic::abs: {
+        auto Op0 = getZ3Val(Z3Ctx, Call->getArgOperand(0), ValueMAP, false);
+        ValueMAP[Call] = new z3::expr(z3::abs(*Op0));
+      } break;
+      case Intrinsic::usub_sat: {
+        auto Op0 = getZ3Val(Z3Ctx, Call->getArgOperand(0), ValueMAP, false);
+        auto Op1 = getZ3Val(Z3Ctx, Call->getArgOperand(1), ValueMAP, false);
+
+        ValueMAP[Call] = new z3::expr(z3::ite(z3::ule(*Op0, *Op1), Z3Ctx.bv_val(0, Op0->get_sort().bv_size()), *Op0 - *Op1));
+      } break;
       default: {
         CI->dump();
         report_fatal_error("[!] Not supported call instruction!", false);
