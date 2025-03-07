@@ -35,8 +35,8 @@
 #include <thread>
 
 #include <llvm/IR/ConstantFold.h>
-#include <vector>
 #include <z3++.h>
+#include <vector>
 
 #include "CSiMBA.h"
 #include "Modulo.h"
@@ -50,25 +50,25 @@ using namespace llvm;
 using namespace std;
 using namespace std::chrono;
 
-llvm::cl::opt<std::string>
-    UseExternalSimplifier("external-simplifier", cl::Optional,
-                          cl::desc("Path to external simplifier script for "
-                                   "simplification (Supports: SiMBA/GAMBA"),
-                          cl::value_desc("external-simplifier"), cl::init(""));
+llvm::cl::opt<std::string> UseExternalSimplifier(
+    "external-simplifier", cl::Optional,
+    cl::desc("Path to external simplifier script for "
+             "simplification (Supports: SiMBA/GAMBA"),
+    cl::value_desc("external-simplifier"), cl::init(""));
 
-llvm::cl::opt<int>
-    MaxVarCount("max-var-count", cl::Optional,
-                cl::desc("Max variable count for simplification"),
-                cl::value_desc("max-var-count"), cl::init(6));
+llvm::cl::opt<int> MaxVarCount(
+    "max-var-count", cl::Optional,
+    cl::desc("Max variable count for simplification"),
+    cl::value_desc("max-var-count"), cl::init(6));
 
 llvm::cl::opt<int> MinASTSize("min-ast-size", cl::Optional,
                               cl::desc("Minimum AST size for simplification"),
                               cl::value_desc("min-ast-size"), cl::init(4));
 
-llvm::cl::opt<bool>
-    ShouldWalkSubAST("walk-sub-ast", cl::Optional,
-                     cl::desc("Walk sub AST if full AST to not match"),
-                     cl::value_desc("walk-sub-ast"), cl::init(false));
+llvm::cl::opt<bool> ShouldWalkSubAST(
+    "walk-sub-ast", cl::Optional,
+    cl::desc("Walk sub AST if full AST to not match"),
+    cl::value_desc("walk-sub-ast"), cl::init(false));
 
 namespace LSiMBA {
 
@@ -78,10 +78,18 @@ LLVMParser::LLVMParser(const std::string &filename,
                        const std::string &OutputFile, bool Parallel,
                        bool Verify, bool OptimizeBefore, bool OptimizeAfter,
                        bool Debug, bool Prove)
-    : OutputFile(OutputFile), Parallel(Parallel), Verify(Verify),
-      OptimizeBefore(OptimizeBefore), OptimizeAfter(OptimizeAfter),
-      Debug(Debug), Prove(Prove), SP64(filename.length()), TLII(nullptr),
-      TLI(nullptr), M(nullptr), F(nullptr) {
+    : OutputFile(OutputFile),
+      Parallel(Parallel),
+      Verify(Verify),
+      OptimizeBefore(OptimizeBefore),
+      OptimizeAfter(OptimizeAfter),
+      Debug(Debug),
+      Prove(Prove),
+      SP64(filename.length()),
+      TLII(nullptr),
+      TLI(nullptr),
+      M(nullptr),
+      F(nullptr) {
   if (!this->parse(filename)) {
     llvm::errs() << "[!] Error: Could not parse file " << filename << "\n";
     return;
@@ -100,9 +108,16 @@ LLVMParser::LLVMParser(const std::string &filename,
 LLVMParser::LLVMParser(llvm::Module *M, bool Parallel, bool Verify,
                        bool OptimizeBefore, bool OptimizeAfter, bool Debug,
                        bool Prove)
-    : M(M), F(nullptr), Parallel(Parallel), Verify(Verify),
-      OptimizeBefore(OptimizeBefore), OptimizeAfter(OptimizeAfter),
-      Debug(Debug), Prove(Prove), SP64((uint64_t)M), TLII(nullptr),
+    : M(M),
+      F(nullptr),
+      Parallel(Parallel),
+      Verify(Verify),
+      OptimizeBefore(OptimizeBefore),
+      OptimizeAfter(OptimizeAfter),
+      Debug(Debug),
+      Prove(Prove),
+      SP64((uint64_t)M),
+      TLII(nullptr),
       TLI(nullptr) {
   // Create evaluator
 
@@ -118,9 +133,16 @@ LLVMParser::LLVMParser(llvm::Module *M, bool Parallel, bool Verify,
 LLVMParser::LLVMParser(llvm::Function *F, bool Parallel, bool Verify,
                        bool OptimizeBefore, bool OptimizeAfter, bool Debug,
                        bool Prove)
-    : M(F->getParent()), F(F), Parallel(Parallel), Verify(Verify),
-      OptimizeBefore(OptimizeBefore), OptimizeAfter(OptimizeAfter),
-      Debug(Debug), Prove(Prove), SP64((uint64_t)M), TLII(nullptr),
+    : M(F->getParent()),
+      F(F),
+      Parallel(Parallel),
+      Verify(Verify),
+      OptimizeBefore(OptimizeBefore),
+      OptimizeAfter(OptimizeAfter),
+      Debug(Debug),
+      Prove(Prove),
+      SP64((uint64_t)M),
+      TLII(nullptr),
       TLI(nullptr) {
   // Create evaluator
 
@@ -160,8 +182,7 @@ int LLVMParser::simplifyMBAFunctionsOnly() {
 }
 
 void LLVMParser::writeModule() {
-  if (this->OutputFile.empty())
-    return;
+  if (this->OutputFile.empty()) return;
 
   std::error_code EC;
   llvm::raw_fd_ostream OS(this->OutputFile, EC, llvm::sys::fs::OF_None);
@@ -290,8 +311,7 @@ int LLVMParser::extractAndSimplify() {
 
   auto start = high_resolution_clock::now();
   for (auto F : Functions) {
-    if (F->isDeclaration())
-      continue;
+    if (F->isDeclaration()) continue;
 
     if (F->getName().contains("_keep")) {
       if (this->Debug) {
@@ -328,8 +348,7 @@ int LLVMParser::extractAndSimplify() {
     // Apply replacements and optimize
     bool Replaced = false;
     for (int i = 0; i < Candidates.size(); i++) {
-      if (Candidates[i].isValid == false)
-        continue;
+      if (Candidates[i].isValid == false) continue;
 
       if (this->Debug) {
         printAST(Candidates[i].AST);
@@ -376,12 +395,10 @@ int LLVMParser::simplifyMBAModule() {
   // Collect all functions
   std::vector<llvm::Function *> Functions;
   for (auto &F : *M) {
-    if (this->F && (&F != this->F))
-      continue;
+    if (this->F && (&F != this->F)) continue;
 
     // Skip simplifed functions
-    if (F.getName().starts_with("MBA_Simp"))
-      continue;
+    if (F.getName().starts_with("MBA_Simp")) continue;
 
     // Check if any load/stores are in the function
     if (hasLoadStores(F))
@@ -653,15 +670,13 @@ bool LLVMParser::isSupportedInstruction(llvm::Value *V) {
   }
 
   if (isa<SelectInst>(V)) {
-    if (IsExternalSimplifier)
-      return false;
+    if (IsExternalSimplifier) return false;
 
     return true;
   }
 
   if (isa<ICmpInst>(V)) {
-    if (IsExternalSimplifier)
-      return false;
+    if (IsExternalSimplifier) return false;
 
     // Check if operands are pointer type
     auto IC = dyn_cast<ICmpInst>(V);
@@ -678,27 +693,28 @@ bool LLVMParser::isSupportedInstruction(llvm::Value *V) {
     auto CI = dyn_cast<CallInst>(V);
     auto Intr = CI->getIntrinsicID();
     switch (Intr) {
-    case 0: {
-      // Not an intrinsic
-      return false;
-    }
-    case Intrinsic::fshl:
-    case Intrinsic::ctpop:
-    case Intrinsic::bswap:
-    case Intrinsic::umax:
-    case Intrinsic::umin:
-    case Intrinsic::abs:
-    case Intrinsic::smin:
-    case Intrinsic::smax: 
-    case Intrinsic::bitreverse: {
-      return true;
-    }
-    default: {
-      outs() << "[!] Unsupported intrinsic: " << "\n";
-      CI->dump();
-      // report_fatal_error("Unsupported intrinsic");
-      return false;
-    }
+      case 0: {
+        // Not an intrinsic
+        return false;
+      }
+      case Intrinsic::fshl:
+      case Intrinsic::fshr:
+      case Intrinsic::ctpop:
+      case Intrinsic::bswap:
+      case Intrinsic::umax:
+      case Intrinsic::umin:
+      case Intrinsic::abs:
+      case Intrinsic::smin:
+      case Intrinsic::smax:
+      case Intrinsic::bitreverse: {
+        return true;
+      }
+      default: {
+        outs() << "[!] Unsupported intrinsic: " << "\n";
+        CI->dump();
+        // report_fatal_error("Unsupported intrinsic");
+        return false;
+      }
     }
   }
 
@@ -720,156 +736,146 @@ void LLVMParser::extractCandidates(llvm::Function &F,
     }
 
     switch (I->getOpcode()) {
-    case Instruction::Store: {
-      // Check Candidate
-      auto SI = dyn_cast<StoreInst>(&*I);
-      auto Op = SI->getValueOperand();
-      if (!isVisited(Op) && isSupportedInstruction(Op)) {
-        MBACandidate Cand;
-        Cand.Candidate = dyn_cast<Instruction>(Op);
-        Candidates.push_back(Cand);
-        Visited.insert(Op);
-      }
-    } break;
-    case Instruction::GetElementPtr: {
-      auto GEP = dyn_cast<GetElementPtrInst>(&*I);
-      auto Index = GEP->getOperand(GEP->getNumOperands() - 1);
+      case Instruction::Store: {
+        // Check Candidate
+        auto SI = dyn_cast<StoreInst>(&*I);
+        auto Op = SI->getValueOperand();
+        if (!isVisited(Op) && isSupportedInstruction(Op)) {
+          MBACandidate Cand;
+          Cand.Candidate = dyn_cast<Instruction>(Op);
+          Candidates.push_back(Cand);
+          Visited.insert(Op);
+        }
+      } break;
+      case Instruction::GetElementPtr: {
+        auto GEP = dyn_cast<GetElementPtrInst>(&*I);
+        auto Index = GEP->getOperand(GEP->getNumOperands() - 1);
 
-      if (isSupportedInstruction(Index->stripPointerCasts())) {
-        if (isVisited(Index->stripPointerCasts()))
-          continue;
+        if (isSupportedInstruction(Index->stripPointerCasts())) {
+          if (isVisited(Index->stripPointerCasts())) continue;
 
-        MBACandidate Cand;
-        Cand.Candidate = dyn_cast<Instruction>(Index->stripPointerCasts());
-        Candidates.push_back(Cand);
-        Visited.insert(Index->stripPointerCasts());
-      }
-    } break;
-    case Instruction::ICmp: {
-      if (IsExternalSimplifier)
-        continue;
+          MBACandidate Cand;
+          Cand.Candidate = dyn_cast<Instruction>(Index->stripPointerCasts());
+          Candidates.push_back(Cand);
+          Visited.insert(Index->stripPointerCasts());
+        }
+      } break;
+      case Instruction::ICmp: {
+        if (IsExternalSimplifier) continue;
 
-      for (unsigned int i = 0; i < I->getNumOperands(); i++) {
-        if (isSupportedInstruction(I->getOperand(i)->stripPointerCasts())) {
-          if (isVisited(I->getOperand(i)->stripPointerCasts()))
-            continue;
+        for (unsigned int i = 0; i < I->getNumOperands(); i++) {
+          if (isSupportedInstruction(I->getOperand(i)->stripPointerCasts())) {
+            if (isVisited(I->getOperand(i)->stripPointerCasts())) continue;
+            MBACandidate Cand;
+            Cand.Candidate =
+                dyn_cast<Instruction>(I->getOperand(i)->stripPointerCasts());
+            Candidates.push_back(Cand);
+            Visited.insert(I->getOperand(i)->stripPointerCasts());
+          }
+        }
+      } break;
+      case Instruction::Ret: {
+        auto RI = dyn_cast<ReturnInst>(&*I);
+        if (!RI->getReturnValue()) continue;
+
+        if (isSupportedInstruction(RI->getReturnValue()->stripPointerCasts())) {
+          if (isVisited(RI->getReturnValue()->stripPointerCasts())) continue;
           MBACandidate Cand;
           Cand.Candidate =
-              dyn_cast<Instruction>(I->getOperand(i)->stripPointerCasts());
+              dyn_cast<Instruction>(RI->getReturnValue()->stripPointerCasts());
           Candidates.push_back(Cand);
-          Visited.insert(I->getOperand(i)->stripPointerCasts());
+          Visited.insert(RI->getReturnValue()->stripPointerCasts());
         }
-      }
-    } break;
-    case Instruction::Ret: {
-      auto RI = dyn_cast<ReturnInst>(&*I);
-      if (!RI->getReturnValue())
-        continue;
+      } break;
+      case Instruction::Call: {
+        auto CI = dyn_cast<CallInst>(&*I);
+        for (unsigned int i = 0; i < CI->arg_size(); i++) {
+          if (isSupportedInstruction(
+                  CI->getArgOperand(i)->stripPointerCasts())) {
+            if (isVisited(CI->getArgOperand(i)->stripPointerCasts())) continue;
 
-      if (isSupportedInstruction(RI->getReturnValue()->stripPointerCasts())) {
-        if (isVisited(RI->getReturnValue()->stripPointerCasts()))
-          continue;
-        MBACandidate Cand;
-        Cand.Candidate =
-            dyn_cast<Instruction>(RI->getReturnValue()->stripPointerCasts());
-        Candidates.push_back(Cand);
-        Visited.insert(RI->getReturnValue()->stripPointerCasts());
-      }
-    } break;
-    case Instruction::Call: {
-      auto CI = dyn_cast<CallInst>(&*I);
-      for (unsigned int i = 0; i < CI->arg_size(); i++) {
-        if (isSupportedInstruction(CI->getArgOperand(i)->stripPointerCasts())) {
-          if (isVisited(CI->getArgOperand(i)->stripPointerCasts()))
-            continue;
+            MBACandidate Cand;
+            Cand.Candidate = dyn_cast<Instruction>(
+                CI->getArgOperand(i)->stripPointerCasts());
+            Candidates.push_back(Cand);
+            Visited.insert(CI->getArgOperand(i)->stripPointerCasts());
+          }
+        }
+      } break;
+      case Instruction::Select: {
+        // Add Instruction
+        auto SI = dyn_cast<SelectInst>(&*I);
+        if (!isVisited(SI)) {
+          MBACandidate Cand;
+          Cand.Candidate = dyn_cast<Instruction>(SI);
+          Candidates.push_back(Cand);
+          Visited.insert(SI);
+        }
 
+        // Add Condition
+        if (isSupportedInstruction(SI->getCondition()->stripPointerCasts())) {
+          if (isVisited(SI->getCondition()->stripPointerCasts())) continue;
           MBACandidate Cand;
           Cand.Candidate =
-              dyn_cast<Instruction>(CI->getArgOperand(i)->stripPointerCasts());
+              dyn_cast<Instruction>(SI->getCondition()->stripPointerCasts());
           Candidates.push_back(Cand);
-          Visited.insert(CI->getArgOperand(i)->stripPointerCasts());
+          Visited.insert(SI->getCondition()->stripPointerCasts());
         }
-      }
-    } break;
-    case Instruction::Select: {
-      // Add Instruction
-      auto SI = dyn_cast<SelectInst>(&*I);
-      if (!isVisited(SI)) {
+
+        // Add Operands
+        for (unsigned int i = 0; i < I->getNumOperands(); i++) {
+          if (isSupportedInstruction(I->getOperand(i)->stripPointerCasts())) {
+            if (isVisited(I->getOperand(i)->stripPointerCasts())) continue;
+            MBACandidate Cand;
+            Cand.Candidate =
+                dyn_cast<Instruction>(I->getOperand(i)->stripPointerCasts());
+            Candidates.push_back(Cand);
+            Visited.insert(I->getOperand(i)->stripPointerCasts());
+          }
+        }
+      } break;
+      case Instruction::PHI: {
+        auto Phi = dyn_cast<PHINode>(&*I);
+        for (auto &Inc : Phi->incoming_values()) {
+          if (isSupportedInstruction(Inc->stripPointerCasts())) {
+            if (isVisited(Inc->stripPointerCasts())) continue;
+            MBACandidate Cand;
+            Cand.Candidate = dyn_cast<Instruction>(Inc->stripPointerCasts());
+            Candidates.push_back(Cand);
+            Visited.insert(Inc->stripPointerCasts());
+          }
+        }
+      } break;
+
+      case Instruction::Add:
+      case Instruction::Sub:
+      case Instruction::Mul:
+      case Instruction::Shl:
+      case Instruction::Xor:
+      case Instruction::Trunc:
+      case Instruction::Or:
+      case Instruction::And:
+      case Instruction::URem:
+      case Instruction::SRem:
+      case Instruction::IntToPtr:
+      case Instruction::BitCast: {
+        if (isVisited(&*I)) continue;
         MBACandidate Cand;
-        Cand.Candidate = dyn_cast<Instruction>(SI);
+        Cand.Candidate = dyn_cast<Instruction>(&*I);
         Candidates.push_back(Cand);
-        Visited.insert(SI);
-      }
+        Visited.insert(&*I);
+      } break;
 
-      // Add Condition
-      if (isSupportedInstruction(SI->getCondition()->stripPointerCasts())) {
-        if (isVisited(SI->getCondition()->stripPointerCasts()))
-          continue;
+      case Instruction::LShr:
+      case Instruction::AShr: {
+        if (IsExternalSimplifier || isVisited(&*I)) continue;
         MBACandidate Cand;
-        Cand.Candidate =
-            dyn_cast<Instruction>(SI->getCondition()->stripPointerCasts());
+        Cand.Candidate = dyn_cast<Instruction>(&*I);
         Candidates.push_back(Cand);
-        Visited.insert(SI->getCondition()->stripPointerCasts());
+        Visited.insert(&*I);
+      } break;
+      default: {
       }
-
-      // Add Operands
-      for (unsigned int i = 0; i < I->getNumOperands(); i++) {
-        if (isSupportedInstruction(I->getOperand(i)->stripPointerCasts())) {
-          if (isVisited(I->getOperand(i)->stripPointerCasts()))
-            continue;
-          MBACandidate Cand;
-          Cand.Candidate =
-              dyn_cast<Instruction>(I->getOperand(i)->stripPointerCasts());
-          Candidates.push_back(Cand);
-          Visited.insert(I->getOperand(i)->stripPointerCasts());
-        }
-      }
-    } break;
-    case Instruction::PHI: {
-      auto Phi = dyn_cast<PHINode>(&*I);
-      for (auto &Inc : Phi->incoming_values()) {
-        if (isSupportedInstruction(Inc->stripPointerCasts())) {
-          if (isVisited(Inc->stripPointerCasts()))
-            continue;
-          MBACandidate Cand;
-          Cand.Candidate = dyn_cast<Instruction>(Inc->stripPointerCasts());
-          Candidates.push_back(Cand);
-          Visited.insert(Inc->stripPointerCasts());
-        }
-      }
-    } break;
-
-    case Instruction::Add:
-    case Instruction::Sub:
-    case Instruction::Mul:
-    case Instruction::Shl:
-    case Instruction::Xor:
-    case Instruction::Trunc:
-    case Instruction::Or:
-    case Instruction::And:
-    case Instruction::URem:
-    case Instruction::SRem:
-    case Instruction::IntToPtr:
-    case Instruction::BitCast: {
-      if (isVisited(&*I))
-        continue;
-      MBACandidate Cand;
-      Cand.Candidate = dyn_cast<Instruction>(&*I);
-      Candidates.push_back(Cand);
-      Visited.insert(&*I);
-    } break;
-
-    case Instruction::LShr:
-    case Instruction::AShr: {
-      if (IsExternalSimplifier || isVisited(&*I))
-        continue;
-      MBACandidate Cand;
-      Cand.Candidate = dyn_cast<Instruction>(&*I);
-      Candidates.push_back(Cand);
-      Visited.insert(&*I);
-    } break;
-    default: {
-    }
     }
   }
 #ifdef DEBUG_SIMPLIFICATION
@@ -1088,16 +1094,14 @@ bool LLVMParser::findReplacements(llvm::DominatorTree *DT,
   std::vector<MBACandidate> ValidCandidates;
 
   for (auto &C : Candidates) {
-    if (!C.isValid)
-      continue;
+    if (!C.isValid) continue;
 
     ValidCandidates.push_back(C);
   }
 
   // Merge candidates with new candidates
   for (auto &C : SubASTCandidates) {
-    if (!C.isValid)
-      continue;
+    if (!C.isValid) continue;
 
     ValidCandidates.push_back(C);
   }
@@ -1111,8 +1115,7 @@ int LLVMParser::getASTSize(llvm::SmallVectorImpl<BFSEntry> &AST) {
   int Size = 0;
   for (auto e : AST) {
     // Dont count cast/sext/zext
-    if (e.I->isCast())
-      continue;
+    if (e.I->isCast()) continue;
 
     Size++;
   }
@@ -1129,12 +1132,10 @@ bool LLVMParser::walkSubAST(llvm::DominatorTree *DT,
     // Walk the operands
     for (auto &Op : E.I->operands()) {
       auto BinOp = dyn_cast<BinaryOperator>(Op);
-      if (!BinOp)
-        continue;
+      if (!BinOp) continue;
 
       // Only work on supported operands
-      if (ConstantExpr::isSupportedBinOp(BinOp->getOpcode()) == false)
-        continue;
+      if (ConstantExpr::isSupportedBinOp(BinOp->getOpcode()) == false) continue;
 
       MBACandidate C;
       C.Candidate = BinOp;
@@ -1142,12 +1143,10 @@ bool LLVMParser::walkSubAST(llvm::DominatorTree *DT,
       this->getAST(DT, BinOp, C.AST, C.Variables, true);
       C.ASTSize = getASTSize(C.AST);
 
-      if (C.ASTSize < MinASTSize)
-        continue;
+      if (C.ASTSize < MinASTSize) continue;
 
       int BitWidth = C.AST.front().I->getType()->getIntegerBitWidth();
-      if (BitWidth == 0 || BitWidth > 64)
-        continue;
+      if (BitWidth == 0 || BitWidth > 64) continue;
 
       auto Modulus = getModulus(BitWidth);
 
@@ -1250,9 +1249,9 @@ void LLVMParser::printAST(llvm::SmallVectorImpl<BFSEntry> &AST) {
   }
 }
 
-std::string
-LLVMParser::getASTAsString(llvm::SmallVectorImpl<BFSEntry> &AST,
-                           llvm::SmallVectorImpl<llvm::Value *> &Variables) {
+std::string LLVMParser::getASTAsString(
+    llvm::SmallVectorImpl<BFSEntry> &AST,
+    llvm::SmallVectorImpl<llvm::Value *> &Variables) {
   // Variable map
   std::map<llvm::Value *, std::string> VariableMap;
   char VStr = 'a';
@@ -1273,94 +1272,94 @@ LLVMParser::getASTAsString(llvm::SmallVectorImpl<BFSEntry> &AST,
 
     if (auto BinOp = dyn_cast<BinaryOperator>(e.I)) {
       switch (BinOp->getNumOperands()) {
-      // Add later
-      case 1:
         // Add later
-        report_fatal_error("Unsupported number of operands!");
-        break;
-      case 2:
-        if (auto C = dyn_cast<ConstantInt>(BinOp->getOperand(0))) {
-          SmallString<16> StrC;
-          C->getValue().toString(StrC, 10, true);
-          Expr += StrC;
-        } else {
-          Expr += VariableMap[BinOp->getOperand(0)];
-        }
-        break;
-      default:
-        e.I->dump();
-        report_fatal_error("Unsupported number of operands!");
+        case 1:
+          // Add later
+          report_fatal_error("Unsupported number of operands!");
+          break;
+        case 2:
+          if (auto C = dyn_cast<ConstantInt>(BinOp->getOperand(0))) {
+            SmallString<16> StrC;
+            C->getValue().toString(StrC, 10, true);
+            Expr += StrC;
+          } else {
+            Expr += VariableMap[BinOp->getOperand(0)];
+          }
+          break;
+        default:
+          e.I->dump();
+          report_fatal_error("Unsupported number of operands!");
       }
 
       switch (BinOp->getOpcode()) {
-      case Instruction::Add:
-        Expr += " + ";
-        break;
-      case Instruction::Sub:
-        Expr += " - ";
-        break;
-      case Instruction::Mul:
-        Expr += " * ";
-        break;
-      case Instruction::UDiv:
-        Expr += " / ";
-        break;
-      case Instruction::SDiv:
-        Expr += " / ";
-        break;
-      case Instruction::URem:
-        Expr += " % ";
-        break;
-      case Instruction::SRem:
-        Expr += " % ";
-        break;
-      case Instruction::Shl:
-        Expr += " << ";
-        break;
-      case Instruction::LShr:
-        Expr += " >> ";
-        break;
-      case Instruction::AShr:
-        // Should work in python...
-        Expr += " >> ";
-        break;
-      case Instruction::Xor:
-        Expr += " ^ ";
-        break;
-      case Instruction::And:
-        Expr += " & ";
-        break;
-      case Instruction::Or:
-        Expr += " | ";
-        break;
-      default:
-        e.I->dump();
-        report_fatal_error("[getASTAsString] Unsupported binary operator!");
+        case Instruction::Add:
+          Expr += " + ";
+          break;
+        case Instruction::Sub:
+          Expr += " - ";
+          break;
+        case Instruction::Mul:
+          Expr += " * ";
+          break;
+        case Instruction::UDiv:
+          Expr += " / ";
+          break;
+        case Instruction::SDiv:
+          Expr += " / ";
+          break;
+        case Instruction::URem:
+          Expr += " % ";
+          break;
+        case Instruction::SRem:
+          Expr += " % ";
+          break;
+        case Instruction::Shl:
+          Expr += " << ";
+          break;
+        case Instruction::LShr:
+          Expr += " >> ";
+          break;
+        case Instruction::AShr:
+          // Should work in python...
+          Expr += " >> ";
+          break;
+        case Instruction::Xor:
+          Expr += " ^ ";
+          break;
+        case Instruction::And:
+          Expr += " & ";
+          break;
+        case Instruction::Or:
+          Expr += " | ";
+          break;
+        default:
+          e.I->dump();
+          report_fatal_error("[getASTAsString] Unsupported binary operator!");
       }
 
       switch (CurInst->getNumOperands()) {
-      case 1:
-        // Print operand
-        if (auto C = dyn_cast<ConstantInt>(CurInst->getOperand(0))) {
-          SmallString<16> StrC;
-          C->getValue().toString(StrC, 10, true);
-          Expr += StrC;
-        } else {
-          Expr += VariableMap[CurInst->getOperand(0)];
-        }
-        break;
-      case 2:
-        if (auto C = dyn_cast<ConstantInt>(CurInst->getOperand(1))) {
-          SmallString<16> StrC;
-          C->getValue().toString(StrC, 10, true);
-          Expr += StrC;
-        } else {
-          Expr += VariableMap[CurInst->getOperand(1)];
-        }
-        break;
-      default:
-        e.I->dump();
-        report_fatal_error("Unsupported number of operands!");
+        case 1:
+          // Print operand
+          if (auto C = dyn_cast<ConstantInt>(CurInst->getOperand(0))) {
+            SmallString<16> StrC;
+            C->getValue().toString(StrC, 10, true);
+            Expr += StrC;
+          } else {
+            Expr += VariableMap[CurInst->getOperand(0)];
+          }
+          break;
+        case 2:
+          if (auto C = dyn_cast<ConstantInt>(CurInst->getOperand(1))) {
+            SmallString<16> StrC;
+            C->getValue().toString(StrC, 10, true);
+            Expr += StrC;
+          } else {
+            Expr += VariableMap[CurInst->getOperand(1)];
+          }
+          break;
+        default:
+          e.I->dump();
+          report_fatal_error("Unsupported number of operands!");
       }
     } else if (auto Trunc = dyn_cast<TruncInst>(CurInst)) {
       Expr += " (";
@@ -1384,35 +1383,35 @@ LLVMParser::getASTAsString(llvm::SmallVectorImpl<BFSEntry> &AST,
       // 64bit: (x & 0x7fffffffffffffff) - (x & 0x8000000000000000)
       // 1bit: (x & 0x1) - (x & 0x2)
       switch (SExt->getSrcTy()->getIntegerBitWidth()) {
-      case 1:
-        Expr += " & 0x1) - (";
-        Expr += VariableMap[Op0];
-        Expr += " & 0x2)";
-        break;
-      case 8:
-        Expr += " & 0x7f) - (";
-        Expr += VariableMap[Op0];
-        Expr += " & 0x80)";
-        break;
-      case 16:
-        Expr += " & 0x7fff) - (";
-        Expr += VariableMap[Op0];
-        Expr += " & 0x8000)";
-        break;
-      case 32:
-        Expr += " & 0x7fffffff) - (";
-        Expr += VariableMap[Op0];
-        Expr += " & 0x80000000)";
-        break;
-      case 64:
-        Expr += " & 0x7fffffffffffffff) - (";
-        Expr += VariableMap[Op0];
-        Expr += " & 0x8000000000000000)";
-        break;
-      default:
-        outs() << "BitWidth: " << SExt->getSrcTy()->getIntegerBitWidth()
-               << "\n";
-        report_fatal_error("Unsupported bit width!");
+        case 1:
+          Expr += " & 0x1) - (";
+          Expr += VariableMap[Op0];
+          Expr += " & 0x2)";
+          break;
+        case 8:
+          Expr += " & 0x7f) - (";
+          Expr += VariableMap[Op0];
+          Expr += " & 0x80)";
+          break;
+        case 16:
+          Expr += " & 0x7fff) - (";
+          Expr += VariableMap[Op0];
+          Expr += " & 0x8000)";
+          break;
+        case 32:
+          Expr += " & 0x7fffffff) - (";
+          Expr += VariableMap[Op0];
+          Expr += " & 0x80000000)";
+          break;
+        case 64:
+          Expr += " & 0x7fffffffffffffff) - (";
+          Expr += VariableMap[Op0];
+          Expr += " & 0x8000000000000000)";
+          break;
+        default:
+          outs() << "BitWidth: " << SExt->getSrcTy()->getIntegerBitWidth()
+                 << "\n";
+          report_fatal_error("Unsupported bit width!");
       }
     } else {
       outs() << "[getASTAsString] Unsupported instruction! : '";
@@ -1481,12 +1480,10 @@ void LLVMParser::getAST(llvm::DominatorTree *DT, llvm::Instruction *I,
 
     // We are only following instructions
     auto Ins = dyn_cast<Instruction>(v);
-    if (!Ins)
-      continue;
+    if (!Ins) continue;
 
     for (auto &O : Ins->operands()) {
-      if (isa<Constant>(O))
-        continue;
+      if (isa<Constant>(O)) continue;
 
       // Must be a variable
       if (isa<Argument>(O)) {
@@ -1533,10 +1530,10 @@ void LLVMParser::getAST(llvm::DominatorTree *DT, llvm::Instruction *I,
   std::sort(Variables.begin(), Variables.end());
 }
 
-llvm::APInt
-LLVMParser::evaluateAST(llvm::SmallVectorImpl<BFSEntry> &AST,
-                        llvm::SmallVectorImpl<llvm::Value *> &Variables,
-                        llvm::SmallVectorImpl<APInt> &Par, bool &Error) {
+llvm::APInt LLVMParser::evaluateAST(
+    llvm::SmallVectorImpl<BFSEntry> &AST,
+    llvm::SmallVectorImpl<llvm::Value *> &Variables,
+    llvm::SmallVectorImpl<APInt> &Par, bool &Error) {
   Constant *InstResult = nullptr;
   llvm::DenseMap<llvm::Value *, llvm::Constant *> ValueStack;
 
@@ -1550,31 +1547,31 @@ LLVMParser::evaluateAST(llvm::SmallVectorImpl<BFSEntry> &AST,
           getVal(BO->getOperand(1), ValueStack, Variables, Par));
 
       switch (BO->getOpcode()) {
-      case Instruction::Shl:
-        InstResult = ConstantInt::get(BO->getType(),
-                                      Op0->getValue().shl(Op1->getValue()));
-        break;
-      case Instruction::LShr:
-        InstResult = ConstantInt::get(BO->getType(),
-                                      Op0->getValue().lshr(Op1->getValue()));
-        break;
-      case Instruction::AShr:
-        InstResult = ConstantInt::get(BO->getType(),
-                                      Op0->getValue().ashr(Op1->getValue()));
-        break;
-      case Instruction::And:
-        InstResult =
-            ConstantInt::get(BO->getType(), Op0->getValue() & Op1->getValue());
-        break;
-      case Instruction::Or:
-        InstResult =
-            ConstantInt::get(BO->getType(), Op0->getValue() | Op1->getValue());
-        break;
-      default: {
-        InstResult = ConstantExpr::get(BO->getOpcode(),
-                                       getVal(Op0, ValueStack, Variables, Par),
-                                       getVal(Op1, ValueStack, Variables, Par));
-      };
+        case Instruction::Shl:
+          InstResult = ConstantInt::get(BO->getType(),
+                                        Op0->getValue().shl(Op1->getValue()));
+          break;
+        case Instruction::LShr:
+          InstResult = ConstantInt::get(BO->getType(),
+                                        Op0->getValue().lshr(Op1->getValue()));
+          break;
+        case Instruction::AShr:
+          InstResult = ConstantInt::get(BO->getType(),
+                                        Op0->getValue().ashr(Op1->getValue()));
+          break;
+        case Instruction::And:
+          InstResult = ConstantInt::get(BO->getType(),
+                                        Op0->getValue() & Op1->getValue());
+          break;
+        case Instruction::Or:
+          InstResult = ConstantInt::get(BO->getType(),
+                                        Op0->getValue() | Op1->getValue());
+          break;
+        default: {
+          InstResult = ConstantExpr::get(
+              BO->getOpcode(), getVal(Op0, ValueStack, Variables, Par),
+              getVal(Op1, ValueStack, Variables, Par));
+        };
       }
     } else if (auto Trunc = dyn_cast<TruncInst>(CurInst)) {
       // %27 = trunc i64 %26 to i32
@@ -1605,127 +1602,147 @@ LLVMParser::evaluateAST(llvm::SmallVectorImpl<BFSEntry> &AST,
     } else if (auto Call = dyn_cast<CallInst>(CurInst)) {
       auto CI = Call->getCalledFunction();
       switch (CI->getIntrinsicID()) {
-      case Intrinsic::fshl: {
-        // Implement as rotate left algorithm
-        auto Op0 = getVal(Call->getArgOperand(0), ValueStack, Variables, Par);
-        auto Op1 = getVal(Call->getArgOperand(1), ValueStack, Variables, Par);
-        auto Op2 = getVal(Call->getArgOperand(2), ValueStack, Variables, Par);
+        case Intrinsic::fshl: {
+          // Implement as rotate left algorithm
+          auto Op0 = getVal(Call->getArgOperand(0), ValueStack, Variables, Par);
+          auto Op1 = getVal(Call->getArgOperand(1), ValueStack, Variables, Par);
+          auto Op2 = getVal(Call->getArgOperand(2), ValueStack, Variables, Par);
 
-        // Get constant value
-        auto a = dyn_cast<ConstantInt>(Op0)->getZExtValue();
-        auto b = dyn_cast<ConstantInt>(Op1)->getZExtValue();
-        auto c = dyn_cast<ConstantInt>(Op2)->getZExtValue();
+          // Get constant value
+          auto a = dyn_cast<ConstantInt>(Op0)->getZExtValue();
+          auto b = dyn_cast<ConstantInt>(Op1)->getZExtValue();
+          auto c = dyn_cast<ConstantInt>(Op2)->getZExtValue();
 
-        auto width = Op0->getType()->getIntegerBitWidth();
-        auto c_mod_width = c % width;
+          auto width = Op0->getType()->getIntegerBitWidth();
+          auto c_mod_width = c % width;
 
-        // Rotate left
-        auto r = a << c_mod_width | (b >> (width - c_mod_width));
+          // Rotate left
+          auto r = a << c_mod_width | (b >> (width - c_mod_width));
 
-        // Set result
-        InstResult = ConstantInt::get(Op0->getType(), r);
-      } break;
-      case Intrinsic::bitreverse: {
-        auto Op0 = getVal(Call->getArgOperand(0), ValueStack, Variables, Par);
-        auto a = dyn_cast<ConstantInt>(Op0)->getZExtValue();
-
-        switch (Op0->getType()->getIntegerBitWidth()) {
-        case 16: {
-          auto r = reverseBits<uint16_t>(a);
+          // Set result
           InstResult = ConstantInt::get(Op0->getType(), r);
         } break;
-        case 32: {
-          auto r = reverseBits<uint32_t>(a);
+        case Intrinsic::fshr: {
+          // Implement as rotate right algorithm
+          auto Op0 = getVal(Call->getArgOperand(0), ValueStack, Variables, Par);
+          auto Op1 = getVal(Call->getArgOperand(1), ValueStack, Variables, Par);
+          auto Op2 = getVal(Call->getArgOperand(2), ValueStack, Variables, Par);
+
+          // Get constant value
+          auto a = dyn_cast<ConstantInt>(Op0)->getZExtValue();
+          auto b = dyn_cast<ConstantInt>(Op1)->getZExtValue();
+          auto c = dyn_cast<ConstantInt>(Op2)->getZExtValue();
+
+          auto width = Op0->getType()->getIntegerBitWidth();
+          auto c_mod_width = c % width;
+
+          // Rotate right
+          auto r = a << (width - c_mod_width) | (b >> c_mod_width);
+
+          // Set result
           InstResult = ConstantInt::get(Op0->getType(), r);
         } break;
-        case 64: {
-          auto r = reverseBits<uint64_t>(a);
+        case Intrinsic::bitreverse: {
+          auto Op0 = getVal(Call->getArgOperand(0), ValueStack, Variables, Par);
+          auto a = dyn_cast<ConstantInt>(Op0)->getZExtValue();
+
+          switch (Op0->getType()->getIntegerBitWidth()) {
+            case 16: {
+              auto r = reverseBits<uint16_t>(a);
+              InstResult = ConstantInt::get(Op0->getType(), r);
+            } break;
+            case 32: {
+              auto r = reverseBits<uint32_t>(a);
+              InstResult = ConstantInt::get(Op0->getType(), r);
+            } break;
+            case 64: {
+              auto r = reverseBits<uint64_t>(a);
+              InstResult = ConstantInt::get(Op0->getType(), r);
+            } break;
+            default: {
+              CI->dump();
+              outs() << Op0->getType()->getIntegerBitWidth() << "\n";
+              report_fatal_error("[!] Not supported bitreverse!", false);
+            }
+          }
+        } break;
+        case Intrinsic::ctpop: {
+          auto Op0 = getVal(Call->getArgOperand(0), ValueStack, Variables, Par);
+          auto a = dyn_cast<ConstantInt>(Op0)->getZExtValue();
+          auto r = __builtin_popcount(a);
+          InstResult = ConstantInt::get(Op0->getType(), r);
+        } break;
+        case Intrinsic::bswap: {
+          auto Op0 = getVal(Call->getArgOperand(0), ValueStack, Variables, Par);
+          auto a = dyn_cast<ConstantInt>(Op0)->getZExtValue();
+          switch (Op0->getType()->getIntegerBitWidth()) {
+            case 16: {
+              auto r = __builtin_bswap16(a);
+              InstResult = ConstantInt::get(Op0->getType(), r);
+            } break;
+            case 32: {
+              auto r = __builtin_bswap32(a);
+              InstResult = ConstantInt::get(Op0->getType(), r);
+            } break;
+            case 64: {
+              auto r = __builtin_bswap64(a);
+              InstResult = ConstantInt::get(Op0->getType(), r);
+            } break;
+            default: {
+              CI->dump();
+              outs() << Op0->getType()->getIntegerBitWidth() << "\n";
+              report_fatal_error("[!] Not supported bswap!", false);
+            }
+          }
+          break;
+        }
+        case Intrinsic::umax: {
+          auto Op0 = getVal(Call->getArgOperand(0), ValueStack, Variables, Par);
+          auto Op1 = getVal(Call->getArgOperand(1), ValueStack, Variables, Par);
+          if (Op0 <= Op1) {
+            InstResult = Op1;
+          } else {
+            InstResult = Op0;
+          }
+        } break;
+        case Intrinsic::umin: {
+          auto Op0 = getVal(Call->getArgOperand(0), ValueStack, Variables, Par);
+          auto Op1 = getVal(Call->getArgOperand(1), ValueStack, Variables, Par);
+          if (Op0 <= Op1) {
+            InstResult = Op0;
+          } else {
+            InstResult = Op1;
+          }
+        } break;
+        case Intrinsic::smin: {
+          auto Op0 = getVal(Call->getArgOperand(0), ValueStack, Variables, Par);
+          auto Op1 = getVal(Call->getArgOperand(1), ValueStack, Variables, Par);
+          if (Op0 <= Op1) {
+            InstResult = Op0;
+          } else {
+            InstResult = Op1;
+          }
+        } break;
+        case Intrinsic::smax: {
+          auto Op0 = getVal(Call->getArgOperand(0), ValueStack, Variables, Par);
+          auto Op1 = getVal(Call->getArgOperand(1), ValueStack, Variables, Par);
+          if (Op0 <= Op1) {
+            InstResult = Op1;
+          } else {
+            InstResult = Op0;
+          }
+        } break;
+        case Intrinsic::abs: {
+          auto Op0 = getVal(Call->getArgOperand(0), ValueStack, Variables, Par);
+          auto a = dyn_cast<ConstantInt>(Op0)->getZExtValue();
+          auto r = __builtin_abs(a);
           InstResult = ConstantInt::get(Op0->getType(), r);
         } break;
         default: {
           CI->dump();
-          outs() << Op0->getType()->getIntegerBitWidth() << "\n";
-          report_fatal_error("[!] Not supported bitreverse!", false);
+          outs() << "getIntrinsicID: " << CI->getIntrinsicID() << "\n";
+          report_fatal_error("[!] Not supported intrinsic!", false);
         }
-        }
-      } break;
-      case Intrinsic::ctpop: {
-        auto Op0 = getVal(Call->getArgOperand(0), ValueStack, Variables, Par);
-        auto a = dyn_cast<ConstantInt>(Op0)->getZExtValue();
-        auto r = __builtin_popcount(a);
-        InstResult = ConstantInt::get(Op0->getType(), r);
-      } break;
-      case Intrinsic::bswap: {
-        auto Op0 = getVal(Call->getArgOperand(0), ValueStack, Variables, Par);
-        auto a = dyn_cast<ConstantInt>(Op0)->getZExtValue();
-        switch (Op0->getType()->getIntegerBitWidth()) {
-        case 16: {
-          auto r = __builtin_bswap16(a);
-          InstResult = ConstantInt::get(Op0->getType(), r);
-        } break;
-        case 32: {
-          auto r = __builtin_bswap32(a);
-          InstResult = ConstantInt::get(Op0->getType(), r);
-        } break;
-        case 64: {
-          auto r = __builtin_bswap64(a);
-          InstResult = ConstantInt::get(Op0->getType(), r);
-        } break;
-        default: {
-          CI->dump();
-          outs() << Op0->getType()->getIntegerBitWidth() << "\n";
-          report_fatal_error("[!] Not supported bswap!", false);
-        }
-        }
-        break;
-      }
-      case Intrinsic::umax: {
-        auto Op0 = getVal(Call->getArgOperand(0), ValueStack, Variables, Par);
-        auto Op1 = getVal(Call->getArgOperand(1), ValueStack, Variables, Par);
-        if (Op0 <= Op1) {
-          InstResult = Op1;
-        } else {
-          InstResult = Op0;
-        }
-      } break;
-      case Intrinsic::umin: {
-        auto Op0 = getVal(Call->getArgOperand(0), ValueStack, Variables, Par);
-        auto Op1 = getVal(Call->getArgOperand(1), ValueStack, Variables, Par);
-        if (Op0 <= Op1) {
-          InstResult = Op0;
-        } else {
-          InstResult = Op1;
-        }
-      } break;
-      case Intrinsic::smin: {
-        auto Op0 = getVal(Call->getArgOperand(0), ValueStack, Variables, Par);
-        auto Op1 = getVal(Call->getArgOperand(1), ValueStack, Variables, Par);
-        if (Op0 <= Op1) {
-          InstResult = Op0;
-        } else {
-          InstResult = Op1;
-        }
-      } break;
-      case Intrinsic::smax: {
-        auto Op0 = getVal(Call->getArgOperand(0), ValueStack, Variables, Par);
-        auto Op1 = getVal(Call->getArgOperand(1), ValueStack, Variables, Par);
-        if (Op0 <= Op1) {
-          InstResult = Op1;
-        } else {
-          InstResult = Op0;
-        }
-      } break;
-      case Intrinsic::abs: {
-        auto Op0 = getVal(Call->getArgOperand(0), ValueStack, Variables, Par);
-        auto a = dyn_cast<ConstantInt>(Op0)->getZExtValue();
-        auto r = __builtin_abs(a);
-        InstResult = ConstantInt::get(Op0->getType(), r);
-      } break;
-      default: {
-        CI->dump();
-        outs() << "getIntrinsicID: " << CI->getIntrinsicID() << "\n";
-        report_fatal_error("[!] Not supported intrinsic!", false);
-      }
       }
     } else {
       CurInst->dump();
@@ -1747,13 +1764,11 @@ LLVMParser::evaluateAST(llvm::SmallVectorImpl<BFSEntry> &AST,
   return CI->getValue();
 }
 
-llvm::Constant *
-LLVMParser::getVal(llvm::Value *V,
-                   llvm::DenseMap<llvm::Value *, llvm::Constant *> &ValueStack,
-                   llvm::SmallVectorImpl<llvm::Value *> &Variables,
-                   llvm::SmallVectorImpl<llvm::APInt> &Par) {
-  if (Constant *CV = dyn_cast<Constant>(V))
-    return CV;
+llvm::Constant *LLVMParser::getVal(
+    llvm::Value *V, llvm::DenseMap<llvm::Value *, llvm::Constant *> &ValueStack,
+    llvm::SmallVectorImpl<llvm::Value *> &Variables,
+    llvm::SmallVectorImpl<llvm::APInt> &Par) {
+  if (Constant *CV = dyn_cast<Constant>(V)) return CV;
 
   // Check if variable
   int i = 0;
@@ -1843,70 +1858,70 @@ z3::expr LLVMParser::getZ3ExpressionFromAST(
     auto BO = dyn_cast<BinaryOperator>(CurInst);
     if (BO) {
       switch (BO->getOpcode()) {
-      case Instruction::BinaryOps::Add: {
-        auto exp =
-            *getZ3Val(Z3Ctx, BO->getOperand(0), ValueMAP, OverrideBitWidth) +
-            *getZ3Val(Z3Ctx, BO->getOperand(1), ValueMAP, OverrideBitWidth);
-        ValueMAP[BO] = new z3::expr(exp);
-      } break;
-      case Instruction::BinaryOps::Sub: {
-        auto exp =
-            *getZ3Val(Z3Ctx, BO->getOperand(0), ValueMAP, OverrideBitWidth) -
-            *getZ3Val(Z3Ctx, BO->getOperand(1), ValueMAP, OverrideBitWidth);
-        ValueMAP[BO] = new z3::expr(exp);
-      } break;
-      case Instruction::BinaryOps::Mul: {
-        auto exp =
-            *getZ3Val(Z3Ctx, BO->getOperand(0), ValueMAP, OverrideBitWidth) *
-            *getZ3Val(Z3Ctx, BO->getOperand(1), ValueMAP, OverrideBitWidth);
-        ValueMAP[BO] = new z3::expr(exp);
-      } break;
-      case Instruction::BinaryOps::SDiv: {
-        auto exp =
-            *getZ3Val(Z3Ctx, BO->getOperand(0), ValueMAP, OverrideBitWidth) /
-            *getZ3Val(Z3Ctx, BO->getOperand(1), ValueMAP, OverrideBitWidth);
-        ValueMAP[BO] = new z3::expr(exp);
-      } break;
-      case Instruction::BinaryOps::Xor: {
-        auto exp =
-            *getZ3Val(Z3Ctx, BO->getOperand(0), ValueMAP, OverrideBitWidth) ^
-            *getZ3Val(Z3Ctx, BO->getOperand(1), ValueMAP, OverrideBitWidth);
-        ValueMAP[BO] = new z3::expr(exp);
-      } break;
-      case Instruction::BinaryOps::And: {
-        auto exp =
-            *getZ3Val(Z3Ctx, BO->getOperand(0), ValueMAP, OverrideBitWidth) &
-            *getZ3Val(Z3Ctx, BO->getOperand(1), ValueMAP, OverrideBitWidth);
-        ValueMAP[BO] = new z3::expr(exp);
-      } break;
-      case Instruction::BinaryOps::Or: {
-        auto exp =
-            *getZ3Val(Z3Ctx, BO->getOperand(0), ValueMAP, OverrideBitWidth) |
-            *getZ3Val(Z3Ctx, BO->getOperand(1), ValueMAP, OverrideBitWidth);
-        ValueMAP[BO] = new z3::expr(exp);
-      } break;
-      case Instruction::BinaryOps::Shl: {
-        auto exp = z3::shl(
-            *getZ3Val(Z3Ctx, BO->getOperand(0), ValueMAP, OverrideBitWidth),
-            *getZ3Val(Z3Ctx, BO->getOperand(1), ValueMAP, OverrideBitWidth));
-        ValueMAP[BO] = new z3::expr(exp);
-      } break;
-      case Instruction::BinaryOps::LShr: {
-        auto exp = z3::lshr(
-            *getZ3Val(Z3Ctx, BO->getOperand(0), ValueMAP, OverrideBitWidth),
-            *getZ3Val(Z3Ctx, BO->getOperand(1), ValueMAP, OverrideBitWidth));
-        ValueMAP[BO] = new z3::expr(exp);
-      } break;
-      case Instruction::BinaryOps::AShr: {
-        auto exp = z3::ashr(
-            *getZ3Val(Z3Ctx, BO->getOperand(0), ValueMAP, OverrideBitWidth),
-            *getZ3Val(Z3Ctx, BO->getOperand(1), ValueMAP, OverrideBitWidth));
-        ValueMAP[BO] = new z3::expr(exp);
-      } break;
-      default: {
-        BO->print(outs());
-        report_fatal_error("Unknown opcode!");
-      }
+        case Instruction::BinaryOps::Add: {
+          auto exp =
+              *getZ3Val(Z3Ctx, BO->getOperand(0), ValueMAP, OverrideBitWidth) +
+              *getZ3Val(Z3Ctx, BO->getOperand(1), ValueMAP, OverrideBitWidth);
+          ValueMAP[BO] = new z3::expr(exp);
+        } break;
+        case Instruction::BinaryOps::Sub: {
+          auto exp =
+              *getZ3Val(Z3Ctx, BO->getOperand(0), ValueMAP, OverrideBitWidth) -
+              *getZ3Val(Z3Ctx, BO->getOperand(1), ValueMAP, OverrideBitWidth);
+          ValueMAP[BO] = new z3::expr(exp);
+        } break;
+        case Instruction::BinaryOps::Mul: {
+          auto exp =
+              *getZ3Val(Z3Ctx, BO->getOperand(0), ValueMAP, OverrideBitWidth) *
+              *getZ3Val(Z3Ctx, BO->getOperand(1), ValueMAP, OverrideBitWidth);
+          ValueMAP[BO] = new z3::expr(exp);
+        } break;
+        case Instruction::BinaryOps::SDiv: {
+          auto exp =
+              *getZ3Val(Z3Ctx, BO->getOperand(0), ValueMAP, OverrideBitWidth) /
+              *getZ3Val(Z3Ctx, BO->getOperand(1), ValueMAP, OverrideBitWidth);
+          ValueMAP[BO] = new z3::expr(exp);
+        } break;
+        case Instruction::BinaryOps::Xor: {
+          auto exp =
+              *getZ3Val(Z3Ctx, BO->getOperand(0), ValueMAP, OverrideBitWidth) ^
+              *getZ3Val(Z3Ctx, BO->getOperand(1), ValueMAP, OverrideBitWidth);
+          ValueMAP[BO] = new z3::expr(exp);
+        } break;
+        case Instruction::BinaryOps::And: {
+          auto exp =
+              *getZ3Val(Z3Ctx, BO->getOperand(0), ValueMAP, OverrideBitWidth) &
+              *getZ3Val(Z3Ctx, BO->getOperand(1), ValueMAP, OverrideBitWidth);
+          ValueMAP[BO] = new z3::expr(exp);
+        } break;
+        case Instruction::BinaryOps::Or: {
+          auto exp =
+              *getZ3Val(Z3Ctx, BO->getOperand(0), ValueMAP, OverrideBitWidth) |
+              *getZ3Val(Z3Ctx, BO->getOperand(1), ValueMAP, OverrideBitWidth);
+          ValueMAP[BO] = new z3::expr(exp);
+        } break;
+        case Instruction::BinaryOps::Shl: {
+          auto exp = z3::shl(
+              *getZ3Val(Z3Ctx, BO->getOperand(0), ValueMAP, OverrideBitWidth),
+              *getZ3Val(Z3Ctx, BO->getOperand(1), ValueMAP, OverrideBitWidth));
+          ValueMAP[BO] = new z3::expr(exp);
+        } break;
+        case Instruction::BinaryOps::LShr: {
+          auto exp = z3::lshr(
+              *getZ3Val(Z3Ctx, BO->getOperand(0), ValueMAP, OverrideBitWidth),
+              *getZ3Val(Z3Ctx, BO->getOperand(1), ValueMAP, OverrideBitWidth));
+          ValueMAP[BO] = new z3::expr(exp);
+        } break;
+        case Instruction::BinaryOps::AShr: {
+          auto exp = z3::ashr(
+              *getZ3Val(Z3Ctx, BO->getOperand(0), ValueMAP, OverrideBitWidth),
+              *getZ3Val(Z3Ctx, BO->getOperand(1), ValueMAP, OverrideBitWidth));
+          ValueMAP[BO] = new z3::expr(exp);
+        } break;
+        default: {
+          BO->print(outs());
+          report_fatal_error("Unknown opcode!");
+        }
       }
 
     } else if (auto Trunc = dyn_cast<llvm::TruncInst>(CurInst)) {
@@ -1963,38 +1978,38 @@ z3::expr LLVMParser::getZ3ExpressionFromAST(
 
       z3::expr *Res = nullptr;
       switch (ICmp->getPredicate()) {
-      case llvm::ICmpInst::ICMP_EQ: {
-        Res = new z3::expr(*V0 == *V1);
-      } break;
-      case llvm::ICmpInst::ICMP_NE:
-        Res = new z3::expr(*V0 != *V1);
-        break;
-      case llvm::ICmpInst::ICMP_UGT:
-        Res = new z3::expr(z3::ugt(*V0, *V1));
-        break;
-      case llvm::ICmpInst::ICMP_UGE:
-        Res = new z3::expr(z3::uge(*V0, *V1));
-        break;
-      case llvm::ICmpInst::ICMP_ULT:
-        Res = new z3::expr(z3::ult(*V0, *V1));
-        break;
-      case llvm::ICmpInst::ICMP_ULE:
-        Res = new z3::expr(z3::ule(*V0, *V1));
-        break;
-      case llvm::ICmpInst::ICMP_SGT:
-        Res = new z3::expr(z3::sgt(*V0, *V1));
-        break;
-      case llvm::ICmpInst::ICMP_SGE:
-        Res = new z3::expr(z3::sge(*V0, *V1));
-        break;
-      case llvm::ICmpInst::ICMP_SLT:
-        Res = new z3::expr(z3::slt(*V0, *V1));
-        break;
-      case llvm::ICmpInst::ICMP_SLE:
-        Res = new z3::expr(z3::sle(*V0, *V1));
-        break;
-      default:
-        report_fatal_error("Unsupported Predicate!", false);
+        case llvm::ICmpInst::ICMP_EQ: {
+          Res = new z3::expr(*V0 == *V1);
+        } break;
+        case llvm::ICmpInst::ICMP_NE:
+          Res = new z3::expr(*V0 != *V1);
+          break;
+        case llvm::ICmpInst::ICMP_UGT:
+          Res = new z3::expr(z3::ugt(*V0, *V1));
+          break;
+        case llvm::ICmpInst::ICMP_UGE:
+          Res = new z3::expr(z3::uge(*V0, *V1));
+          break;
+        case llvm::ICmpInst::ICMP_ULT:
+          Res = new z3::expr(z3::ult(*V0, *V1));
+          break;
+        case llvm::ICmpInst::ICMP_ULE:
+          Res = new z3::expr(z3::ule(*V0, *V1));
+          break;
+        case llvm::ICmpInst::ICMP_SGT:
+          Res = new z3::expr(z3::sgt(*V0, *V1));
+          break;
+        case llvm::ICmpInst::ICMP_SGE:
+          Res = new z3::expr(z3::sge(*V0, *V1));
+          break;
+        case llvm::ICmpInst::ICMP_SLT:
+          Res = new z3::expr(z3::slt(*V0, *V1));
+          break;
+        case llvm::ICmpInst::ICMP_SLE:
+          Res = new z3::expr(z3::sle(*V0, *V1));
+          break;
+        default:
+          report_fatal_error("Unsupported Predicate!", false);
       }
 
       ValueMAP[ICmp] = new z3::expr(
@@ -2002,101 +2017,110 @@ z3::expr LLVMParser::getZ3ExpressionFromAST(
     } else if (auto Call = dyn_cast<CallInst>(CurInst)) {
       auto CI = Call->getCalledFunction();
       switch (CI->getIntrinsicID()) {
-      case Intrinsic::fshl: {
-        // Implement as rotate left algorithm
-        auto a = getZ3Val(Z3Ctx, Call->getArgOperand(0), ValueMAP, false);
-        auto b = getZ3Val(Z3Ctx, Call->getArgOperand(1), ValueMAP, false);
-        auto c = getZ3Val(Z3Ctx, Call->getArgOperand(2), ValueMAP, false);
+        case Intrinsic::fshl: {
+          // Implement as rotate left algorithm
+          auto a = getZ3Val(Z3Ctx, Call->getArgOperand(0), ValueMAP, false);
+          auto b = getZ3Val(Z3Ctx, Call->getArgOperand(1), ValueMAP, false);
+          auto c = getZ3Val(Z3Ctx, Call->getArgOperand(2), ValueMAP, false);
 
-        auto width = a->get_sort().bv_size();
-        auto expr_width = z3::expr(Z3Ctx.bv_val(width, width));
+          auto width = a->get_sort().bv_size();
+          auto expr_width = z3::expr(Z3Ctx.bv_val(width, width));
 
-        // c mod width
-        auto c_mod_width = new z3::expr(*c % expr_width);
+          // c mod width
+          auto c_mod_width = new z3::expr(*c % expr_width);
 
-        // Rotate left
-        auto r = z3::shl(*a, *c_mod_width) |
-                 z3::lshr(*b, (expr_width - *c_mod_width));
+          // Rotate left
+          auto r = z3::shl(*a, *c_mod_width) |
+                   z3::lshr(*b, (expr_width - *c_mod_width));
 
-        // Set result
-        ValueMAP[Call] = new z3::expr(r);
-      } break;
-      case Intrinsic::bitreverse: {
-        // Reverse the order of bits
-        auto Op0 = getZ3Val(Z3Ctx, Call->getArgOperand(0), ValueMAP, false);
-        auto BitWidth = Call->getArgOperand(0)->getType()->getIntegerBitWidth();
+          // Set result
+          ValueMAP[Call] = new z3::expr(r);
+        } break;
+        case Intrinsic::bitreverse: {
+          // Reverse the order of bits
+          auto Op0 = getZ3Val(Z3Ctx, Call->getArgOperand(0), ValueMAP, false);
+          auto BitWidth =
+              Call->getArgOperand(0)->getType()->getIntegerBitWidth();
 
-        auto v = z3::expr_vector(Z3Ctx);
-        for (int i = BitWidth - 1; i >= 0; i++) {
-          v.push_back(Op0->extract(i, i));
+          auto v = z3::expr_vector(Z3Ctx);
+          for (int i = BitWidth - 1; i >= 0; i++) {
+            v.push_back(Op0->extract(i, i));
+          }
+          auto r = concat(v);
+
+          ValueMAP[Call] = new z3::expr(r);
+        } break;
+        case Intrinsic::ctpop: {
+          auto Op0 = getZ3Val(Z3Ctx, Call->getArgOperand(0), ValueMAP, false);
+          auto BitWidth =
+              Call->getArgOperand(0)->getType()->getIntegerBitWidth();
+
+          auto temp = z3::zext(Op0->extract(0, 0), BitWidth - 1);
+          for (int i = 1; i < BitWidth; i++) {
+            temp = temp + z3::zext(Op0->extract(i, i), BitWidth - 1);
+          }
+
+          ValueMAP[Call] = new z3::expr(temp);
+        } break;
+        case Intrinsic::bswap: {
+          auto Op0 = getZ3Val(Z3Ctx, Call->getArgOperand(0), ValueMAP, false);
+          auto BitWidth =
+              Call->getArgOperand(0)->getType()->getIntegerBitWidth();
+
+          auto v = z3::expr_vector(Z3Ctx);
+          for (int i = (BitWidth / 8) - 1; i >= 0; i--) {
+            v.push_back(
+                Op0->extract(BitWidth - (8 * i) - 1, BitWidth - (8 * (i + 1))));
+          }
+
+          auto temp = z3::concat(v);
+
+          ValueMAP[Call] = new z3::expr(temp);
+        } break;
+        case Intrinsic::umax: {
+          auto Op0 = getZ3Val(Z3Ctx, Call->getArgOperand(0), ValueMAP, false);
+          auto Op1 = getZ3Val(Z3Ctx, Call->getArgOperand(1), ValueMAP, false);
+
+          ValueMAP[Call] =
+              new z3::expr(z3::ite(z3::ule(*Op0, *Op1), *Op1, *Op0));
+        } break;
+        case Intrinsic::umin: {
+          auto Op0 = getZ3Val(Z3Ctx, Call->getArgOperand(0), ValueMAP, false);
+          auto Op1 = getZ3Val(Z3Ctx, Call->getArgOperand(1), ValueMAP, false);
+
+          ValueMAP[Call] =
+              new z3::expr(z3::ite(z3::ule(*Op0, *Op1), *Op0, *Op1));
+        } break;
+        case Intrinsic::smin: {
+          auto Op0 = getZ3Val(Z3Ctx, Call->getArgOperand(0), ValueMAP, false);
+          auto Op1 = getZ3Val(Z3Ctx, Call->getArgOperand(1), ValueMAP, false);
+
+          ValueMAP[Call] =
+              new z3::expr(z3::ite(z3::sle(*Op0, *Op1), *Op0, *Op1));
+        } break;
+        case Intrinsic::smax: {
+          auto Op0 = getZ3Val(Z3Ctx, Call->getArgOperand(0), ValueMAP, false);
+          auto Op1 = getZ3Val(Z3Ctx, Call->getArgOperand(1), ValueMAP, false);
+
+          ValueMAP[Call] =
+              new z3::expr(z3::ite(z3::sle(*Op0, *Op1), *Op1, *Op0));
+        } break;
+        case Intrinsic::abs: {
+          auto Op0 = getZ3Val(Z3Ctx, Call->getArgOperand(0), ValueMAP, false);
+          ValueMAP[Call] = new z3::expr(z3::abs(*Op0));
+        } break;
+        case Intrinsic::usub_sat: {
+          auto Op0 = getZ3Val(Z3Ctx, Call->getArgOperand(0), ValueMAP, false);
+          auto Op1 = getZ3Val(Z3Ctx, Call->getArgOperand(1), ValueMAP, false);
+
+          ValueMAP[Call] = new z3::expr(
+              z3::ite(z3::ule(*Op0, *Op1),
+                      Z3Ctx.bv_val(0, Op0->get_sort().bv_size()), *Op0 - *Op1));
+        } break;
+        default: {
+          CI->dump();
+          report_fatal_error("[!] Not supported call instruction!", false);
         }
-        auto r = concat(v);
-
-        ValueMAP[Call] = new z3::expr(r);
-      }break;
-      case Intrinsic::ctpop: {
-        auto Op0 = getZ3Val(Z3Ctx, Call->getArgOperand(0), ValueMAP, false);
-        auto BitWidth = Call->getArgOperand(0)->getType()->getIntegerBitWidth();
-
-        auto temp = z3::zext(Op0->extract(0, 0), BitWidth - 1);
-        for (int i = 1; i < BitWidth; i++) {
-          temp = temp + z3::zext(Op0->extract(i, i), BitWidth - 1);
-        }
-
-        ValueMAP[Call] = new z3::expr(temp);
-      } break;
-      case Intrinsic::bswap: {
-        auto Op0 = getZ3Val(Z3Ctx, Call->getArgOperand(0), ValueMAP, false);
-        auto BitWidth = Call->getArgOperand(0)->getType()->getIntegerBitWidth();
-
-        auto v = z3::expr_vector(Z3Ctx);
-        for (int i = (BitWidth / 8) - 1; i >= 0; i--) {
-          v.push_back(
-              Op0->extract(BitWidth - (8 * i) - 1, BitWidth - (8 * (i + 1))));
-        }
-
-        auto temp = z3::concat(v);
-
-        ValueMAP[Call] = new z3::expr(temp);
-      } break;
-      case Intrinsic::umax: {
-        auto Op0 = getZ3Val(Z3Ctx, Call->getArgOperand(0), ValueMAP, false);
-        auto Op1 = getZ3Val(Z3Ctx, Call->getArgOperand(1), ValueMAP, false);
-
-        ValueMAP[Call] = new z3::expr(z3::ite(z3::ule(*Op0, *Op1), *Op1, *Op0));
-      } break;
-      case Intrinsic::umin: {
-        auto Op0 = getZ3Val(Z3Ctx, Call->getArgOperand(0), ValueMAP, false);
-        auto Op1 = getZ3Val(Z3Ctx, Call->getArgOperand(1), ValueMAP, false);
-
-        ValueMAP[Call] = new z3::expr(z3::ite(z3::ule(*Op0, *Op1), *Op0, *Op1));
-      } break;
-      case Intrinsic::smin: {
-        auto Op0 = getZ3Val(Z3Ctx, Call->getArgOperand(0), ValueMAP, false);
-        auto Op1 = getZ3Val(Z3Ctx, Call->getArgOperand(1), ValueMAP, false);
-
-        ValueMAP[Call] = new z3::expr(z3::ite(z3::sle(*Op0, *Op1), *Op0, *Op1));
-      } break;
-      case Intrinsic::smax: {
-        auto Op0 = getZ3Val(Z3Ctx, Call->getArgOperand(0), ValueMAP, false);
-        auto Op1 = getZ3Val(Z3Ctx, Call->getArgOperand(1), ValueMAP, false);
-
-        ValueMAP[Call] = new z3::expr(z3::ite(z3::sle(*Op0, *Op1), *Op1, *Op0));
-      } break;
-      case Intrinsic::abs: {
-        auto Op0 = getZ3Val(Z3Ctx, Call->getArgOperand(0), ValueMAP, false);
-        ValueMAP[Call] = new z3::expr(z3::abs(*Op0));
-      } break;
-      case Intrinsic::usub_sat: {
-        auto Op0 = getZ3Val(Z3Ctx, Call->getArgOperand(0), ValueMAP, false);
-        auto Op1 = getZ3Val(Z3Ctx, Call->getArgOperand(1), ValueMAP, false);
-
-        ValueMAP[Call] = new z3::expr(z3::ite(z3::ule(*Op0, *Op1), Z3Ctx.bv_val(0, Op0->get_sort().bv_size()), *Op0 - *Op1));
-      } break;
-      default: {
-        CI->dump();
-        report_fatal_error("[!] Not supported call instruction!", false);
-      }
       }
     }
 
@@ -2117,8 +2141,7 @@ z3::expr LLVMParser::getZ3ExpressionFromAST(
       }
     }
 
-    if (Found)
-      continue;
+    if (Found) continue;
 
     delete V.second;
   }
@@ -2139,10 +2162,9 @@ z3::expr LLVMParser::boolToBV(z3::context &Z3Ctx, z3::expr &BoolExpr,
   return z3::ite(BoolExpr, One, Zero);
 }
 
-z3::expr *
-LLVMParser::getZ3Val(z3::context &Z3Ctx, llvm::Value *V,
-                     llvm::DenseMap<llvm::Value *, z3::expr *> &ValueMap,
-                     int OverrideBitWidth) {
+z3::expr *LLVMParser::getZ3Val(
+    z3::context &Z3Ctx, llvm::Value *V,
+    llvm::DenseMap<llvm::Value *, z3::expr *> &ValueMap, int OverrideBitWidth) {
   if (ConstantInt *CV = dyn_cast<ConstantInt>(V)) {
     int BitWidth = 0;
     if (OverrideBitWidth) {
@@ -2390,4 +2412,4 @@ void LLVMParser::optimizeFunction(llvm::Function &F) {
   FPM.run(F, FAM);
 }
 
-} // namespace LSiMBA
+}  // namespace LSiMBA
