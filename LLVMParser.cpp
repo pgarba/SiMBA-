@@ -2037,6 +2037,25 @@ z3::expr LLVMParser::getZ3ExpressionFromAST(
           // Set result
           ValueMAP[Call] = new z3::expr(r);
         } break;
+        case Intrinsic::fshr: {
+          // Implement as rotate right algorithm
+          auto a = getZ3Val(Z3Ctx, Call->getArgOperand(0), ValueMAP, false);
+          auto b = getZ3Val(Z3Ctx, Call->getArgOperand(1), ValueMAP, false);
+          auto c = getZ3Val(Z3Ctx, Call->getArgOperand(2), ValueMAP, false);
+
+          auto width = a->get_sort().bv_size();
+          auto expr_width = z3::expr(Z3Ctx.bv_val(width, width));
+
+          // c mod width
+          auto c_mod_width = new z3::expr(*c % expr_width);
+
+          // Rotate right
+          auto r = z3::lshr(*a, *c_mod_width) |
+                   z3::shl(*b, (expr_width - *c_mod_width));
+
+          // Set result
+          ValueMAP[Call] = new z3::expr(r);
+        } break;
         case Intrinsic::bitreverse: {
           // Reverse the order of bits
           auto Op0 = getZ3Val(Z3Ctx, Call->getArgOperand(0), ValueMAP, false);
