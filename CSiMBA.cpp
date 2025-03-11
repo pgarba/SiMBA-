@@ -24,82 +24,89 @@ using namespace std::chrono;
 /*
   Options
 */
+cl::OptionCategory SiMBAOpt("SiMBA++ Options");
+
 cl::opt<std::string> StrMBA("mba", cl::Optional,
                             cl::desc("MBA that will be verfied/simplified"),
-                            cl::value_desc("mba"), cl::init(""));
+                            cl::value_desc("mba"), cl::init(""),
+                            cl::cat(SiMBAOpt));
 
-cl::opt<std::string>
-    StrMBADB("mbadb", cl::Optional,
-             cl::desc("MBA database that will be verfied/simplified"),
-             cl::value_desc("mbadb"), cl::init(""));
+cl::opt<std::string> StrMBADB(
+    "mbadb", cl::Optional,
+    cl::desc("MBA database that will be verfied/simplified"),
+    cl::value_desc("mbadb"), cl::init(""), cl::cat(SiMBAOpt));
 
 cl::opt<std::string> StrIR("ir", cl::Optional,
                            cl::desc("LLVM Module that contains MBA functions "
                                     "that will be verfied/simplified"),
-                           cl::value_desc("ir"), cl::init(""));
+                           cl::value_desc("ir"), cl::init(""),
+                           cl::cat(SiMBAOpt));
 
-cl::opt<std::string>
-    ConvertToLLVM("convert-to-llvm", cl::Optional,
-                  cl::desc("Converts the MBA database to LLVM"),
-                  cl::value_desc("Database output name"), cl::init(""));
+cl::opt<std::string> ConvertToLLVM(
+    "convert-to-llvm", cl::Optional,
+    cl::desc("Converts the MBA database to LLVM"),
+    cl::value_desc("Database output name"), cl::init(""), cl::cat(SiMBAOpt));
 
 cl::opt<std::string> Output("out", cl::Optional,
                             cl::desc("Stores the output into this file"),
-                            cl::value_desc("out"), cl::init(""));
+                            cl::value_desc("out"), cl::init(""),
+                            cl::cat(SiMBAOpt));
 
 cl::opt<int> StopN("stop", cl::Optional,
                    cl::desc("Stop after N MBAs are solved (Default 0)"),
-                   cl::value_desc("stop"), cl::init(0));
+                   cl::value_desc("stop"), cl::init(0), cl::cat(SiMBAOpt));
 
 cl::opt<int> BitCount("bitcount", cl::Optional,
                       cl::desc("Bitcount of the variables (Default 64)"),
-                      cl::value_desc("BitCount"), cl::init(64));
+                      cl::value_desc("BitCount"), cl::init(64),
+                      cl::cat(SiMBAOpt));
 
 cl::opt<bool> DetectAndSimplify(
     "detect-simplify", cl::Optional,
     cl::desc(
         "Search for MBAs in LLVM Module and try to simplify (Default false)"),
-    cl::value_desc("detect-simplify"), cl::init(false));
+    cl::value_desc("detect-simplify"), cl::init(false), cl::cat(SiMBAOpt));
 
-cl::opt<bool>
-    UseFastCheck("fastcheck", cl::Optional,
-                 cl::desc("Verify MBA with random values (Default true)"),
-                 cl::value_desc("fastcheck"), cl::init(true));
+cl::opt<bool> UseFastCheck(
+    "fastcheck", cl::Optional,
+    cl::desc("Verify MBA with random values (Default true)"),
+    cl::value_desc("fastcheck"), cl::init(true), cl::cat(SiMBAOpt));
 
-cl::opt<bool>
-    IgnoreExpected("ignore-expected", cl::Optional,
-                   cl::desc("Ignores the expected string (Default false)"),
-                   cl::value_desc("ignore-expected"), cl::init(false));
+cl::opt<bool> IgnoreExpected(
+    "ignore-expected", cl::Optional,
+    cl::desc("Ignores the expected string (Default false)"),
+    cl::value_desc("ignore-expected"), cl::init(false), cl::cat(SiMBAOpt));
 
-cl::opt<bool>
-    CheckLinear("checklinear", cl::Optional,
-                cl::desc("Check if MBA is a linear expresssion (Default true)"),
-                cl::value_desc("checklinear"), cl::init(true));
+cl::opt<bool> CheckLinear(
+    "checklinear", cl::Optional,
+    cl::desc("Check if MBA is a linear expresssion (Default true)"),
+    cl::value_desc("checklinear"), cl::init(true), cl::cat(SiMBAOpt));
 
 cl::opt<bool> SimplifyExpected(
     "simplify-expected", cl::Optional,
     cl::desc("Simplify the expected value to match it (Default false)"),
-    cl::value_desc("simplify-expected"), cl::init(false));
+    cl::value_desc("simplify-expected"), cl::init(false), cl::cat(SiMBAOpt));
 
-cl::opt<bool>
-    RunParallel("parallel", cl::Optional,
-                cl::desc("Evaluate/Check MBA expressions in parallel, give a "
-                         "nice boost on MBA with > 3 vars (Default true)"),
-                cl::value_desc("parallel"), cl::init(true));
+cl::opt<bool> RunParallel(
+    "parallel", cl::Optional,
+    cl::desc("Evaluate/Check MBA expressions in parallel, give a "
+             "nice boost on MBA with > 3 vars (Default true)"),
+    cl::value_desc("parallel"), cl::init(true), cl::cat(SiMBAOpt));
 
-cl::opt<bool>
-    ProveZ3("prove", cl::Optional,
-            cl::desc("Prove with Z3 that the MBA is correct (Default false)"),
-            cl::value_desc("prove"), cl::init(false));
+cl::opt<bool> ProveZ3(
+    "prove", cl::Optional,
+    cl::desc("Prove with Z3 that the MBA is correct (Default false)"),
+    cl::value_desc("prove"), cl::init(false), cl::cat(SiMBAOpt));
 
 cl::opt<bool> RunOptimizer(
     "optimize", cl::Optional,
     cl::desc("Optimize LLVM IR before simplification (Default true)"),
-    cl::value_desc("optimize"), cl::init(true));
+    cl::value_desc("optimize"), cl::init(true), cl::cat(SiMBAOpt));
 
 cl::opt<bool> Debug("simba-debug", cl::Optional,
                     cl::desc("Print debug information (Default false)"),
-                    cl::value_desc("simba-debug"), cl::init(false));
+                    cl::value_desc("simba-debug"), cl::init(false),
+                    cl::cat(SiMBAOpt));
 
 /**
  * @brief Simplify a single MBA
@@ -136,6 +143,7 @@ void RunSimplifier(std::string &MBA, std::string &SimpMBA, std::string &ExpMBA,
 int main(int argc, char **argv) {
   InitLLVM X(argc, argv);
 
+  llvm::cl::HideUnrelatedOptions(SiMBAOpt);
   llvm::cl::ParseCommandLineOptions(argc, argv);
 
   // Print a SiMBA logo
@@ -220,8 +228,7 @@ void SimplifyMBADatabase() {
   auto start = high_resolution_clock::now();
   while (std::getline(infile, line)) {
     // Skip comments
-    if (line[0] == '#')
-      continue;
+    if (line[0] == '#') continue;
 
     // split line at '#' and strip whitespaces
     auto MBA = line.substr(0, line.find(','));
@@ -331,9 +338,10 @@ void RunSimplifier(std::string &MBA, std::string &SimpMBA, std::string &ExpMBA,
     Valid++;
     // printf("[%d] Valid Transformation!\n", Counter);
     if (!IgnoreExpected && (ExpMBA != SimpMBA)) {
-      printf("[%d] Replacement is valid but does not meet expected string: "
-             "(%s != %s)\n",
-             Counter, ExpMBA.c_str(), SimpMBA.c_str());
+      printf(
+          "[%d] Replacement is valid but does not meet expected string: "
+          "(%s != %s)\n",
+          Counter, ExpMBA.c_str(), SimpMBA.c_str());
     }
   } else {
     printf("[%d] Not Valid Transformation! (%s != %s) <=> %s\n", Counter,

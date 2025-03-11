@@ -38,23 +38,27 @@
 using namespace llvm;
 using namespace std;
 
+extern llvm::cl::OptionCategory SiMBAOpt;
+
 cl::opt<std::string> PythonPath("python-path", cl::Optional,
                                 cl::desc("Path to python binary"),
                                 cl::value_desc("python-path"),
-                                cl::init("python"));
+                                cl::init("python"), cl::cat(SiMBAOpt));
 
 cl::opt<bool> RedisCache("enable-redis-cache", cl::Optional,
                          cl::desc("Enable redis cache in GAMBA"),
-                         cl::value_desc("redis-cache"), cl::init(false));
+                         cl::value_desc("redis-cache"), cl::init(false),
+                         cl::cat(SiMBAOpt));
 
 cl::opt<bool> EnableSHR("enable-shr", cl::Optional,
                         cl::desc("Enable SHR in external solving in GAMBA"),
-                        cl::value_desc("enable-shr"), cl::init(true));
+                        cl::value_desc("enable-shr"), cl::init(true),
+                        cl::cat(SiMBAOpt));
 
 cl::opt<bool>
     EnableMod("enable-mod-red", cl::Optional,
               cl::desc("Enable modulo reduction of constants in GAMBA"),
-              cl::value_desc("enable-mod-red"), cl::init(false));
+    cl::value_desc("enable-mod-red"), cl::init(false), cl::cat(SiMBAOpt));
 
 static bool WarnOnce = false;
 

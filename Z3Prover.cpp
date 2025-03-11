@@ -9,22 +9,27 @@
 #include "llvm/IRReader/IRReader.h"
 #include "llvm/Support/CommandLine.h"
 
-llvm::cl::opt<bool>
-    PrintSMT("print-smt", llvm::cl::Optional,
-             llvm::cl::desc("Print SMT2 formula for debugging purposes"),
-             llvm::cl::value_desc("print-smt"), llvm::cl::init(false));
+extern llvm::cl::OptionCategory SiMBAOpt;
+
+llvm::cl::opt<bool> PrintSMT(
+    "print-smt", llvm::cl::Optional,
+    llvm::cl::desc("Print SMT2 formula for debugging purposes"),
+    llvm::cl::value_desc("print-smt"), llvm::cl::init(false),
+    llvm::cl::cat(SiMBAOpt));
 
 // Add timeout parameter as string
-llvm::cl::opt<std::string>
-    timeout("timeout", llvm::cl::Optional,
-            llvm::cl::desc("Timeout for Z3 solver (Default 700)"),
-            llvm::cl::value_desc("timeout"), llvm::cl::init("700"));
+llvm::cl::opt<std::string> timeout(
+    "timeout", llvm::cl::Optional,
+    llvm::cl::desc("Timeout for Z3 solver (Default 700)"),
+    llvm::cl::value_desc("timeout"), llvm::cl::init("700"),
+    llvm::cl::cat(SiMBAOpt));
 
 // Accept unknown as unsat
-llvm::cl::opt<bool>
-    AcceptUnknown("accept-unknown", llvm::cl::Optional,
-                  llvm::cl::desc("Accept unknown as unsat (Needed on timeout)"),
-                  llvm::cl::value_desc("accept-unknown"), llvm::cl::init(true));
+llvm::cl::opt<bool> AcceptUnknown(
+    "accept-unknown", llvm::cl::Optional,
+    llvm::cl::desc("Accept unknown as unsat (Needed on timeout)"),
+    llvm::cl::value_desc("accept-unknown"), llvm::cl::init(true),
+    llvm::cl::cat(SiMBAOpt));
 
 bool prove(z3::expr conjecture) {
   z3::context &c = conjecture.ctx();

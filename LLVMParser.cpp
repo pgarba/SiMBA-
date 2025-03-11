@@ -50,25 +50,28 @@ using namespace llvm;
 using namespace std;
 using namespace std::chrono;
 
+extern cl::OptionCategory SiMBAOpt;
+
 llvm::cl::opt<std::string> UseExternalSimplifier(
     "external-simplifier", cl::Optional,
     cl::desc("Path to external simplifier script for "
              "simplification (Supports: SiMBA/GAMBA"),
-    cl::value_desc("external-simplifier"), cl::init(""));
+    cl::value_desc("external-simplifier"), cl::init(""), cl::cat(SiMBAOpt));
 
 llvm::cl::opt<int> MaxVarCount(
     "max-var-count", cl::Optional,
     cl::desc("Max variable count for simplification"),
-    cl::value_desc("max-var-count"), cl::init(6));
+    cl::value_desc("max-var-count"), cl::init(6), cl::cat(SiMBAOpt));
 
 llvm::cl::opt<int> MinASTSize("min-ast-size", cl::Optional,
                               cl::desc("Minimum AST size for simplification"),
-                              cl::value_desc("min-ast-size"), cl::init(4));
+                              cl::value_desc("min-ast-size"), cl::init(4),
+                              cl::cat(SiMBAOpt));
 
 llvm::cl::opt<bool> ShouldWalkSubAST(
     "walk-sub-ast", cl::Optional,
     cl::desc("Walk sub AST if full AST to not match"),
-    cl::value_desc("walk-sub-ast"), cl::init(false));
+    cl::value_desc("walk-sub-ast"), cl::init(false), cl::cat(SiMBAOpt));
 
 namespace LSiMBA {
 
