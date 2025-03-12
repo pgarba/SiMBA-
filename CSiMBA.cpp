@@ -24,7 +24,7 @@ using namespace std::chrono;
 /*
   Options
 */
-cl::OptionCategory SiMBAOpt("SiMBA++ Options");
+extern cl::OptionCategory SiMBAOpt;
 
 cl::opt<std::string> StrMBA("mba", cl::Optional,
                             cl::desc("MBA that will be verfied/simplified"),

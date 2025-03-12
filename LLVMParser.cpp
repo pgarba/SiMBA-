@@ -755,6 +755,7 @@ void LLVMParser::extractCandidates(llvm::Function &F,
         auto GEP = dyn_cast<GetElementPtrInst>(&*I);
         auto Index = GEP->getOperand(GEP->getNumOperands() - 1);
 
+          Cand.Candidate = dyn_cast<Instruction>(Index);
         if (isSupportedInstruction(Index->stripPointerCasts())) {
           if (isVisited(Index->stripPointerCasts())) continue;
 
