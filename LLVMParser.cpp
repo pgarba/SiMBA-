@@ -44,13 +44,13 @@
 #include "Simplifier.h"
 #include "Z3Prover.h"
 
-// #define DEBUG_SIMPLIFICATION
+//  #define DEBUG_SIMPLIFICATION
 
 using namespace llvm;
 using namespace std;
 using namespace std::chrono;
 
-extern cl::OptionCategory SiMBAOpt;
+extern cl::OptionCategory SiMBAOpt("SiMBA++ Options");
 
 llvm::cl::opt<std::string> UseExternalSimplifier(
     "external-simplifier", cl::Optional,
@@ -74,6 +74,8 @@ llvm::cl::opt<bool> ShouldWalkSubAST(
     cl::value_desc("walk-sub-ast"), cl::init(false), cl::cat(SiMBAOpt));
 
 namespace LSiMBA {
+
+llvm::MapVector<uint64_t, bool> MBACache;
 
 llvm::LLVMContext LLVMParser::Context;
 
@@ -532,12 +534,37 @@ bool LLVMParser::verify(llvm::Function *F0, llvm::Function *F1,
   return true;
 }
 
+int LLVMParser::countVariables(std::string &expr, char Var) {
+  int VarCount = 0;
+  for (int j = 0; j < expr.size(); j++) {
+    if (expr[j] == Var) {
+      VarCount++;
+    }
+  }
+
+  return VarCount;
+}
+
 bool LLVMParser::verify(int ASTSize, llvm::SmallVectorImpl<BFSEntry> &AST,
                         std::string &SimpExpr,
-                        llvm::SmallVectorImpl<llvm::Value *> &Variables) {
+                        llvm::SmallVectorImpl<llvm::Value *> &Variables,
+                        int BitWidth) {
   int VNumber = Variables.size();
-  int BitWidth = AST.front().I->getType()->getIntegerBitWidth();
+  // int BitWidth = AST.front().I->getType()->getIntegerBitWidth();
   auto Modulus = getModulus(BitWidth);
+
+  // Check Ptr is used several times
+  for (int i = 0; i < Variables.size(); i++) {
+    if (Variables[i]->getType()->isPointerTy()) {
+      char c = 'a' + i;
+
+      // Count vars in expr
+      int Count = countVariables(SimpExpr, c);
+      if (Count > 1) {
+        return false;
+      }
+    }
+  }
 
   std::string Expr1_replVar = SimpExpr;
   for (int i = 0; i < Variables.size(); i++) {
@@ -692,6 +719,17 @@ bool LLVMParser::isSupportedInstruction(llvm::Value *V) {
     return true;
   }
 
+  if (auto GEP = dyn_cast<GetElementPtrInst>(V)) {
+    // Check if i8 type and only one index
+    if (GEP->getNumIndices() != 1) return false;
+
+    if (GEP->getSourceElementType() != Type::getInt8Ty(GEP->getContext()))
+      return false;
+
+    // Must be a PtrAdd
+    return true;
+  }
+
   if (isa<CallInst>(V)) {
     // check if intrinsic
     auto CI = dyn_cast<CallInst>(V);
@@ -727,15 +765,19 @@ bool LLVMParser::isSupportedInstruction(llvm::Value *V) {
 
 void LLVMParser::extractCandidates(llvm::Function &F,
                                    std::vector<MBACandidate> &Candidates) {
-  std::set<llvm::Value *> Visited;
+  // std::set<llvm::Value *> Visited;
+  llvm::SmallPtrSet<llvm::Value *, 8> Visited;
+
   auto isVisited = [&](llvm::Value *I) -> bool {
-    return Visited.find(I) != Visited.end();
+    // return Visited.find(I) != Visited.end();
+    return Visited.count(I);
   };
 
-  // Instruction to look for 'store', 'select', 'gep', 'icmp', 'ret'
+  // Instruction to look for 'store', 'select', 'gep', 'icmp', 'ret', ...
   for (inst_iterator I = inst_begin(F), E = inst_end(F); I != E; ++I) {
     // Check if integer type
-    if (!I->getType()->isIntegerTy()) {
+    if (!I->getType()->isIntegerTy() && !I->getType()->isPointerTy() &&
+        !isa<BranchInst>(&*I)) {
       continue;
     }
 
@@ -750,12 +792,42 @@ void LLVMParser::extractCandidates(llvm::Function &F,
           Candidates.push_back(Cand);
           Visited.insert(Op);
         }
+
+        auto Ptr = SI->getPointerOperand();
+        if (!isVisited(Ptr) && isSupportedInstruction(Ptr)) {
+          MBACandidate Cand;
+          Cand.Candidate = dyn_cast<Instruction>(Ptr);
+          Candidates.push_back(Cand);
+          Visited.insert(Ptr);
+        }
       } break;
+      case Instruction::Load: {
+        // Check Candidate
+        auto LI = dyn_cast<LoadInst>(&*I);
+        auto Op = LI->getPointerOperand();
+        if (!isVisited(Op) && isSupportedInstruction(Op)) {
+          MBACandidate Cand;
+          Cand.Candidate = dyn_cast<Instruction>(Op);
+          Candidates.push_back(Cand);
+          Visited.insert(Op);
+        }
+      } break;
+      
       case Instruction::GetElementPtr: {
         auto GEP = dyn_cast<GetElementPtrInst>(&*I);
         auto Index = GEP->getOperand(GEP->getNumOperands() - 1);
 
-          Cand.Candidate = dyn_cast<Instruction>(Index);
+        // Todo add GEP direclty if its a ptrAdd
+        if (!isVisited(GEP)) {
+          MBACandidate Cand;
+          Cand.Candidate = dyn_cast<Instruction>(GEP);
+          Candidates.push_back(Cand);
+          Visited.insert(GEP);
+        }
+
+        // Todo Add the add itself
+        // Disabled for now as it leads to wrong ptr replacements
+        /*
         if (isSupportedInstruction(Index->stripPointerCasts())) {
           if (isVisited(Index->stripPointerCasts())) continue;
 
@@ -764,6 +836,7 @@ void LLVMParser::extractCandidates(llvm::Function &F,
           Candidates.push_back(Cand);
           Visited.insert(Index->stripPointerCasts());
         }
+        */
       } break;
       case Instruction::ICmp: {
         if (IsExternalSimplifier) continue;
@@ -804,6 +877,18 @@ void LLVMParser::extractCandidates(llvm::Function &F,
                 CI->getArgOperand(i)->stripPointerCasts());
             Candidates.push_back(Cand);
             Visited.insert(CI->getArgOperand(i)->stripPointerCasts());
+          }
+        }
+      } break;
+      case Instruction::Br: {
+        auto BI = dyn_cast<BranchInst>(&*I);
+        if (BI->isConditional()) {
+          if (isSupportedInstruction(BI->getCondition())) {
+            if (isVisited(BI->getCondition())) continue;
+            MBACandidate Cand;
+            Cand.Candidate = dyn_cast<Instruction>(BI->getCondition());
+            Candidates.push_back(Cand);
+            Visited.insert(BI->getCondition());
           }
         }
       } break;
@@ -990,10 +1075,13 @@ bool LLVMParser::findReplacements(llvm::DominatorTree *DT,
     }
 
     // Skip Ptr types
+    // We support it now but better test it further!
+    /*
     if (Cand.AST.front().I->getType()->isPointerTy()) {
       Cand.isValid = false;
       continue;
     }
+    */
 
     // Check if we already replaced this instruction
     if (constainsReplacedInstructions(ReplacedInstructions, Cand)) {
@@ -1005,15 +1093,34 @@ bool LLVMParser::findReplacements(llvm::DominatorTree *DT,
     }
 
     // Try to simplify the whole AST
-    int BitWidth = Cand.AST.front().I->getType()->getIntegerBitWidth();
+    int BitWidth = 0;
+    if (Cand.AST.front().I->getType()->isPointerTy()) {
+      BitWidth = 64;
+    } else {
+      BitWidth = Cand.AST.front().I->getType()->getIntegerBitWidth();
+    }
+
     if (BitWidth == 0 || BitWidth > 64) {
       // If BitWidth is zero then stop here
       continue;
     }
+
+    // Check if in cache
+    bool AlreadyProved = false;
+    auto Hash = calculateHash(Cand.AST);
+    auto Entry = MBACache.find(Hash);
+    if (Entry != MBACache.end()) {
+      Cand.isValid = Entry->second;
+      AlreadyProved = true;
+
+      if (!Cand.isValid) continue;
+    }
+
     auto Modulus = getModulus(BitWidth);
 
     std::vector<APInt> ResultVector;
-    initResultVectorFromAST(Cand.AST, ResultVector, Modulus, Cand.Variables);
+    initResultVectorFromAST(Cand.AST, ResultVector, Modulus, Cand.Variables,
+                            BitWidth);
 
     // Simpify MBA
     Simplifier S(BitWidth, false, Cand.Variables.size(), ResultVector);
@@ -1028,7 +1135,7 @@ bool LLVMParser::findReplacements(llvm::DominatorTree *DT,
     F->dump();
     F->eraseFromParent();
 #endif
-
+    // Use external simplifier
     if (!UseExternalSimplifier.empty()) {
       std::string &Path = UseExternalSimplifier;
       auto Expr = getASTAsString(Cand.AST, Cand.Variables);
@@ -1059,24 +1166,26 @@ bool LLVMParser::findReplacements(llvm::DominatorTree *DT,
     }
 
     // Verify is replacement is valid
-    if (!SkipVerify) {
+    if (!AlreadyProved && !SkipVerify) {
       Cand.isValid = this->verify(Cand.ASTSize, Cand.AST, Cand.Replacement,
-                                  Cand.Variables);
+                                  Cand.Variables, BitWidth);
     }
 
     // Match some patterns
-    // Todo: Make this more cleaver
-    if (!Cand.isValid) {
+    if (!AlreadyProved && !Cand.isValid) {
       bool IsRepl = replaceWithKnownPatterns(Cand, ResultVector);
       if (IsRepl) {
         Cand.isValid = this->verify(Cand.ASTSize, Cand.AST, Cand.Replacement,
-                                    Cand.Variables);
+                                    Cand.Variables, BitWidth);
       }
     }
 
+    // Update cache
+    if (!AlreadyProved) MBACache[Hash] = Cand.isValid;
+
     if (Cand.isValid == false) {
       // Could not simplify the whole AST so walk through SubASTs
-      if (ShouldWalkSubAST)
+      if (!AlreadyProved && ShouldWalkSubAST)
         ReplacementFound |= walkSubAST(DT, Cand.AST, SubASTCandidates);
     } else {
       if (this->Debug) {
@@ -1086,9 +1195,9 @@ bool LLVMParser::findReplacements(llvm::DominatorTree *DT,
 
       // Fill vector with replaced instructions to not solve them again
       for (auto &E : Cand.AST) {
-        if (E.I->getType()->isIntegerTy()) {
-          ReplacedInstructions.insert(E.I);
-        }
+        // if (E.I->getType()->isIntegerTy()) {
+        ReplacedInstructions.insert(E.I);
+        //}
       }
 
       ReplacementFound |= true;
@@ -1156,7 +1265,8 @@ bool LLVMParser::walkSubAST(llvm::DominatorTree *DT,
       auto Modulus = getModulus(BitWidth);
 
       std::vector<APInt> ResultVector;
-      initResultVectorFromAST(C.AST, ResultVector, Modulus, C.Variables);
+      initResultVectorFromAST(C.AST, ResultVector, Modulus, C.Variables,
+                              BitWidth);
 
       // Simplify MBA
       bool SkipVerify = false;
@@ -1190,7 +1300,8 @@ bool LLVMParser::walkSubAST(llvm::DominatorTree *DT,
 #endif
 
       if (!SkipVerify) {
-        C.isValid = this->verify(C.ASTSize, C.AST, C.Replacement, C.Variables);
+        C.isValid = this->verify(C.ASTSize, C.AST, C.Replacement, C.Variables,
+                                 BitWidth);
       }
 
       if (C.isValid) {
@@ -1210,10 +1321,10 @@ bool LLVMParser::walkSubAST(llvm::DominatorTree *DT,
 void LLVMParser::initResultVectorFromAST(
     llvm::SmallVectorImpl<BFSEntry> &AST,
     std::vector<llvm::APInt> &ResultVector, const llvm::APInt &Modulus,
-    llvm::SmallVectorImpl<llvm::Value *> &Variables) {
+    llvm::SmallVectorImpl<llvm::Value *> &Variables, int BitWidth) {
   // Evalute AST
   int VNumber = Variables.size();
-  auto BitWidth = AST.front().I->getType()->getIntegerBitWidth();
+  // auto BitWidth = AST.front().I->getType()->getIntegerBitWidth();
 
   SmallVector<APInt, 16> Par;
   for (int i = 0; i < pow(2, Variables.size()); i++) {
@@ -1252,6 +1363,21 @@ void LLVMParser::printAST(llvm::SmallVectorImpl<BFSEntry> &AST) {
     e.I->print(outs());
     outs() << "\n";
   }
+}
+
+uint64_t LLVMParser::calculateHash(llvm::SmallVectorImpl<BFSEntry> &AST) {
+  uint64_t x = 0x2545F4914F6CDD1DULL;
+  for (auto E = AST.rbegin(); E != AST.rend(); ++E) {
+    auto &e = *E;
+    x += e.I->getOpcode();
+
+    // Hash the operands
+    x ^= x << 13;
+    x ^= x >> 7;
+    x ^= x << 17;
+
+  }
+  return x;
 }
 
 std::string LLVMParser::getASTAsString(
@@ -1365,6 +1491,24 @@ std::string LLVMParser::getASTAsString(
         default:
           e.I->dump();
           report_fatal_error("Unsupported number of operands!");
+      }
+    } else if (auto GEP = dyn_cast<GetElementPtrInst>(CurInst)) {
+      if (auto C = dyn_cast<ConstantInt>(GEP->getOperand(0))) {
+        SmallString<16> StrC;
+        C->getValue().toString(StrC, 10, true);
+        Expr += StrC;
+      } else {
+        Expr += VariableMap[GEP->getOperand(0)];
+      }
+
+      Expr += " + ";
+
+      if (auto C = dyn_cast<ConstantInt>(GEP->getOperand(1))) {
+        SmallString<16> StrC;
+        C->getValue().toString(StrC, 10, true);
+        Expr += StrC;
+      } else {
+        Expr += VariableMap[GEP->getOperand(1)];
       }
     } else if (auto Trunc = dyn_cast<TruncInst>(CurInst)) {
       Expr += " (";
@@ -1578,6 +1722,16 @@ llvm::APInt LLVMParser::evaluateAST(
               getVal(Op1, ValueStack, Variables, Par));
         };
       }
+    } else if (auto GEP = dyn_cast<GetElementPtrInst>(CurInst)) {
+      // Must be a PtrAdd
+      ConstantInt *Ptr = dyn_cast<ConstantInt>(
+          getVal(GEP->getOperand(0), ValueStack, Variables, Par));
+      ConstantInt *Index = dyn_cast<ConstantInt>(
+          getVal(GEP->getOperand(1), ValueStack, Variables, Par));
+
+      // Todo: Ensure its 64bit type here
+      InstResult = ConstantInt::get(Index->getType(),
+                                    Ptr->getValue() + Index->getValue());
     } else if (auto Trunc = dyn_cast<TruncInst>(CurInst)) {
       // %27 = trunc i64 %26 to i32
       InstResult = ConstantExpr::getTrunc(
@@ -1841,8 +1995,12 @@ z3::expr LLVMParser::getZ3ExpressionFromAST(
   for (auto V : Variables) {
     string VarStr = string(1, Var);
 
-    auto VExpr =
-        Z3Ctx.bv_const(VarStr.c_str(), V->getType()->getIntegerBitWidth());
+    int IntBitWidth = 64;
+    if (!V->getType()->isPointerTy()) {
+      IntBitWidth = V->getType()->getIntegerBitWidth();
+    }
+
+    auto VExpr = Z3Ctx.bv_const(VarStr.c_str(), IntBitWidth);
 
     ValueMAP[V] = new z3::expr(VExpr);
 
@@ -1858,7 +2016,11 @@ z3::expr LLVMParser::getZ3ExpressionFromAST(
 
     // Take the real bitwidth
     // Remove this and parameter
-    OverrideBitWidth = CurInst->getType()->getIntegerBitWidth();
+    if (CurInst->getType()->isPointerTy()) {
+      OverrideBitWidth = 64;
+    } else {
+      OverrideBitWidth = CurInst->getType()->getIntegerBitWidth();
+    }
 
     auto BO = dyn_cast<BinaryOperator>(CurInst);
     if (BO) {
@@ -1947,6 +2109,12 @@ z3::expr LLVMParser::getZ3ExpressionFromAST(
           SExt->getType()->getIntegerBitWidth() -
               SExt->getOperand(0)->getType()->getIntegerBitWidth());
       ValueMAP[SExt] = new z3::expr(exp);
+    } else if (auto GEP = dyn_cast<GetElementPtrInst>(CurInst)) {
+      // Lower it as add
+      auto exp =
+          *getZ3Val(Z3Ctx, GEP->getOperand(0), ValueMAP, OverrideBitWidth) +
+          *getZ3Val(Z3Ctx, GEP->getOperand(1), ValueMAP, OverrideBitWidth);
+      ValueMAP[GEP] = new z3::expr(exp);
     } else if (auto SI = dyn_cast<SelectInst>(CurInst)) {
       // Select
       auto Cond = getZ3Val(Z3Ctx, SI->getCondition(), ValueMAP, false);
@@ -2019,6 +2187,10 @@ z3::expr LLVMParser::getZ3ExpressionFromAST(
 
       ValueMAP[ICmp] = new z3::expr(
           boolToBV(Z3Ctx, *Res, CurInst->getType()->getIntegerBitWidth()));
+    } else if (auto PTI = dyn_cast<PtrToIntInst>(CurInst)) {
+      ValueMAP[PTI] = new z3::expr(*ValueMAP[PTI->getOperand(0)]);
+    } else if (auto ITP = dyn_cast<IntToPtrInst>(CurInst)) {
+      ValueMAP[ITP] = new z3::expr(*ValueMAP[ITP->getOperand(0)]);
     } else if (auto Call = dyn_cast<CallInst>(CurInst)) {
       auto CI = Call->getCalledFunction();
       switch (CI->getIntrinsicID()) {
@@ -2146,6 +2318,9 @@ z3::expr LLVMParser::getZ3ExpressionFromAST(
           report_fatal_error("[!] Not supported call instruction!", false);
         }
       }
+    } else {
+      CurInst->dump();
+      report_fatal_error("[!] Not supported instruction in Z3 parser!", false);
     }
 
     // Set last inst
@@ -2311,9 +2486,11 @@ z3::expr LLVMParser::getOptimizedZ3Expression(
   // Create function from simplified expression
   auto F = createLLVMFunction(this->M, Variables, SimpExpr, VNames,
                               AST.begin()->I->getType());
+
   // Subtract candidate from return value
   auto RetInst = dyn_cast<ReturnInst>(F->getEntryBlock().getTerminator());
   auto V = RetInst->getReturnValue();
+  auto Int64Ty = Type::getInt64Ty(V->getContext());
 
   // Map vars
   SmallVector<llvm::Value *, 4> FArgs;
@@ -2366,15 +2543,32 @@ z3::expr LLVMParser::getOptimizedZ3Expression(
                                            F->getEntryBlock().getTerminator());
   }
 
+  // Cast Ptr to Int if needed
+  if (V->getType()->isPointerTy()) {
+    V = new PtrToIntInst(dyn_cast<Instruction>(V), Int64Ty, "",
+                         F->getEntryBlock().getTerminator());
+  }
+
+  if (LastInstType->isPointerTy()) {
+    LastInst = new PtrToIntInst(dyn_cast<Instruction>(LastInst), Int64Ty, "",
+                                F->getEntryBlock().getTerminator());
+  }
+
   llvm::Instruction *NewI = BinaryOperator::CreateSub(V, LastInst);
   NewI->insertBefore(F->getEntryBlock().getTerminator());
 
   // Replace return value
   // Cast to correct type
   auto RetType = RetInst->getReturnValue()->getType();
-  if (RetType != NewI->getType()) {
+  if (!RetType->isPointerTy() && RetType != NewI->getType()) {
     NewI = CastInst::CreateIntegerCast(NewI, RetType, true, "",
                                        F->getEntryBlock().getTerminator());
+  }
+
+  // Cast to back to Ptr if needed
+  if (RetType->isPointerTy() && !NewI->getType()->isPointerTy()) {
+    NewI =
+        new IntToPtrInst(NewI, RetType, "", F->getEntryBlock().getTerminator());
   }
 
   RetInst->setOperand(0, NewI);
@@ -2385,11 +2579,18 @@ z3::expr LLVMParser::getOptimizedZ3Expression(
   // check if proved
   Proved = OPT_PROVE_ME;
   if (F->getEntryBlock().size() == 1) {
-    auto C = dyn_cast<ConstantInt>(RetInst->getReturnValue());
-    if (C->isZero()) {
-      Proved = OPT_PROVED;
-    } else {
-      Proved = OPT_NOT_VALID;
+    if (auto C = dyn_cast<ConstantInt>(RetInst->getReturnValue())) {
+      if (C->isZero()) {
+        Proved = OPT_PROVED;
+      } else {
+        Proved = OPT_NOT_VALID;
+      }
+    } else if (RetInst->getReturnValue()->getType()->isPointerTy()) {
+      if (auto C = dyn_cast<ConstantPointerNull>(RetInst->getReturnValue())) {
+        Proved = OPT_PROVED;
+      } else {
+        Proved = OPT_NOT_VALID;
+      }
     }
 
     F->eraseFromParent();
@@ -2406,8 +2607,12 @@ z3::expr LLVMParser::getOptimizedZ3Expression(
   }
 
   std::map<std::string, z3::expr *> Z3VarMap;
-  auto Z3ExpOpt = getZ3ExpressionFromAST(
-      Z3Ctx, OptAST, FArgs, Z3VarMap, F->getReturnType()->getIntegerBitWidth());
+  auto BitWidth = 64;
+  if (!F->getReturnType()->isPointerTy()) {
+    BitWidth = F->getReturnType()->getIntegerBitWidth();
+  }
+  auto Z3ExpOpt =
+      getZ3ExpressionFromAST(Z3Ctx, OptAST, FArgs, Z3VarMap, BitWidth);
 
   // Clean up
   F->eraseFromParent();

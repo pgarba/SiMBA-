@@ -1,8 +1,8 @@
+#include <math.h>
+#include <stdio.h>
 #include <iostream>
 #include <map>
-#include <math.h>
 #include <sstream>
-#include <stdio.h>
 #include <string>
 #include <tuple>
 #include <vector>
@@ -24,7 +24,7 @@
 using namespace llvm;
 
 class Token {
-public:
+ public:
   enum class Type {
     Unknown,
     Number,
@@ -36,8 +36,12 @@ public:
 
   Token(Type type, const std::string &s, int precedence = -1,
         bool rightAssociative = false, bool unary = false)
-      : type{type}, str(s), precedence{precedence},
-        rightAssociative{rightAssociative}, unary{unary}, ArgIndex{0} {}
+      : type{type},
+        str(s),
+        precedence{precedence},
+        rightAssociative{rightAssociative},
+        unary{unary},
+        ArgIndex{0} {}
 
   Type type;
 
@@ -55,6 +59,9 @@ public:
 
 llvm::Value *castIfNeeded(llvm::Value *V0, llvm::Value *V1,
                           llvm::IRBuilder<> &Builder) {
+  // Keep Pointers
+  if (V0->getType()->isPointerTy()) return V0;
+
   // Always cast to the higher type
   if (V0->getType()->getIntegerBitWidth() <
       V1->getType()->getIntegerBitWidth()) {
@@ -65,12 +72,10 @@ llvm::Value *castIfNeeded(llvm::Value *V0, llvm::Value *V1,
 }
 
 int8_t isVariable(const char *c, std::vector<std::string> *VNames) {
-  if (VNames == nullptr)
-    report_fatal_error("VNames is nullptr");
+  if (VNames == nullptr) report_fatal_error("VNames is nullptr");
 
   for (int i = 0; i < VNames->size(); i++) {
-    if (strncmp(c, (*VNames)[i].c_str(), (*VNames)[i].size()) == 0)
-      return i;
+    if (strncmp(c, (*VNames)[i].c_str(), (*VNames)[i].size()) == 0) return i;
   }
 
   return -1;
@@ -80,35 +85,35 @@ int countOperators(std::string &expr) {
   int OpCount = 0;
   for (const auto *p = expr.c_str(); *p; ++p) {
     switch (*p) {
-    case '*':
-      OpCount++;
-      break;
-    case '/':
-      OpCount++;
-      break;
-    case '&':
-      OpCount++;
-      break;
-    case '|':
-      OpCount++;
-      break;
-    case '^':
-      OpCount++;
-      break;
-    case '+':
-      OpCount++;
-      break;
-    case '~':
-      OpCount++;
-      break;
-    case '!':
-      OpCount++;
-      break;
-    case '-':
-      OpCount++;
-      break;
-    default:
-      break;
+      case '*':
+        OpCount++;
+        break;
+      case '/':
+        OpCount++;
+        break;
+      case '&':
+        OpCount++;
+        break;
+      case '|':
+        OpCount++;
+        break;
+      case '^':
+        OpCount++;
+        break;
+      case '+':
+        OpCount++;
+        break;
+      case '~':
+        OpCount++;
+        break;
+      case '!':
+        OpCount++;
+        break;
+      case '-':
+        OpCount++;
+        break;
+      default:
+        break;
     }
   }
   return OpCount;
@@ -144,86 +149,51 @@ void exprToTokens(const std::string &expr, veque::veque<Token> &tokens,
       bool unary = false;
       char c = *p;
       switch (c) {
-      default:
-        llvm::outs() << "[exprToTokens]: Unkown Token '" << c << "'\n";
-        report_fatal_error("", false);
-        break;
-      case '(':
-        t = Token::Type::LeftParen;
-        break;
-      case ')':
-        t = Token::Type::RightParen;
-        break;
-      case '*':
-        t = Token::Type::Operator;
-        precedence = 7;
-        break;
-      case '>':
-        t = Token::Type::Operator;
-        precedence = 5;
-        break;
-      case '#':
-        t = Token::Type::Operator;
-        precedence = 8;
-        break;
-      case '/':
-        t = Token::Type::Operator;
-        precedence = 7;
-        break;
-      case '&':
-        t = Token::Type::Operator;
-        precedence = 4;
-        break;
-      case '|':
-        t = Token::Type::Operator;
-        precedence = 2;
-        break;
-      case '^':
-        t = Token::Type::Operator;
-        precedence = 3;
-        break;
-      case '+':
-        t = Token::Type::Operator;
-        precedence = 6;
-        break;
-      case '~':
-        unary = true;
-        t = Token::Type::Operator;
-        // Increase precendence if last token was unary and ~,! or -
-        if (!tokens.empty() && tokens.back().unary) {
-          // Calc this one first
-          precedence = tokens.back().precedence + 1;
-        } else {
-          // Keep default
-          precedence = 9;
-        }
-        break;
-      case '!':
-        unary = true;
-        t = Token::Type::Operator;
-        // Increase precendence if last token was unary and ~,! or -
-        if (!tokens.empty() && tokens.back().unary) {
-          // Calc this one first
-          precedence = tokens.back().precedence + 1;
-        } else {
-          // Keep default
-          precedence = 9;
-        }
-        break;
-      case '-':
-        // If current token is '-'
-        // and if it is the first token, or preceded by another operator, or
-        // left-paren,
-        if (tokens.empty() || tokens.back().type == Token::Type::Operator ||
-            tokens.back().type == Token::Type::LeftParen) {
-          // it's unary '-'
-          // note#1 : 'm' is a special operator name for unary '-'
-          // note#2 : It has highest precedence than any of the infix
-          // operators
-          unary = true;
-          c = 'm';
+        default:
+          llvm::outs() << "[exprToTokens]: Unkown Token '" << c << "'\n";
+          report_fatal_error("", false);
+          break;
+        case '(':
+          t = Token::Type::LeftParen;
+          break;
+        case ')':
+          t = Token::Type::RightParen;
+          break;
+        case '*':
           t = Token::Type::Operator;
-
+          precedence = 7;
+          break;
+        case '>':
+          t = Token::Type::Operator;
+          precedence = 5;
+          break;
+        case '#':
+          t = Token::Type::Operator;
+          precedence = 8;
+          break;
+        case '/':
+          t = Token::Type::Operator;
+          precedence = 7;
+          break;
+        case '&':
+          t = Token::Type::Operator;
+          precedence = 4;
+          break;
+        case '|':
+          t = Token::Type::Operator;
+          precedence = 2;
+          break;
+        case '^':
+          t = Token::Type::Operator;
+          precedence = 3;
+          break;
+        case '+':
+          t = Token::Type::Operator;
+          precedence = 6;
+          break;
+        case '~':
+          unary = true;
+          t = Token::Type::Operator;
           // Increase precendence if last token was unary and ~,! or -
           if (!tokens.empty() && tokens.back().unary) {
             // Calc this one first
@@ -232,12 +202,47 @@ void exprToTokens(const std::string &expr, veque::veque<Token> &tokens,
             // Keep default
             precedence = 9;
           }
-        } else {
-          // otherwise, it's binary '-'
+          break;
+        case '!':
+          unary = true;
           t = Token::Type::Operator;
-          precedence = 6;
-        }
-        break;
+          // Increase precendence if last token was unary and ~,! or -
+          if (!tokens.empty() && tokens.back().unary) {
+            // Calc this one first
+            precedence = tokens.back().precedence + 1;
+          } else {
+            // Keep default
+            precedence = 9;
+          }
+          break;
+        case '-':
+          // If current token is '-'
+          // and if it is the first token, or preceded by another operator, or
+          // left-paren,
+          if (tokens.empty() || tokens.back().type == Token::Type::Operator ||
+              tokens.back().type == Token::Type::LeftParen) {
+            // it's unary '-'
+            // note#1 : 'm' is a special operator name for unary '-'
+            // note#2 : It has highest precedence than any of the infix
+            // operators
+            unary = true;
+            c = 'm';
+            t = Token::Type::Operator;
+
+            // Increase precendence if last token was unary and ~,! or -
+            if (!tokens.empty() && tokens.back().unary) {
+              // Calc this one first
+              precedence = tokens.back().precedence + 1;
+            } else {
+              // Keep default
+              precedence = 9;
+            }
+          } else {
+            // otherwise, it's binary '-'
+            t = Token::Type::Operator;
+            precedence = 6;
+          }
+          break;
       }
       const auto s = std::string(1, c);
       tokens.push_back(Token{t, s, precedence, rightAssociative, unary});
@@ -253,81 +258,82 @@ void shuntingYard(const veque::veque<Token> &tokens,
   for (auto token : tokens) {
     // Read a token
     switch (token.type) {
-    case Token::Type::Number:
-      // If the token is a number, then add it to the output queue
-      queue.push_back(token);
-      break;
-
-    case Token::Type::Operator: {
-      // If the token is operator, o1, then:
-      const auto o1 = token;
-
-      // while there is an operator token,
-      while (!stack.empty()) {
-        // o2, at the top of stack, and
-        const auto o2 = stack.back();
-
-        // either o1 is left-associative and its precedence is
-        // *less than or equal* to that of o2,
-        // or o1 if right associative, and has precedence
-        // *less than* that of o2,
-        if ((!o1.rightAssociative && o1.precedence <= o2.precedence) ||
-            (o1.rightAssociative && o1.precedence < o2.precedence)) {
-          // then pop o2 off the stack,
-          stack.pop_back();
-          // onto the output queue;
-          queue.push_back(o2);
-
-          continue;
-        }
-
-        // @@ otherwise, exit.
+      case Token::Type::Number:
+        // If the token is a number, then add it to the output queue
+        queue.push_back(token);
         break;
-      }
 
-      // push o1 onto the stack.
-      stack.push_back(o1);
-    } break;
+      case Token::Type::Operator: {
+        // If the token is operator, o1, then:
+        const auto o1 = token;
 
-    case Token::Type::LeftParen:
-      // If token is left parenthesis, then push it onto the stack
-      stack.push_back(token);
-      break;
+        // while there is an operator token,
+        while (!stack.empty()) {
+          // o2, at the top of stack, and
+          const auto o2 = stack.back();
 
-    case Token::Type::RightParen:
-      // If token is right parenthesis:
-      {
-        bool match = false;
+          // either o1 is left-associative and its precedence is
+          // *less than or equal* to that of o2,
+          // or o1 if right associative, and has precedence
+          // *less than* that of o2,
+          if ((!o1.rightAssociative && o1.precedence <= o2.precedence) ||
+              (o1.rightAssociative && o1.precedence < o2.precedence)) {
+            // then pop o2 off the stack,
+            stack.pop_back();
+            // onto the output queue;
+            queue.push_back(o2);
 
-        // Until the token at the top of the stack
-        // is a left parenthesis,
-        while (!stack.empty() && stack.back().type != Token::Type::LeftParen) {
-          // pop operators off the stack
-          // onto the output queue.
-          queue.push_back(stack.back());
+            continue;
+          }
+
+          // @@ otherwise, exit.
+          break;
+        }
+
+        // push o1 onto the stack.
+        stack.push_back(o1);
+      } break;
+
+      case Token::Type::LeftParen:
+        // If token is left parenthesis, then push it onto the stack
+        stack.push_back(token);
+        break;
+
+      case Token::Type::RightParen:
+        // If token is right parenthesis:
+        {
+          bool match = false;
+
+          // Until the token at the top of the stack
+          // is a left parenthesis,
+          while (!stack.empty() &&
+                 stack.back().type != Token::Type::LeftParen) {
+            // pop operators off the stack
+            // onto the output queue.
+            queue.push_back(stack.back());
+            stack.pop_back();
+            match = true;
+          }
+
+          if (!match && stack.empty()) {
+            // If the stack runs out without finding a left parenthesis,
+            // then there are mismatched parentheses.
+            printf("RightParen error (%s)\n", token.str.c_str());
+            return;
+          }
+
+          // Pop the left parenthesis from the stack,
+          // but not onto the output queue.
           stack.pop_back();
-          match = true;
         }
+        break;
+      case Token::Type::Variable: {
+        queue.push_back(token);
+      } break;
 
-        if (!match && stack.empty()) {
-          // If the stack runs out without finding a left parenthesis,
-          // then there are mismatched parentheses.
-          printf("RightParen error (%s)\n", token.str.c_str());
-          return;
-        }
-
-        // Pop the left parenthesis from the stack,
-        // but not onto the output queue.
-        stack.pop_back();
-      }
-      break;
-    case Token::Type::Variable: {
-      queue.push_back(token);
-    } break;
-
-    default:
-      printf("error (%s)\n", token.str.c_str());
-      return;
+      default:
+        printf("error (%s)\n", token.str.c_str());
+        return;
     }
   }
 
@@ -380,131 +386,176 @@ void createLLVMReplacement(llvm::Instruction *InsertionPoint,
     const auto token = queue.front();
     queue.pop_front();
     switch (token.type) {
-    case Token::Type::Variable: {
-      auto ArgIndex = token.ArgIndex;
+      case Token::Type::Variable: {
+        auto ArgIndex = token.ArgIndex;
 
-      // Cast variable if needed
-      auto Var = Variables[ArgIndex];
-      if (Var->getType() != IntType) {
-        Var = Builder.CreateIntCast(Variables[ArgIndex], IntType, false,
-                                    "CastedVar");
-      }
-
-      stackAP.push_back(Var);
-    } break;
-    case Token::Type::Number: {
-      APInt APV(IntType->getIntegerBitWidth(), token.str, 10);
-      auto CI = llvm::ConstantInt::get(IntType, APV);
-      stackAP.push_back(CI);
-    } break;
-
-    case Token::Type::Operator: {
-      if (token.unary) {
-        // unray operators
-        const auto rhsAP = stackAP.back();
-        stackAP.pop_back();
-
-        switch (token.str[0]) {
-        default:
-          printf("Operator error [%s]\n", token.str.c_str());
-          exit(0);
-          break;
-        case 'm': // Special operator name for unary '-'
-          // stackAP.push_back(-rhsAP);
-          stackAP.push_back(Builder.CreateNeg(rhsAP));
-          break;
-        case '~':
-          // stackAP.push_back(~rhsAP);
-          stackAP.push_back(Builder.CreateNot(rhsAP));
-          break;
-        case '!':
-          // stackAP.push_back(rhsAP);
-          /*
-          %4 = icmp ne i32 %3, 0, !dbg !19
-          %5 = xor i1 %4, true, !dbg !19
-          */
-          auto Zero = llvm::ConstantInt::get(rhsAP->getType(), 0);
-          auto Cmp = Builder.CreateICmpNE(rhsAP, Zero);
-          auto Not = Builder.CreateXor(Cmp, llvm::ConstantInt::getTrue(Builder.getContext()));
-          stackAP.push_back(Not);
-          break;
-        }
-      } else {
-        // binary operators
-        auto rhsAP = stackAP.back();
-        stackAP.pop_back();
-
-        auto lhsAP = stackAP.back();
-        stackAP.pop_back();
-
-        // Cast if needed
-        lhsAP = castIfNeeded(lhsAP, rhsAP, Builder);
-        rhsAP = castIfNeeded(rhsAP, lhsAP, Builder);
-
-        switch (token.str[0]) {
-        default:
-          printf("Operator error [%s]\n", token.str.c_str());
-          exit(0);
-          break;
-        case '^':
-          // stackAP.push_back(lhsAP ^ rhsAP);
-          stackAP.push_back(Builder.CreateXor(lhsAP, rhsAP));
-          break;
-        case '*':
-          // stackAP.push_back(lhsAP * rhsAP);
-          stackAP.push_back(Builder.CreateMul(lhsAP, rhsAP));
-          break;
-        case '>':
-          // stackAP.push_back(lhsAP >> rhsAP);
-          stackAP.push_back(Builder.CreateAShr(lhsAP, rhsAP));
-          break;
-        case '#':
-          // stackAP.push_back(lhsAP ** rhsAP);
-          // Call Pow intrinsics
-          {
-            auto DblTy = Type::getDoubleTy(lhsAP->getContext());
-            auto DlhsAP = Builder.CreateUIToFP(lhsAP, DblTy);
-            auto DrhsAP = Builder.CreateUIToFP(rhsAP, DblTy);
-            auto Res = Builder.CreateIntrinsic(
-                llvm::Intrinsic::pow, {DblTy, DblTy}, {DlhsAP, DrhsAP});
-            auto ResInt = Builder.CreateFPToUI(Res, lhsAP->getType());
-
-            stackAP.push_back(ResInt);
+        // Cast variable if needed
+        auto Var = Variables[ArgIndex];
+        if (Var->getType()->isPointerTy()) {
+          // Keep the pointer for now as this can only be a GEP
+        } else if (Var->getType() != IntType) {
+          if (IntType->isPointerTy()) {
+            Var = Builder.CreateIntCast(Variables[ArgIndex],
+                                        Type::getInt64Ty(IntType->getContext()),
+                                        false, "CastedVar");
+          } else {
+            Var = Builder.CreateIntCast(Variables[ArgIndex], IntType, false,
+                                        "CastedVar");
           }
-          break;
-        case '/':
-          // stackAP.push_back(lhsAP.sdiv(rhsAP));
-          stackAP.push_back(Builder.CreateSDiv(lhsAP, rhsAP));
-          break;
-        case '&':
-          // stackAP.push_back(lhsAP & rhsAP);
-          stackAP.push_back(Builder.CreateAnd(lhsAP, rhsAP));
-          break;
-        case '|':
-          // stackAP.push_back(lhsAP | rhsAP);
-          stackAP.push_back(Builder.CreateOr(lhsAP, rhsAP));
-          break;
-        case '+':
-          // stackAP.push_back(lhsAP + rhsAP);
-          stackAP.push_back(Builder.CreateAdd(lhsAP, rhsAP));
-          break;
-        case '-':
-          // stackAP.push_back(lhsAP - rhsAP);
-          stackAP.push_back(Builder.CreateSub(lhsAP, rhsAP));
-          break;
         }
-      }
-    } break;
 
-    default:
-      printf("Token error\n");
-      exit(0);
+        stackAP.push_back(Var);
+      } break;
+      case Token::Type::Number: {
+        if (IntType->isPointerTy()) {
+          APInt APV(64, token.str, 10);
+          auto CI = llvm::ConstantInt::get(
+              Type::getInt64Ty(IntType->getContext()), APV);
+          stackAP.push_back(CI);
+        } else {
+          APInt APV(IntType->getIntegerBitWidth(), token.str, 10);
+          auto CI = llvm::ConstantInt::get(IntType, APV);
+          stackAP.push_back(CI);
+        }
+      } break;
+
+      case Token::Type::Operator: {
+        if (token.unary) {
+          // unray operators
+          const auto rhsAP = stackAP.back();
+          stackAP.pop_back();
+
+          switch (token.str[0]) {
+            default:
+              printf("Operator error [%s]\n", token.str.c_str());
+              exit(0);
+              break;
+            case 'm':  // Special operator name for unary '-'
+              // stackAP.push_back(-rhsAP);
+              stackAP.push_back(Builder.CreateNeg(rhsAP));
+              break;
+            case '~':
+              // stackAP.push_back(~rhsAP);
+              stackAP.push_back(Builder.CreateNot(rhsAP));
+              break;
+            case '!':
+              // stackAP.push_back(rhsAP);
+              /*
+              %4 = icmp ne i32 %3, 0, !dbg !19
+              %5 = xor i1 %4, true, !dbg !19
+              */
+              auto Zero = llvm::ConstantInt::get(rhsAP->getType(), 0);
+              auto Cmp = Builder.CreateICmpNE(rhsAP, Zero);
+              auto Not = Builder.CreateXor(
+                  Cmp, llvm::ConstantInt::getTrue(Builder.getContext()));
+              stackAP.push_back(Not);
+              break;
+          }
+        } else {
+          // binary operators
+          auto rhsAP = stackAP.back();
+          stackAP.pop_back();
+
+          auto lhsAP = stackAP.back();
+          stackAP.pop_back();
+
+          // Cast if needed
+          lhsAP = castIfNeeded(lhsAP, rhsAP, Builder);
+          rhsAP = castIfNeeded(rhsAP, lhsAP, Builder);
+
+          if (token.str[0] != '+') {
+            // Check if we have a ptr type
+            if (lhsAP->getType()->isPointerTy()) {
+              // Need to convert it
+              lhsAP = Builder.CreatePtrToInt(lhsAP, rhsAP->getType());
+            }
+
+            if (rhsAP->getType()->isPointerTy()) {
+              rhsAP = Builder.CreatePtrToInt(rhsAP, lhsAP->getType());
+            }
+          }
+
+          switch (token.str[0]) {
+            default:
+              printf("Operator error [%s]\n", token.str.c_str());
+              exit(0);
+              break;
+            case '^':
+              // stackAP.push_back(lhsAP ^ rhsAP);
+              stackAP.push_back(Builder.CreateXor(lhsAP, rhsAP));
+              break;
+            case '*':
+              // stackAP.push_back(lhsAP * rhsAP);
+              stackAP.push_back(Builder.CreateMul(lhsAP, rhsAP));
+              break;
+            case '>':
+              // stackAP.push_back(lhsAP >> rhsAP);
+              stackAP.push_back(Builder.CreateAShr(lhsAP, rhsAP));
+              break;
+            case '#':
+              // stackAP.push_back(lhsAP ** rhsAP);
+              // Call Pow intrinsics
+              {
+                auto DblTy = Type::getDoubleTy(lhsAP->getContext());
+                auto DlhsAP = Builder.CreateUIToFP(lhsAP, DblTy);
+                auto DrhsAP = Builder.CreateUIToFP(rhsAP, DblTy);
+                auto Res = Builder.CreateIntrinsic(
+                    llvm::Intrinsic::pow, {DblTy, DblTy}, {DlhsAP, DrhsAP});
+                auto ResInt = Builder.CreateFPToUI(Res, lhsAP->getType());
+
+                stackAP.push_back(ResInt);
+              }
+              break;
+            case '/':
+              // stackAP.push_back(lhsAP.sdiv(rhsAP));
+              stackAP.push_back(Builder.CreateSDiv(lhsAP, rhsAP));
+              break;
+            case '&':
+              // stackAP.push_back(lhsAP & rhsAP);
+              stackAP.push_back(Builder.CreateAnd(lhsAP, rhsAP));
+              break;
+            case '|':
+              // stackAP.push_back(lhsAP | rhsAP);
+              stackAP.push_back(Builder.CreateOr(lhsAP, rhsAP));
+              break;
+            case '+': {
+              // stackAP.push_back(lhsAP + rhsAP);
+              if (IntType->isPointerTy()) {
+                if (rhsAP->getType()->isPointerTy()) {
+                  auto t = rhsAP;
+                  rhsAP = lhsAP;
+                  lhsAP = t;
+                }
+
+                // Must be a GEP
+                auto GEP = Builder.CreateGEP(
+                    Type::getInt8Ty(IntType->getContext()), lhsAP, rhsAP);
+                stackAP.push_back(GEP);
+              } else {
+                stackAP.push_back(Builder.CreateAdd(lhsAP, rhsAP));
+              }
+            } break;
+            case '-':
+              // stackAP.push_back(lhsAP - rhsAP);
+              stackAP.push_back(Builder.CreateSub(lhsAP, rhsAP));
+              break;
+          }
+        }
+      } break;
+
+      default:
+        printf("Token error\n");
+        exit(0);
     }
   }
 
   // Replace MBA
   auto &ModV = stackAP.back();
-  ModV = castIfNeeded(ModV, InsertionPoint, Builder);
+  if (IntType->isPointerTy()) {
+    // Keep the Ptr
+  } else {
+    ModV = castIfNeeded(ModV, InsertionPoint, Builder);
+  }
   InsertionPoint->replaceAllUsesWith(ModV);
 }
 
@@ -543,99 +594,126 @@ llvm::Function *createLLVMFunction(
     const auto token = queue.front();
     queue.pop_front();
     switch (token.type) {
-    case Token::Type::Variable: {
-      auto ArgIndex = token.ArgIndex;
-      stackAP.push_back(F->getArg(ArgIndex));
-    } break;
-    case Token::Type::Number: {
-      APInt APV(IntType->getIntegerBitWidth(), token.str, 10);
-      auto CI = llvm::ConstantInt::get(IntType, APV);
-      stackAP.push_back(CI);
-    } break;
+      case Token::Type::Variable: {
+        auto ArgIndex = token.ArgIndex;
+        stackAP.push_back(F->getArg(ArgIndex));
+      } break;
+      case Token::Type::Number: {
+        APInt APV(IntType->getIntegerBitWidth(), token.str, 10);
+        auto CI = llvm::ConstantInt::get(IntType, APV);
+        stackAP.push_back(CI);
+      } break;
 
-    case Token::Type::Operator: {
-      if (token.unary) {
-        // unray operators
-        const auto rhsAP = stackAP.back();
-        stackAP.pop_back();
+      case Token::Type::Operator: {
+        if (token.unary) {
+          // unray operators
+          const auto rhsAP = stackAP.back();
+          stackAP.pop_back();
 
-        switch (token.str[0]) {
-        default:
-          printf("Operator error [%s]\n", token.str.c_str());
-          exit(0);
-          break;
-        case 'm': // Special operator name for unary '-'
-          // stackAP.push_back(-rhsAP);
-          stackAP.push_back(Builder.CreateNeg(rhsAP));
-          break;
-        case '~':
-          // stackAP.push_back(~rhsAP);
-          stackAP.push_back(Builder.CreateNot(rhsAP));
-          break;
-        case '!':
-          // stackAP.push_back(!rhsAP);
-          /*
-          %4 = icmp ne i32 %3, 0, !dbg !19
-          %5 = xor i1 %4, true, !dbg !19
-          */
-          auto Zero = llvm::ConstantInt::get(rhsAP->getType(), 0);
-          auto Cmp = Builder.CreateICmpNE(rhsAP, Zero);
-          auto Not = Builder.CreateXor(Cmp, llvm::ConstantInt::getTrue(M->getContext()));
-          stackAP.push_back(Not);
-          break;
+          switch (token.str[0]) {
+            default:
+              printf("Operator error [%s]\n", token.str.c_str());
+              exit(0);
+              break;
+            case 'm':  // Special operator name for unary '-'
+              // stackAP.push_back(-rhsAP);
+              stackAP.push_back(Builder.CreateNeg(rhsAP));
+              break;
+            case '~':
+              // stackAP.push_back(~rhsAP);
+              stackAP.push_back(Builder.CreateNot(rhsAP));
+              break;
+            case '!':
+              // stackAP.push_back(!rhsAP);
+              /*
+              %4 = icmp ne i32 %3, 0, !dbg !19
+              %5 = xor i1 %4, true, !dbg !19
+              */
+              auto Zero = llvm::ConstantInt::get(rhsAP->getType(), 0);
+              auto Cmp = Builder.CreateICmpNE(rhsAP, Zero);
+              auto Not = Builder.CreateXor(
+                  Cmp, llvm::ConstantInt::getTrue(M->getContext()));
+              stackAP.push_back(Not);
+              break;
+          }
+        } else {
+          // binary operators
+          auto rhsAP = stackAP.back();
+          stackAP.pop_back();
+
+          auto lhsAP = stackAP.back();
+          stackAP.pop_back();
+
+          // Cast if needed
+          lhsAP = castIfNeeded(lhsAP, rhsAP, Builder);
+          rhsAP = castIfNeeded(rhsAP, lhsAP, Builder);
+
+          if (token.str[0] != '+') {
+            // Check if we have a ptr type
+            if (lhsAP->getType()->isPointerTy()) {
+              // Need to convert it
+              lhsAP = Builder.CreatePtrToInt(lhsAP, rhsAP->getType());
+            }
+
+            if (rhsAP->getType()->isPointerTy()) {
+              rhsAP = Builder.CreatePtrToInt(rhsAP, lhsAP->getType());
+            }
+          }
+
+          switch (token.str[0]) {
+            default:
+              printf("Operator error [%s]\n", token.str.c_str());
+              exit(0);
+              break;
+            case '^':
+              // stackAP.push_back(lhsAP ^ rhsAP);
+              stackAP.push_back(Builder.CreateXor(lhsAP, rhsAP));
+              break;
+            case '*':
+              // stackAP.push_back(lhsAP * rhsAP);
+              stackAP.push_back(Builder.CreateMul(lhsAP, rhsAP));
+              break;
+            case '/':
+              // stackAP.push_back(lhsAP.sdiv(rhsAP));
+              stackAP.push_back(Builder.CreateSDiv(lhsAP, rhsAP));
+              break;
+            case '&':
+              // stackAP.push_back(lhsAP & rhsAP);
+              stackAP.push_back(Builder.CreateAnd(lhsAP, rhsAP));
+              break;
+            case '|':
+              // stackAP.push_back(lhsAP | rhsAP);
+              stackAP.push_back(Builder.CreateOr(lhsAP, rhsAP));
+              break;
+            case '+': {
+              // stackAP.push_back(lhsAP + rhsAP);
+              if (lhsAP->getType()->isPointerTy() ||
+                  rhsAP->getType()->isPointerTy()) {
+                if (rhsAP->getType()->isPointerTy()) {
+                  auto t = rhsAP;
+                  rhsAP = lhsAP;
+                  lhsAP = t;
+                }
+
+                // Must be a GEP
+                auto GEP = Builder.CreateGEP(
+                    Type::getInt8Ty(IntType->getContext()), lhsAP, rhsAP);
+                stackAP.push_back(GEP);
+              } else {
+                stackAP.push_back(Builder.CreateAdd(lhsAP, rhsAP));
+              }
+            } break;
+            case '-':
+              // stackAP.push_back(lhsAP - rhsAP);
+              stackAP.push_back(Builder.CreateSub(lhsAP, rhsAP));
+              break;
+          }
         }
-      } else {
-        // binary operators
-        auto rhsAP = stackAP.back();
-        stackAP.pop_back();
+      } break;
 
-        auto lhsAP = stackAP.back();
-        stackAP.pop_back();
-
-        // Cast if needed
-        lhsAP = castIfNeeded(lhsAP, rhsAP, Builder);
-        rhsAP = castIfNeeded(rhsAP, lhsAP, Builder);
-
-        switch (token.str[0]) {
-        default:
-          printf("Operator error [%s]\n", token.str.c_str());
-          exit(0);
-          break;
-        case '^':
-          // stackAP.push_back(lhsAP ^ rhsAP);
-          stackAP.push_back(Builder.CreateXor(lhsAP, rhsAP));
-          break;
-        case '*':
-          // stackAP.push_back(lhsAP * rhsAP);
-          stackAP.push_back(Builder.CreateMul(lhsAP, rhsAP));
-          break;
-        case '/':
-          // stackAP.push_back(lhsAP.sdiv(rhsAP));
-          stackAP.push_back(Builder.CreateSDiv(lhsAP, rhsAP));
-          break;
-        case '&':
-          // stackAP.push_back(lhsAP & rhsAP);
-          stackAP.push_back(Builder.CreateAnd(lhsAP, rhsAP));
-          break;
-        case '|':
-          // stackAP.push_back(lhsAP | rhsAP);
-          stackAP.push_back(Builder.CreateOr(lhsAP, rhsAP));
-          break;
-        case '+':
-          // stackAP.push_back(lhsAP + rhsAP);
-          stackAP.push_back(Builder.CreateAdd(lhsAP, rhsAP));
-          break;
-        case '-':
-          // stackAP.push_back(lhsAP - rhsAP);
-          stackAP.push_back(Builder.CreateSub(lhsAP, rhsAP));
-          break;
-        }
-      }
-    } break;
-
-    default:
-      printf("Token error\n");
-      exit(0);
+      default:
+        printf("Token error\n");
+        exit(0);
     }
   }
 
@@ -644,7 +722,11 @@ llvm::Function *createLLVMFunction(
 
   // cast to return type
   if (ModV->getType() != RetType) {
-    ModV = Builder.CreateIntCast(ModV, RetType, false, "CastedVar");
+    if (RetType->isPointerTy()) {
+      ModV = Builder.CreateIntToPtr(ModV, RetType);
+    } else {
+      ModV = Builder.CreateIntCast(ModV, RetType, false, "CastedVar");
+    }
   }
 
   Builder.CreateRet(ModV);
@@ -655,11 +737,9 @@ llvm::Function *createLLVMFunction(
 APInt APIntPow(APInt base, APInt exp) {
   APInt result(base.getBitWidth(), 1);
   for (;;) {
-    if ((exp & 1) == 1)
-      result *= base;
+    if ((exp & 1) == 1) result *= base;
     exp = exp.lshr(1);
-    if (!exp)
-      break;
+    if (!exp) break;
     base *= base;
   }
 
@@ -693,89 +773,89 @@ APInt eval(std::string expr, llvm::SmallVectorImpl<APInt> &par, int BitWidth,
     const auto token = queue.front();
     queue.pop_front();
     switch (token.type) {
-    case Token::Type::Number: {
-      APInt APV(BitWidth, token.str, 10);
-      stackAP.push_back(APV);
+      case Token::Type::Number: {
+        APInt APV(BitWidth, token.str, 10);
+        stackAP.push_back(APV);
 
-    } break;
+      } break;
 
-    case Token::Type::Operator: {
-      if (token.unary) {
-        // unray operators
-        const auto rhsAP = stackAP.back();
-        stackAP.pop_back();
+      case Token::Type::Operator: {
+        if (token.unary) {
+          // unray operators
+          const auto rhsAP = stackAP.back();
+          stackAP.pop_back();
 
-        switch (token.str[0]) {
-        default:
-          printf("Operator error [%s]\n", token.str.c_str());
-          exit(0);
-          break;
-        case 'm': // Special operator name for unary '-'
-          stackAP.push_back(-rhsAP);
+          switch (token.str[0]) {
+            default:
+              printf("Operator error [%s]\n", token.str.c_str());
+              exit(0);
+              break;
+            case 'm':  // Special operator name for unary '-'
+              stackAP.push_back(-rhsAP);
 
-          break;
-        case '~':
-          stackAP.push_back(~rhsAP);
+              break;
+            case '~':
+              stackAP.push_back(~rhsAP);
 
-          break;
-        case '!':
-          stackAP.push_back(APInt(BitWidth, !rhsAP.getZExtValue()));
-          //printf("! operator not implemented\n");
-          //exit(-1);
-          break;
+              break;
+            case '!':
+              stackAP.push_back(APInt(BitWidth, !rhsAP.getZExtValue()));
+              // printf("! operator not implemented\n");
+              // exit(-1);
+              break;
+          }
+        } else {
+          Operations++;
+
+          // binary operators
+          const auto rhsAP = stackAP.back();
+          stackAP.pop_back();
+
+          const auto lhsAP = stackAP.back();
+          stackAP.pop_back();
+
+          switch (token.str[0]) {
+            default:
+              printf("Operator error [%s]\n", token.str.c_str());
+              exit(0);
+              break;
+            case '^':
+              stackAP.push_back(lhsAP ^ rhsAP);
+              break;
+            case '*':
+              stackAP.push_back(lhsAP * rhsAP);
+              break;
+            case '>':
+              stackAP.push_back(lhsAP.lshr(rhsAP));
+              break;
+            case '/':
+              stackAP.push_back(lhsAP.sdiv(rhsAP));
+              break;
+            case '&':
+              stackAP.push_back(lhsAP & rhsAP);
+              break;
+            case '|':
+              stackAP.push_back(lhsAP | rhsAP);
+              break;
+            case '+':
+              stackAP.push_back(lhsAP + rhsAP);
+              break;
+            case '-':
+              stackAP.push_back(lhsAP - rhsAP);
+              break;
+            case 'R':
+              stackAP.push_back(lhsAP - rhsAP);
+              break;
+            case '#':
+              stackAP.push_back(APIntPow(lhsAP, rhsAP));
+              break;
+          }
         }
-      } else {
-        Operations++;
+      } break;
 
-        // binary operators
-        const auto rhsAP = stackAP.back();
-        stackAP.pop_back();
-
-        const auto lhsAP = stackAP.back();
-        stackAP.pop_back();
-
-        switch (token.str[0]) {
-        default:
-          printf("Operator error [%s]\n", token.str.c_str());
-          exit(0);
-          break;
-        case '^':
-          stackAP.push_back(lhsAP ^ rhsAP);
-          break;
-        case '*':
-          stackAP.push_back(lhsAP * rhsAP);
-          break;
-        case '>':
-          stackAP.push_back(lhsAP.lshr(rhsAP));
-          break;
-        case '/':
-          stackAP.push_back(lhsAP.sdiv(rhsAP));
-          break;
-        case '&':
-          stackAP.push_back(lhsAP & rhsAP);
-          break;
-        case '|':
-          stackAP.push_back(lhsAP | rhsAP);
-          break;
-        case '+':
-          stackAP.push_back(lhsAP + rhsAP);
-          break;
-        case '-':
-          stackAP.push_back(lhsAP - rhsAP);
-          break;
-        case 'R':
-          stackAP.push_back(lhsAP - rhsAP);
-          break;
-        case '#':
-          stackAP.push_back(APIntPow(lhsAP, rhsAP));
-          break;
-        }
-      }
-    } break;
-
-    default:
-      printf("Token error\n");
-      exit(0);
+      default:
+        printf("Token error\n");
+        exit(0);
     }
   }
 
@@ -821,114 +901,114 @@ z3::expr getZ3ExprFromString(z3::context &Z3Ctx, std::string &expr,
     queue.pop_front();
 
     switch (token.type) {
-    case Token::Type::Variable: {
-      auto c = token.str.c_str();
-      auto expr = VarMap[token.str.c_str()];
-      stackAP.push_back(*expr);
-    } break;
-    case Token::Type::Number: {
-      // APInt APV(BitWidth, token.str, 10);
-      auto ConstExpr = Z3Ctx.bv_val(token.str.c_str(), BitWidth);
-      stackAP.push_back(ConstExpr);
-    } break;
-    case Token::Type::Operator: {
-      if (token.unary) {
-        // unray operators
-        const auto rhsAP = stackAP.back();
-        stackAP.pop_back();
+      case Token::Type::Variable: {
+        auto c = token.str.c_str();
+        auto expr = VarMap[token.str.c_str()];
+        stackAP.push_back(*expr);
+      } break;
+      case Token::Type::Number: {
+        // APInt APV(BitWidth, token.str, 10);
+        auto ConstExpr = Z3Ctx.bv_val(token.str.c_str(), BitWidth);
+        stackAP.push_back(ConstExpr);
+      } break;
+      case Token::Type::Operator: {
+        if (token.unary) {
+          // unray operators
+          const auto rhsAP = stackAP.back();
+          stackAP.pop_back();
 
-        switch (token.str[0]) {
-        default: {
-          printf("Operator error [%s]\n", token.str.c_str());
-          exit(0);
-        } break;
-        case 'm': // Special operator name for unary '-'
-        {
-          auto NegExpr = -rhsAP;
-          stackAP.push_back(NegExpr);
-        } break;
-        case '~': {
-          auto CompExpr = ~rhsAP;
-          stackAP.push_back(CompExpr);
-        } break;
-        case '!':
-          // stackAP.push_back(rhsAP);
-          printf("[getZ3ExprFromString] '!' operator not implemented\n");
-          exit(-1);
-          break;
-        }
-      } else {
-        // binary operators
-        auto rhsAP = stackAP.back();
-        stackAP.pop_back();
+          switch (token.str[0]) {
+            default: {
+              printf("Operator error [%s]\n", token.str.c_str());
+              exit(0);
+            } break;
+            case 'm':  // Special operator name for unary '-'
+            {
+              auto NegExpr = -rhsAP;
+              stackAP.push_back(NegExpr);
+            } break;
+            case '~': {
+              auto CompExpr = ~rhsAP;
+              stackAP.push_back(CompExpr);
+            } break;
+            case '!':
+              // stackAP.push_back(rhsAP);
+              printf("[getZ3ExprFromString] '!' operator not implemented\n");
+              exit(-1);
+              break;
+          }
+        } else {
+          // binary operators
+          auto rhsAP = stackAP.back();
+          stackAP.pop_back();
 
-        auto lhsAP = stackAP.back();
-        stackAP.pop_back();
+          auto lhsAP = stackAP.back();
+          stackAP.pop_back();
 
-        // Align bitwidth
-        int lhsBitWidth = lhsAP.get_sort().bv_size();
-        int rhsBitWidth = rhsAP.get_sort().bv_size();
-        if (lhsBitWidth != rhsBitWidth) {
-          if (lhsBitWidth > rhsBitWidth) {
-            auto Sort = rhsAP.get_sort();
-            rhsAP = z3::zext(rhsAP, lhsBitWidth - rhsBitWidth);
-          } else if (lhsBitWidth < rhsBitWidth) {
-            auto Sort = lhsAP.get_sort();
-            lhsAP = z3::zext(lhsAP, rhsBitWidth - lhsBitWidth);
+          // Align bitwidth
+          int lhsBitWidth = lhsAP.get_sort().bv_size();
+          int rhsBitWidth = rhsAP.get_sort().bv_size();
+          if (lhsBitWidth != rhsBitWidth) {
+            if (lhsBitWidth > rhsBitWidth) {
+              auto Sort = rhsAP.get_sort();
+              rhsAP = z3::zext(rhsAP, lhsBitWidth - rhsBitWidth);
+            } else if (lhsBitWidth < rhsBitWidth) {
+              auto Sort = lhsAP.get_sort();
+              lhsAP = z3::zext(lhsAP, rhsBitWidth - lhsBitWidth);
+            }
+          }
+
+          switch (token.str[0]) {
+            default: {
+              printf("Operator error [%s]\n", token.str.c_str());
+              exit(0);
+            } break;
+            case '^': {
+              auto XorExpr = lhsAP ^ rhsAP;
+              stackAP.push_back(XorExpr);
+            } break;
+            case '*': {
+              auto MulExpr = lhsAP * rhsAP;
+              stackAP.push_back(MulExpr);
+            } break;
+            case '>': {
+              auto ShrExpr = z3::lshr(lhsAP, rhsAP);
+              stackAP.push_back(ShrExpr);
+            } break;
+            case '#': {
+              // power operator
+              z3::sort Sort(Z3Ctx);
+              auto PowExpr = z3::pw(z3::ubv_to_fpa(lhsAP, Sort),
+                                    z3::ubv_to_fpa(rhsAP, Sort));
+              stackAP.push_back(z3::fpa_to_ubv(PowExpr, BitWidth));
+            } break;
+            case '/': {
+              auto DivExpr = lhsAP / rhsAP;
+              stackAP.push_back(DivExpr);
+            } break;
+            case '&': {
+              auto AndExpr = lhsAP & rhsAP;
+              stackAP.push_back(AndExpr);
+            } break;
+            case '|': {
+              auto OrExpr = lhsAP | rhsAP;
+              stackAP.push_back(OrExpr);
+            } break;
+            case '+': {
+              auto AddExpr = lhsAP + rhsAP;
+              stackAP.push_back(AddExpr);
+            } break;
+            case '-': {
+              auto SubExpr = lhsAP - rhsAP;
+              stackAP.push_back(SubExpr);
+            } break;
           }
         }
+      } break;
 
-        switch (token.str[0]) {
-        default: {
-          printf("Operator error [%s]\n", token.str.c_str());
-          exit(0);
-        } break;
-        case '^': {
-          auto XorExpr = lhsAP ^ rhsAP;
-          stackAP.push_back(XorExpr);
-        } break;
-        case '*': {
-          auto MulExpr = lhsAP * rhsAP;
-          stackAP.push_back(MulExpr);
-        } break;
-        case '>': {
-          auto ShrExpr = z3::lshr(lhsAP, rhsAP);
-          stackAP.push_back(ShrExpr);
-        } break;
-        case '#': {
-          // power operator
-          z3::sort Sort(Z3Ctx);
-          auto PowExpr =
-              z3::pw(z3::ubv_to_fpa(lhsAP, Sort), z3::ubv_to_fpa(rhsAP, Sort));
-          stackAP.push_back(z3::fpa_to_ubv(PowExpr, BitWidth));
-        } break;
-        case '/': {
-          auto DivExpr = lhsAP / rhsAP;
-          stackAP.push_back(DivExpr);
-        } break;
-        case '&': {
-          auto AndExpr = lhsAP & rhsAP;
-          stackAP.push_back(AndExpr);
-        } break;
-        case '|': {
-          auto OrExpr = lhsAP | rhsAP;
-          stackAP.push_back(OrExpr);
-        } break;
-        case '+': {
-          auto AddExpr = lhsAP + rhsAP;
-          stackAP.push_back(AddExpr);
-        } break;
-        case '-': {
-          auto SubExpr = lhsAP - rhsAP;
-          stackAP.push_back(SubExpr);
-        } break;
-        }
-      }
-    } break;
-
-    default:
-      printf("Token error\n");
-      exit(0);
+      default:
+        printf("Token error\n");
+        exit(0);
     }
   }
 

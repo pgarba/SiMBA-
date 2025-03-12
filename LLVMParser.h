@@ -26,7 +26,7 @@ class Evaluator;
 class TargetLibraryInfoImpl;
 class TargetLibraryInfo;
 class Type;
-} // namespace llvm
+}  // namespace llvm
 
 namespace LSiMBA {
 
@@ -57,7 +57,7 @@ typedef struct MBACandidate {
 } MBACandidate;
 
 class LLVMParser {
-public:
+ public:
   LLVMParser(const std::string &filename, const std::string &OutputFile,
              bool Parallel = true, bool Verify = true,
              bool OptimizeBefore = false, bool OptimizeAfter = true,
@@ -101,9 +101,9 @@ public:
   /*
     Get AST as LLVM Function
   */
-  llvm::Function *
-  getASTasLLVMFunction(llvm::Module *M, llvm::SmallVectorImpl<BFSEntry> &AST,
-                       llvm::SmallVectorImpl<llvm::Value *> &Variables);
+  llvm::Function *getASTasLLVMFunction(
+      llvm::Module *M, llvm::SmallVectorImpl<BFSEntry> &AST,
+      llvm::SmallVectorImpl<llvm::Value *> &Variables);
 
   /*
     If simplifcation fails try to replace with known patterns
@@ -111,7 +111,7 @@ public:
   bool replaceWithKnownPatterns(LSiMBA::MBACandidate &Cand,
                                 const std::vector<llvm::APInt> &ResultVector);
 
-private:
+ private:
   std::string OutputFile = "";
 
   bool Parallel;
@@ -162,7 +162,7 @@ private:
 
   bool verify(int ASTSize, llvm::SmallVectorImpl<BFSEntry> &AST,
               std::string &SimpExpr,
-              llvm::SmallVectorImpl<llvm::Value *> &Variables);
+              llvm::SmallVectorImpl<llvm::Value *> &Variables, int BitWidth);
 
   llvm::Instruction *getSingleTerminator(llvm::Function &F);
 
@@ -198,23 +198,26 @@ private:
 
   void printAST(llvm::SmallVectorImpl<BFSEntry> &AST);
 
+  uint64_t calculateHash(llvm::SmallVectorImpl<BFSEntry> &AST);
+
   std::string getASTAsString(llvm::SmallVectorImpl<BFSEntry> &AST,
                              llvm::SmallVectorImpl<llvm::Value *> &Variables);
 
   void initResultVectorFromAST(llvm::SmallVectorImpl<BFSEntry> &AST,
                                std::vector<llvm::APInt> &ResultVector,
                                const llvm::APInt &Modulus,
-                               llvm::SmallVectorImpl<llvm::Value *> &Variables);
+                               llvm::SmallVectorImpl<llvm::Value *> &Variables,
+                               int BitWidth);
 
   llvm::APInt evaluateAST(llvm::SmallVectorImpl<BFSEntry> &AST,
                           llvm::SmallVectorImpl<llvm::Value *> &Variables,
                           llvm::SmallVectorImpl<llvm::APInt> &Par, bool &Error);
 
-  llvm::Constant *
-  getVal(llvm::Value *V,
-         llvm::DenseMap<llvm::Value *, llvm::Constant *> &ValueStack,
-         llvm::SmallVectorImpl<llvm::Value *> &Variables,
-         llvm::SmallVectorImpl<llvm::APInt> &Par);
+  llvm::Constant *getVal(
+      llvm::Value *V,
+      llvm::DenseMap<llvm::Value *, llvm::Constant *> &ValueStack,
+      llvm::SmallVectorImpl<llvm::Value *> &Variables,
+      llvm::SmallVectorImpl<llvm::APInt> &Par);
 
   /*
     Thread safe
@@ -245,8 +248,10 @@ private:
 
   static int getInstructionCount(llvm::Module *M);
   static int getInstructionCount(llvm::Function *F);
+
+  int countVariables(std::string &expr, char Var);
 };
 
-} // namespace LSiMBA
+}  // namespace LSiMBA
 
-#endif // LLVMPARSER_H
+#endif  // LLVMPARSER_H
