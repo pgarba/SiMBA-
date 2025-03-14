@@ -44,7 +44,7 @@
 #include "Simplifier.h"
 #include "Z3Prover.h"
 
-//  #define DEBUG_SIMPLIFICATION
+#define DEBUG_SIMPLIFICATION
 
 using namespace llvm;
 using namespace std;
@@ -73,7 +73,15 @@ llvm::cl::opt<bool> ShouldWalkSubAST(
     cl::desc("Walk sub AST if full AST to not match"),
     cl::value_desc("walk-sub-ast"), cl::init(false), cl::cat(SiMBAOpt));
 
+llvm::cl::opt<int> MaxMBAGlobal(
+    "max-mbas", cl::Optional,
+    cl::desc("Option to stop simplification after "
+             "a certain amount of MBAs (For debugging)"),
+    cl::value_desc("-max-mbas"), cl::init(0), cl::cat(SiMBAOpt));
+
 namespace LSiMBA {
+
+int MBACountStats = 0;
 
 llvm::MapVector<uint64_t, bool> MBACache;
 
@@ -289,6 +297,8 @@ bool LLVMParser::parse(const std::string &filename) {
 int LLVMParser::extractAndSimplify() {
   int MBASimplified = 0;
 
+  if (MaxMBAGlobal && MBACountStats >= MaxMBAGlobal) return 0;
+
   // Collect all functions
   std::vector<llvm::Function *> Functions;
   for (auto &F : *M) {
@@ -310,9 +320,11 @@ int LLVMParser::extractAndSimplify() {
   }
 
   // Walk through all functions
+  /*
   if (this->Debug) {
     outs() << "[+] Simplifying " << Functions.size() << " function(s) ...\n";
   }
+  */
 
   auto start = high_resolution_clock::now();
   for (auto F : Functions) {
@@ -326,9 +338,11 @@ int LLVMParser::extractAndSimplify() {
       continue;
     }
 
+    /*
     if (this->Debug) {
       outs() << "[*] Simplifying function: " << F->getName() << "\n";
     }
+    */
 
     // Optimize before if asked for
     if (this->OptimizeBefore) {
@@ -378,6 +392,9 @@ int LLVMParser::extractAndSimplify() {
       MBACount++;
 
       Replaced = true;
+
+      // Global Stats
+      MBACountStats++;
     }
 
     // Optimize if any replacements
@@ -388,9 +405,9 @@ int LLVMParser::extractAndSimplify() {
 
   auto stop = high_resolution_clock::now();
   auto duration = duration_cast<milliseconds>(stop - start);
-  if (this->Debug) {
-    outs() << "[+] Done! " << MBASimplified << " MBAs simplified ("
-           << duration.count() << " ms)\n";
+  if (this->Debug && MBASimplified) {
+    outs() << "[" << MBACountStats << "] Done! " << MBASimplified
+           << " MBAs simplified (" << duration.count() << " ms)\n";
   }
 
   return MBASimplified;
@@ -563,6 +580,12 @@ bool LLVMParser::verify(int ASTSize, llvm::SmallVectorImpl<BFSEntry> &AST,
       if (Count > 1) {
         return false;
       }
+
+      // Count the operations
+      int OpCount = countOperators(SimpExpr);
+      if (OpCount > 1) {
+        return false;
+      }
     }
   }
 
@@ -617,6 +640,10 @@ bool LLVMParser::verify(int ASTSize, llvm::SmallVectorImpl<BFSEntry> &AST,
     par.clear();
   }
 
+#ifdef DEBUG_SIMPLIFICATION
+  outs() << "[+] Simplification passed quick test! Running Z3\n";
+#endif
+
   // Prove with z3
   if (this->Prove) {
     z3::context Z3Ctx;
@@ -632,9 +659,11 @@ bool LLVMParser::verify(int ASTSize, llvm::SmallVectorImpl<BFSEntry> &AST,
       VarTypes[strC] = Variables[i]->getType();
     }
 
+    /*
     if (this->Debug) {
       outs() << "[Z3] Proving ...\n";
     }
+    */
 
     // New way: opt(Exp0 - Exp1) != 0
     OPTSTATUS Proved;
@@ -747,9 +776,22 @@ bool LLVMParser::isSupportedInstruction(llvm::Value *V) {
       case Intrinsic::umin:
       case Intrinsic::abs:
       case Intrinsic::smin:
-      case Intrinsic::smax:
-      case Intrinsic::bitreverse: {
+      case Intrinsic::smax: {
         return true;
+      }
+      case Intrinsic::bitreverse: {
+        // Check if i8/i16/i32/i64
+        auto BW = CI->getArgOperand(0)->getType()->getIntegerBitWidth();
+        switch (BW) {
+          case 8:
+          case 16:
+          case 32:
+          case 64:
+          case 128:
+            return true;
+          default:
+            return false;
+        }
       }
       default: {
         outs() << "[!] Unsupported intrinsic: " << "\n";
@@ -812,31 +854,30 @@ void LLVMParser::extractCandidates(llvm::Function &F,
           Visited.insert(Op);
         }
       } break;
-      
+
       case Instruction::GetElementPtr: {
         auto GEP = dyn_cast<GetElementPtrInst>(&*I);
         auto Index = GEP->getOperand(GEP->getNumOperands() - 1);
 
         // Todo add GEP direclty if its a ptrAdd
+        // !!! Disabled for now as it leads to  wrong results!
+        /*
         if (!isVisited(GEP)) {
           MBACandidate Cand;
           Cand.Candidate = dyn_cast<Instruction>(GEP);
           Candidates.push_back(Cand);
           Visited.insert(GEP);
         }
+        */
 
-        // Todo Add the add itself
-        // Disabled for now as it leads to wrong ptr replacements
-        /*
-        if (isSupportedInstruction(Index->stripPointerCasts())) {
-          if (isVisited(Index->stripPointerCasts())) continue;
+        if (isSupportedInstruction(Index)) {
+          if (isVisited(Index)) continue;
 
           MBACandidate Cand;
-          Cand.Candidate = dyn_cast<Instruction>(Index->stripPointerCasts());
+          Cand.Candidate = dyn_cast<Instruction>(Index);
           Candidates.push_back(Cand);
-          Visited.insert(Index->stripPointerCasts());
+          Visited.insert(Index);
         }
-        */
       } break;
       case Instruction::ICmp: {
         if (IsExternalSimplifier) continue;
@@ -988,12 +1029,6 @@ bool LLVMParser::constainsReplacedInstructions(
 
 bool LLVMParser::replaceWithKnownPatterns(
     LSiMBA::MBACandidate &Cand, const std::vector<APInt> &ResultVector) {
-#ifdef DEBUG_SIMPLIFICATION
-  for (auto V : ResultVector) {
-    outs() << V << "\n";
-  }
-#endif
-
   if (Cand.Variables.size() == 1 && ResultVector[0].getSExtValue() == 1 &&
       ResultVector[1] == 0) {
     Cand.Replacement = "!a";
@@ -1113,7 +1148,8 @@ bool LLVMParser::findReplacements(llvm::DominatorTree *DT,
       Cand.isValid = Entry->second;
       AlreadyProved = true;
 
-      if (!Cand.isValid) continue;
+      // Skip non valid candidates
+      if (Cand.isValid == false) continue;
     }
 
     auto Modulus = getModulus(BitWidth);
@@ -1131,9 +1167,11 @@ bool LLVMParser::findReplacements(llvm::DominatorTree *DT,
     auto Expr = getASTAsString(Cand.AST, Cand.Variables);
     outs() << "[*] Simplifying Expression: " << Expr << "\n";
 
+    /*
     auto F = getASTasLLVMFunction(this->M, Cand.AST, Cand.Variables);
     F->dump();
     F->eraseFromParent();
+    */
 #endif
     // Use external simplifier
     if (!UseExternalSimplifier.empty()) {
@@ -1163,6 +1201,9 @@ bool LLVMParser::findReplacements(llvm::DominatorTree *DT,
       }
     } else {
       S.simplify(Cand.Replacement, false, false);
+#ifdef DEBUG_SIMPLIFICATION
+      outs() << "[*] Simplified Expression: " << Cand.Replacement << "\n";
+#endif
     }
 
     // Verify is replacement is valid
@@ -1371,11 +1412,24 @@ uint64_t LLVMParser::calculateHash(llvm::SmallVectorImpl<BFSEntry> &AST) {
     auto &e = *E;
     x += e.I->getOpcode();
 
-    // Hash the operands
     x ^= x << 13;
     x ^= x >> 7;
     x ^= x << 17;
 
+    // Hash the operands  type
+    // Has impact on performance!
+    for (auto &Op : e.I->operands()) {
+      x += Op->getType()->getTypeID();
+
+      // Check if its a constant
+      if (auto C = dyn_cast<ConstantInt>(Op)) {
+        x += C->getValue().getLimitedValue();
+      }
+
+      x ^= x << 13;
+      x ^= x >> 7;
+      x ^= x << 17;
+    }
   }
   return x;
 }
