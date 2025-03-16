@@ -167,6 +167,10 @@ void exprToTokens(const std::string &expr, veque::veque<Token> &tokens,
           t = Token::Type::Operator;
           precedence = 5;
           break;
+        case '<':
+          t = Token::Type::Operator;
+          precedence = 5;
+          break;
         case '#':
           t = Token::Type::Operator;
           precedence = 8;
@@ -492,6 +496,10 @@ void createLLVMReplacement(llvm::Instruction *InsertionPoint,
               // stackAP.push_back(lhsAP >> rhsAP);
               stackAP.push_back(Builder.CreateAShr(lhsAP, rhsAP));
               break;
+            case '<':
+              // stackAP.push_back(lhsAP << rhsAP);
+              stackAP.push_back(Builder.CreateShl(lhsAP, rhsAP));
+              break;
             case '#':
               // stackAP.push_back(lhsAP ** rhsAP);
               // Call Pow intrinsics
@@ -681,6 +689,10 @@ llvm::Function *createLLVMFunction(
               // stackAP.push_back(lhsAP & rhsAP);
               stackAP.push_back(Builder.CreateAnd(lhsAP, rhsAP));
               break;
+            case '<':
+              // stackAP.push_back(lhsAP << rhsAP);
+              stackAP.push_back(Builder.CreateShl(lhsAP, rhsAP));
+              break;
             case '|':
               // stackAP.push_back(lhsAP | rhsAP);
               stackAP.push_back(Builder.CreateOr(lhsAP, rhsAP));
@@ -787,7 +799,7 @@ APInt eval(std::string expr, llvm::SmallVectorImpl<APInt> &par, int BitWidth,
 
           switch (token.str[0]) {
             default:
-              printf("Operator error [%s]\n", token.str.c_str());
+              printf("1 Operator error [%s]\n", token.str.c_str());
               exit(0);
               break;
             case 'm':  // Special operator name for unary '-'
@@ -816,7 +828,7 @@ APInt eval(std::string expr, llvm::SmallVectorImpl<APInt> &par, int BitWidth,
 
           switch (token.str[0]) {
             default:
-              printf("Operator error [%s]\n", token.str.c_str());
+              printf("2 Operator error [%s]\n", token.str.c_str());
               exit(0);
               break;
             case '^':
@@ -827,6 +839,9 @@ APInt eval(std::string expr, llvm::SmallVectorImpl<APInt> &par, int BitWidth,
               break;
             case '>':
               stackAP.push_back(lhsAP.lshr(rhsAP));
+              break;
+            case '<':
+              stackAP.push_back(lhsAP.shl(rhsAP));
               break;
             case '/':
               stackAP.push_back(lhsAP.sdiv(rhsAP));
@@ -919,7 +934,7 @@ z3::expr getZ3ExprFromString(z3::context &Z3Ctx, std::string &expr,
 
           switch (token.str[0]) {
             default: {
-              printf("Operator error [%s]\n", token.str.c_str());
+              printf("3 Operator error [%s]\n", token.str.c_str());
               exit(0);
             } break;
             case 'm':  // Special operator name for unary '-'
@@ -960,7 +975,7 @@ z3::expr getZ3ExprFromString(z3::context &Z3Ctx, std::string &expr,
 
           switch (token.str[0]) {
             default: {
-              printf("Operator error [%s]\n", token.str.c_str());
+              printf("4 Operator error [%s]\n", token.str.c_str());
               exit(0);
             } break;
             case '^': {
@@ -974,6 +989,10 @@ z3::expr getZ3ExprFromString(z3::context &Z3Ctx, std::string &expr,
             case '>': {
               auto ShrExpr = z3::lshr(lhsAP, rhsAP);
               stackAP.push_back(ShrExpr);
+            } break;
+            case '<': {
+              auto ShlExpr = z3::shl(lhsAP, rhsAP);
+              stackAP.push_back(ShlExpr);
             } break;
             case '#': {
               // power operator

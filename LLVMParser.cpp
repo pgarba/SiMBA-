@@ -702,7 +702,6 @@ bool LLVMParser::verify(int ASTSize, llvm::SmallVectorImpl<BFSEntry> &AST,
 }
 
 bool LLVMParser::isSupportedInstruction(llvm::Value *V) {
-  // We dont support AShr as GAMBA does not support it, for now
   // For new intrinsics check alive2 code for Z3 implementation
   if (auto BO = dyn_cast<BinaryOperator>(V)) {
     // Got removed from constant expr
