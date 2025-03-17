@@ -44,7 +44,7 @@
 #include "Simplifier.h"
 #include "Z3Prover.h"
 
-#define DEBUG_SIMPLIFICATION
+// #define DEBUG_SIMPLIFICATION
 
 using namespace llvm;
 using namespace std;
