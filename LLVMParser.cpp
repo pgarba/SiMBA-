@@ -44,7 +44,7 @@
 #include "Simplifier.h"
 #include "Z3Prover.h"
 
-#define DEBUG_SIMPLIFICATION
+// #define DEBUG_SIMPLIFICATION
 
 using namespace llvm;
 using namespace std;
@@ -816,9 +816,9 @@ void LLVMParser::extractCandidates(llvm::Function &F,
 
   // Instruction to look for 'store', 'select', 'gep', 'icmp', 'ret', ...
   for (inst_iterator I = inst_begin(F), E = inst_end(F); I != E; ++I) {
-    // Check if integer type
+    // Check if integer typ
     if (!I->getType()->isIntegerTy() && !I->getType()->isPointerTy() &&
-        !isa<BranchInst>(&*I)) {
+        !isa<BranchInst>(&*I) && !isa<StoreInst>(&*I)) {
       continue;
     }
 
@@ -868,7 +868,6 @@ void LLVMParser::extractCandidates(llvm::Function &F,
           Visited.insert(GEP);
         }
         */
-
         if (isSupportedInstruction(Index)) {
           if (isVisited(Index)) continue;
 
