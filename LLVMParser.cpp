@@ -55,7 +55,7 @@ cl::OptionCategory SiMBAOpt("SiMBA++ Options");
 llvm::cl::opt<std::string> UseExternalSimplifier(
     "external-simplifier", cl::Optional,
     cl::desc("Path to external simplifier script for "
-             "simplification (Supports: SiMBA/GAMBA"),
+             "simplification (Supports: SiMBA/GAMBA)"),
     cl::value_desc("external-simplifier"), cl::init(""), cl::cat(SiMBAOpt));
 
 llvm::cl::opt<int> MaxVarCount(
