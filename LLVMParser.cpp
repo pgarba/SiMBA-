@@ -50,7 +50,7 @@ using namespace llvm;
 using namespace std;
 using namespace std::chrono;
 
-extern cl::OptionCategory SiMBAOpt("SiMBA++ Options");
+cl::OptionCategory SiMBAOpt("SiMBA++ Options");
 
 llvm::cl::opt<std::string> UseExternalSimplifier(
     "external-simplifier", cl::Optional,
