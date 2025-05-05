@@ -70,7 +70,7 @@ llvm::cl::opt<int> MinASTSize("min-ast-size", cl::Optional,
 
 llvm::cl::opt<bool> ShouldWalkSubAST(
     "walk-sub-ast", cl::Optional,
-    cl::desc("Walk sub AST if full AST to not match"),
+    cl::desc("Walk sub AST if full AST does not match"),
     cl::value_desc("walk-sub-ast"), cl::init(false), cl::cat(SiMBAOpt));
 
 llvm::cl::opt<int> MaxMBAGlobal(

@@ -47,7 +47,7 @@ Use an external simplfier like **GAMBA** to crunch non linear MBAs on LLVM IR!
   --external-simplifier          - Use SiMBA/GAMBA or m as simplifier instead of internal (Path to simplify.py/simplify_general.py)
   --max-var-count                - Max variable count for simplification (Default: 6)
   --min-ast-size                 - Minimum AST size for simplification (Default: 4)
-  --walk-sub-ast                 - Walk sub AST if full AST to not match (Default: false)
+  --walk-sub-ast                 - Walk sub AST if full AST does not match (Default: false)
   --print-smt                    - Print SMT2 formula for debugging purposes
   --timeout                      - Timeout for Z3 solver (Default: 500ms)
   --accept-unknown               - Accept unknown as unsat (Accept long timeout as prove!) (Default: false)
