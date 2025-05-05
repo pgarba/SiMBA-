@@ -30,9 +30,9 @@ Use an external simplfier like **GAMBA** to crunch non linear MBAs on LLVM IR!
 # General Options
 
 ```
-  --mba=<mba>                    - MBA that will be verfied/simplified
-  --mbadb=<mbadb>                - MBA database that will be verfied/simplified
-  --ir=<ir>                      - LLVM Module that contains MBA functions that will be verfied/simplified
+  --mba=<mba>                    - MBA that will be verified/simplified
+  --mbadb=<mbadb>                - MBA database that will be verified/simplified
+  --ir=<ir>                      - LLVM Module that contains MBA functions that will be verified/simplified
   --bitcount=<BitCount>          - Bitcount of the variables (Default: 64)
   --checklinear                  - Check if MBA is a linear expresssion (Default: true)
   --convert-to-llvm              - Converts the MBA database to LLVM
