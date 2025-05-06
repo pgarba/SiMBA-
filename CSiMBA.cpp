@@ -27,18 +27,18 @@ using namespace std::chrono;
 extern cl::OptionCategory SiMBAOpt;
 
 cl::opt<std::string> StrMBA("mba", cl::Optional,
-                            cl::desc("MBA that will be verfied/simplified"),
+                            cl::desc("MBA that will be verified/simplified"),
                             cl::value_desc("mba"), cl::init(""),
                             cl::cat(SiMBAOpt));
 
 cl::opt<std::string> StrMBADB(
     "mbadb", cl::Optional,
-    cl::desc("MBA database that will be verfied/simplified"),
+    cl::desc("MBA database that will be verified/simplified"),
     cl::value_desc("mbadb"), cl::init(""), cl::cat(SiMBAOpt));
 
 cl::opt<std::string> StrIR("ir", cl::Optional,
                            cl::desc("LLVM Module that contains MBA functions "
-                                    "that will be verfied/simplified"),
+                                    "that will be verified/simplified"),
                            cl::value_desc("ir"), cl::init(""),
                            cl::cat(SiMBAOpt));
 

@@ -50,12 +50,12 @@ using namespace llvm;
 using namespace std;
 using namespace std::chrono;
 
-extern cl::OptionCategory SiMBAOpt("SiMBA++ Options");
+cl::OptionCategory SiMBAOpt("SiMBA++ Options");
 
 llvm::cl::opt<std::string> UseExternalSimplifier(
     "external-simplifier", cl::Optional,
     cl::desc("Path to external simplifier script for "
-             "simplification (Supports: SiMBA/GAMBA"),
+             "simplification (Supports: SiMBA/GAMBA)"),
     cl::value_desc("external-simplifier"), cl::init(""), cl::cat(SiMBAOpt));
 
 llvm::cl::opt<int> MaxVarCount(
@@ -70,7 +70,7 @@ llvm::cl::opt<int> MinASTSize("min-ast-size", cl::Optional,
 
 llvm::cl::opt<bool> ShouldWalkSubAST(
     "walk-sub-ast", cl::Optional,
-    cl::desc("Walk sub AST if full AST to not match"),
+    cl::desc("Walk sub AST if full AST does not match"),
     cl::value_desc("walk-sub-ast"), cl::init(false), cl::cat(SiMBAOpt));
 
 llvm::cl::opt<int> MaxMBAGlobal(
@@ -462,7 +462,7 @@ int LLVMParser::simplifyMBAModule() {
     std::vector<APInt> ResultVector;
     this->initResultVector(*F, ResultVector, Modulus, VNumber, RetTy);
 
-    // Simpify MBA
+    // Simplify MBA
     Simplifier S(BitWidth, false, VNumber, ResultVector);
 
     std::string SimpExpr;
@@ -1156,11 +1156,11 @@ bool LLVMParser::findReplacements(llvm::DominatorTree *DT,
     initResultVectorFromAST(Cand.AST, ResultVector, Modulus, Cand.Variables,
                             BitWidth);
 
-    // Simpify MBA
+    // Simplify MBA
     Simplifier S(BitWidth, false, Cand.Variables.size(), ResultVector);
     bool SkipVerify = false;
 
-    // Usefull for debugging
+    // Useful for debugging
 #ifdef DEBUG_SIMPLIFICATION
     auto Expr = getASTAsString(Cand.AST, Cand.Variables);
     outs() << "[*] Simplifying Expression: " << Expr << "\n";

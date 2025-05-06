@@ -41,7 +41,7 @@ using namespace std;
 extern llvm::cl::OptionCategory SiMBAOpt;
 
 cl::opt<std::string> PythonPath("python-path", cl::Optional,
-                                cl::desc("Path to python binary"),
+                                cl::desc("Path to Python binary"),
                                 cl::value_desc("python-path"),
                                 cl::init("python"), cl::cat(SiMBAOpt));
 

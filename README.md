@@ -30,9 +30,9 @@ Use an external simplfier like **GAMBA** to crunch non linear MBAs on LLVM IR!
 # General Options
 
 ```
-  --mba=<mba>                    - MBA that will be verfied/simplified
-  --mbadb=<mbadb>                - MBA database that will be verfied/simplified
-  --ir=<ir>                      - LLVM Module that contains MBA functions that will be verfied/simplified
+  --mba=<mba>                    - MBA that will be verified/simplified
+  --mbadb=<mbadb>                - MBA database that will be verified/simplified
+  --ir=<ir>                      - LLVM Module that contains MBA functions that will be verified/simplified
   --bitcount=<BitCount>          - Bitcount of the variables (Default: 64)
   --checklinear                  - Check if MBA is a linear expresssion (Default: true)
   --convert-to-llvm              - Converts the MBA database to LLVM
@@ -47,7 +47,7 @@ Use an external simplfier like **GAMBA** to crunch non linear MBAs on LLVM IR!
   --external-simplifier          - Use SiMBA/GAMBA or m as simplifier instead of internal (Path to simplify.py/simplify_general.py)
   --max-var-count                - Max variable count for simplification (Default: 6)
   --min-ast-size                 - Minimum AST size for simplification (Default: 4)
-  --walk-sub-ast                 - Walk sub AST if full AST to not match (Default: false)
+  --walk-sub-ast                 - Walk sub AST if full AST does not match (Default: false)
   --print-smt                    - Print SMT2 formula for debugging purposes
   --timeout                      - Timeout for Z3 solver (Default: 500ms)
   --accept-unknown               - Accept unknown as unsat (Accept long timeout as prove!) (Default: false)
