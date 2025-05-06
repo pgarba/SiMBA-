@@ -462,7 +462,7 @@ int LLVMParser::simplifyMBAModule() {
     std::vector<APInt> ResultVector;
     this->initResultVector(*F, ResultVector, Modulus, VNumber, RetTy);
 
-    // Simpify MBA
+    // Simplify MBA
     Simplifier S(BitWidth, false, VNumber, ResultVector);
 
     std::string SimpExpr;
@@ -1156,11 +1156,11 @@ bool LLVMParser::findReplacements(llvm::DominatorTree *DT,
     initResultVectorFromAST(Cand.AST, ResultVector, Modulus, Cand.Variables,
                             BitWidth);
 
-    // Simpify MBA
+    // Simplify MBA
     Simplifier S(BitWidth, false, Cand.Variables.size(), ResultVector);
     bool SkipVerify = false;
 
-    // Usefull for debugging
+    // Useful for debugging
 #ifdef DEBUG_SIMPLIFICATION
     auto Expr = getASTAsString(Cand.AST, Cand.Variables);
     outs() << "[*] Simplifying Expression: " << Expr << "\n";
