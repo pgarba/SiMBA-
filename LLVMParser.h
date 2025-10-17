@@ -215,7 +215,7 @@ class LLVMParser {
 
   llvm::Constant *getVal(
       llvm::Value *V,
-      llvm::DenseMap<llvm::Value *, llvm::Constant *> &ValueStack,
+      llvm::SmallDenseMap<llvm::Value *, llvm::Constant *, 16> &ValueStack,
       llvm::SmallVectorImpl<llvm::Value *> &Variables,
       llvm::SmallVectorImpl<llvm::APInt> &Par);
 

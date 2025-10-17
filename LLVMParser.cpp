@@ -1,5 +1,6 @@
 #include "LLVMParser.h"
 
+#include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/IR/Function.h"
 #include "llvm/Support/raw_ostream.h"
@@ -49,6 +50,9 @@
 using namespace llvm;
 using namespace std;
 using namespace std::chrono;
+
+// Global z3 context to speed to things
+z3::context *Z3CtxGlobal = nullptr;
 
 cl::OptionCategory SiMBAOpt("SiMBA++ Options");
 
@@ -116,6 +120,11 @@ LLVMParser::LLVMParser(const std::string &filename,
   this->MaxThreadCount = thread::hardware_concurrency();
 
   this->IsExternalSimplifier = !UseExternalSimplifier.empty();
+
+  // Create a new z3 global context
+  if (!Z3CtxGlobal) {
+    Z3CtxGlobal = new z3::context;
+  }
 }
 
 LLVMParser::LLVMParser(llvm::Module *M, bool Parallel, bool Verify,
@@ -141,6 +150,11 @@ LLVMParser::LLVMParser(llvm::Module *M, bool Parallel, bool Verify,
   this->MaxThreadCount = thread::hardware_concurrency();
 
   this->IsExternalSimplifier = !UseExternalSimplifier.empty();
+
+  // Create a new z3 global context
+  if (!Z3CtxGlobal) {
+    Z3CtxGlobal = new z3::context;
+  }
 }
 
 LLVMParser::LLVMParser(llvm::Function *F, bool Parallel, bool Verify,
@@ -169,6 +183,11 @@ LLVMParser::LLVMParser(llvm::Function *F, bool Parallel, bool Verify,
 
   // Disable instruction count as it has a big performance impact
   this->CountInstructions = false;
+
+  // Create a new z3 global context
+  if (!Z3CtxGlobal) {
+    Z3CtxGlobal = new z3::context;
+  }
 }
 
 LLVMParser::~LLVMParser() {}
@@ -646,8 +665,6 @@ bool LLVMParser::verify(int ASTSize, llvm::SmallVectorImpl<BFSEntry> &AST,
 
   // Prove with z3
   if (this->Prove) {
-    z3::context Z3Ctx;
-
     // Build Variable replacements
     std::vector<std::string> Vars;
     std::map<std::string, llvm::Type *> VarTypes;
@@ -667,8 +684,8 @@ bool LLVMParser::verify(int ASTSize, llvm::SmallVectorImpl<BFSEntry> &AST,
 
     // New way: opt(Exp0 - Exp1) != 0
     OPTSTATUS Proved;
-    auto Z3ExpOpt =
-        getOptimizedZ3Expression(Z3Ctx, SimpExpr, Vars, AST, Variables, Proved);
+    auto Z3ExpOpt = getOptimizedZ3Expression(*Z3CtxGlobal, SimpExpr, Vars, AST,
+                                             Variables, Proved);
 
     // Prove expressions
     auto start = high_resolution_clock::now();
@@ -1736,7 +1753,9 @@ llvm::APInt LLVMParser::evaluateAST(
     llvm::SmallVectorImpl<llvm::Value *> &Variables,
     llvm::SmallVectorImpl<APInt> &Par, bool &Error) {
   Constant *InstResult = nullptr;
-  llvm::DenseMap<llvm::Value *, llvm::Constant *> ValueStack;
+
+  // has a big performance impact
+  llvm::SmallDenseMap<llvm::Value *, llvm::Constant *, 16> ValueStack;
 
   for (auto E = AST.rbegin(); E != AST.rend(); ++E) {
     auto CurInst = E->I;
@@ -1976,7 +1995,8 @@ llvm::APInt LLVMParser::evaluateAST(
 }
 
 llvm::Constant *LLVMParser::getVal(
-    llvm::Value *V, llvm::DenseMap<llvm::Value *, llvm::Constant *> &ValueStack,
+    llvm::Value *V,
+    llvm::SmallDenseMap<llvm::Value *, llvm::Constant *, 16> &ValueStack,
     llvm::SmallVectorImpl<llvm::Value *> &Variables,
     llvm::SmallVectorImpl<llvm::APInt> &Par) {
   if (Constant *CV = dyn_cast<Constant>(V)) return CV;
