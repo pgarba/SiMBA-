@@ -61,6 +61,7 @@ llvm::Value *castIfNeeded(llvm::Value *V0, llvm::Value *V1,
                           llvm::IRBuilder<> &Builder) {
   // Keep Pointers
   if (V0->getType()->isPointerTy()) return V0;
+  if (V1->getType()->isPointerTy()) return V0;
 
   // Always cast to the higher type
   if (V0->getType()->getIntegerBitWidth() <
