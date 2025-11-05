@@ -65,7 +65,7 @@ llvm::cl::opt<int> MaxVarCount(
 
 llvm::cl::opt<int> MinASTSize("min-ast-size", cl::Optional,
                               cl::desc("Minimum AST size for simplification"),
-                              cl::value_desc("min-ast-size"), cl::init(4),
+                              cl::value_desc("min-ast-size"), cl::init(3),
                               cl::cat(SiMBAOpt));
 
 llvm::cl::opt<bool> ShouldWalkSubAST(
@@ -605,7 +605,7 @@ bool LLVMParser::verify(int ASTSize, llvm::SmallVectorImpl<BFSEntry> &AST,
   for (int i = 0; i < NUM_TEST_CASES; i++) {
     for (int j = 0; j < VNumber; j++) {
       auto v = SP64.next();
-      par.push_back(APInt(BitWidth, v));
+      par.push_back(APInt(BitWidth, v, false, true));
     }
 
     // Eval AST
@@ -818,7 +818,8 @@ void LLVMParser::extractCandidates(llvm::Function &F,
   for (inst_iterator I = inst_begin(F), E = inst_end(F); I != E; ++I) {
     // Check if integer typ
     if (!I->getType()->isIntegerTy() && !I->getType()->isPointerTy() &&
-        !isa<BranchInst>(&*I) && !isa<StoreInst>(&*I)) {
+        !isa<BranchInst>(&*I) && !isa<StoreInst>(&*I) &&
+        !isa<ReturnInst>(&*I)) {
       continue;
     }
 
@@ -2174,8 +2175,27 @@ z3::expr LLVMParser::getZ3ExpressionFromAST(
       auto VFalse = getZ3Val(Z3Ctx, SI->getFalseValue(), ValueMAP, false);
 
       // Get BitWidth
-      int VTrueBitWidth = SI->getTrueValue()->getType()->getIntegerBitWidth();
-      int VFalseBitWidth = SI->getFalseValue()->getType()->getIntegerBitWidth();
+      int VTrueBitWidth = 0;
+      if (SI->getTrueValue()->getType()->isPointerTy()) {
+        VTrueBitWidth = 64;
+      } else {
+        VTrueBitWidth = SI->getTrueValue()->getType()->getIntegerBitWidth();
+      }
+
+      int VFalseBitWidth = 0;
+      if (SI->getFalseValue()->getType()->isPointerTy()) {
+        VFalseBitWidth = 64;
+      } else {
+        VFalseBitWidth = SI->getFalseValue()->getType()->getIntegerBitWidth();
+      }
+
+      int SIBitWidth = 0;
+      if (SI->getTrueValue()->getType()->isPointerTy() ||
+          SI->getFalseValue()->getType()->isPointerTy()) {
+        SIBitWidth = OverrideBitWidth;
+      } else {
+        SIBitWidth = SI->getType()->getIntegerBitWidth();
+      }
 
       // Cast to bool if needed
       if (Cond->get_sort().is_bool() == false) {
@@ -2194,8 +2214,7 @@ z3::expr LLVMParser::getZ3ExpressionFromAST(
 
       auto Res = z3::ite(*Cond, *VTrue, *VFalse);
 
-      ValueMAP[SI] = new z3::expr(
-          boolToBV(Z3Ctx, Res, SI->getType()->getIntegerBitWidth()));
+      ValueMAP[SI] = new z3::expr(boolToBV(Z3Ctx, Res, SIBitWidth));
     } else if (auto ICmp = dyn_cast<ICmpInst>(CurInst)) {
       // ICmp
       auto V0 = getZ3Val(Z3Ctx, ICmp->getOperand(0), ValueMAP, false);
@@ -2381,6 +2400,9 @@ z3::expr LLVMParser::getZ3ExpressionFromAST(
 
   z3::expr Result = *LastInst;
 
+  // Check for double entries
+  SmallPtrSet<void *, 8> Contains;
+
   // Clean up
   for (auto V : ValueMAP) {
     // Skip Vars
@@ -2394,7 +2416,12 @@ z3::expr LLVMParser::getZ3ExpressionFromAST(
 
     if (Found) continue;
 
-    delete V.second;
+    // Dont delete twice, can happen for constants
+    if (Contains.contains(V.second) == false) {
+      delete V.second;
+
+      Contains.insert(V.second);
+    }
   }
 
   return Result;
@@ -2435,8 +2462,30 @@ z3::expr *LLVMParser::getZ3Val(
     return ValueMap[V];
   }
 
+  //  Check if IntToPtr
+  if (ConstantExpr *CE = dyn_cast<ConstantExpr>(V)) {
+    if (CE->getOpcode() == Instruction::IntToPtr) {
+      auto Z3Val = getZ3Val(Z3Ctx, CE->getOperand(0), ValueMap, 64);
+      ValueMap[V] = Z3Val;
+      return ValueMap[V];
+    }
+  }
+
+  // Check Null Ptr
+  if (Constant *C = dyn_cast<Constant>(V)) {
+    if (C->isNullValue()) {
+      auto ConstExpr = Z3Ctx.bv_val(0, 64);
+      ValueMap[V] = new z3::expr(ConstExpr);
+
+      return ValueMap[V];
+    }
+  }
+
+  // Check if it already exists
   if (ValueMap.count(V) == 0) {
+    outs() << "\nValue:";
     V->dump();
+    V->getType()->dump();
     report_fatal_error("[getZ3Val] Value not found!");
   }
 
