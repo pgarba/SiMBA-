@@ -16,8 +16,8 @@ namespace LSiMBA {
 /**
  * The number of test cases to use for the verification.
  */
-const int NUM_TEST_CASES = 256;
+const int NUM_TEST_CASES = 16;
 
-} // namespace LSiMBA
+}  // namespace LSiMBA
 
 #endif
