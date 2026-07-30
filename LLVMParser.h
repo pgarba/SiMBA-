@@ -238,6 +238,18 @@ class LLVMParser {
       std::vector<std::string> &VNames, llvm::SmallVectorImpl<BFSEntry> &AST,
       llvm::SmallVectorImpl<llvm::Value *> &Variables, OPTSTATUS &Proved);
 
+  // Needs access to getOptimizedZ3Expression above to run it inside a
+  // Windows SEH __try/__except guard - see its own definition in
+  // LLVMParser.cpp (next to verify()) for why that's necessary. A plain
+  // member function can't have a __try block directly in a function that
+  // also has C++ objects with destructors in the same scope, so this
+  // stays a free function rather than a member.
+  friend void doProveWithZ3(LLVMParser *Self, std::string &SimpExpr,
+                            std::vector<std::string> &Vars,
+                            llvm::SmallVectorImpl<BFSEntry> &AST,
+                            llvm::SmallVectorImpl<llvm::Value *> &Variables,
+                            bool &Result);
+
   z3::expr boolToBV(z3::context &Z3Ctx, z3::expr &BoolExpr, int BitWidth);
 
   z3::expr *getZ3Val(z3::context &Z3Ctx, llvm::Value *V,

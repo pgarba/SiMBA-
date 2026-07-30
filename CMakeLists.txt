@@ -42,6 +42,41 @@ execute_process(COMMAND ${LLVM_TOOLS_BINARY_DIR}/llvm-config --ldflags OUTPUT_VA
 execute_process(COMMAND ${LLVM_TOOLS_BINARY_DIR}/llvm-config --cxxflags OUTPUT_VARIABLE CMAKE_CXX_FLAGS)
 string(STRIP ${CMAKE_CXX_FLAGS} CMAKE_CXX_FLAGS)
 
+# llvm-config's own --cxxflags disables C++ exceptions (LLVM's own build
+# convention, e.g. /EHs-c- on MSVC/clang-cl) - fine for LLVM's own code,
+# but z3++.h's entire error-handling model is built on throwing on API
+# errors (see check_error()/Z3_THROW): with exceptions compiled out,
+# Z3_THROW silently becomes a no-op instead. Re-enabling exceptions here
+# restores that intended path, letting a try/catch around Z3-proving call
+# sites turn an ordinary Z3 API-level error (Z3_get_error_code != Z3_OK)
+# into a graceful "not proved" instead of silently continuing with
+# whatever the C API returned on failure.
+#
+# Confirmed NOT sufficient on its own for the specific crash this was
+# investigated alongside (a segfault inside Z3_inc_ref on an otherwise
+# completely ordinary bv_const call, on SiMBA-heavy targets like
+# denuvomaximum): that crash reproduced identically with exceptions
+# enabled, because Z3 itself never reports an error for the call in
+# question (check_error sees Z3_OK) - it's a genuine hardware exception,
+# not a catchable C++ one. See doProveWithZ3/proveWithZ3Guarded in
+# LLVMParser.cpp for the actual fix (a Windows SEH guard around the
+# proving call). Kept anyway since it's a real, independent improvement -
+# Z3 API-level errors are a distinct, more common case this now handles
+# correctly instead of silently mishandling.
+if(MSVC)
+    # llvm-config's /EHs-c- survives as a raw passthrough flag even after
+    # CMake also emits the structured ExceptionHandling=Sync property for
+    # /EHsc below - MSBuild places AdditionalOptions after the structured
+    # flags on the actual command line, so the leftover /EHs-c- would
+    # silently win and re-disable exceptions unless explicitly removed
+    # here first.
+    string(REPLACE "/EHs-c-" "" CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS}")
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /EHsc")
+else()
+    string(REPLACE "-fno-exceptions" "" CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS}")
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fexceptions")
+endif()
+
 string(STRIP ${LLVM_LIBS} LLVM_LIBS)
 string(STRIP ${SYS_LIBS} SYS_LIBS)
 string(STRIP ${LDF} LDF)

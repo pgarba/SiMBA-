@@ -35,6 +35,11 @@
 #include <string>
 #include <thread>
 
+#if defined(_WIN32) && defined(_MSC_VER)
+#define SIMBA_HAVE_SEH 1
+#include <windows.h>
+#endif
+
 #include <llvm/IR/ConstantFold.h>
 #include <z3++.h>
 #include <vector>
@@ -53,6 +58,28 @@ using namespace std::chrono;
 
 // Global z3 context to speed to things
 z3::context *Z3CtxGlobal = nullptr;
+
+// LLVMParser is constructed fresh per function (see SiMBAPass::run, which
+// stack-allocates one LLVMParser per function it processes) - but
+// Z3CtxGlobal used to be created once, lazily, on the very first
+// LLVMParser construction and then reused, unreset, for the rest of the
+// process's entire lifetime.
+//
+// This was investigated as a candidate cause for a reproducible crash on
+// SiMBA-heavy targets (denuvomaximum): a segfault deep inside libz3 (in
+// Z3_inc_ref) on an otherwise completely ordinary bv_const call. Tested
+// directly and confirmed NOT sufficient on its own - the crash
+// reproduces identically even with a context this fresh (bounded to one
+// function's worth of prior Z3 activity instead of the whole process).
+// The actual fix is the SEH guard in doProveWithZ3/proveWithZ3Guarded
+// below. Kept anyway as a reasonable hygiene improvement in its own
+// right - there's no good reason for one Z3 context to silently
+// accumulate state for a whole multi-hour lift when LLVMParser's own
+// lifetime already gives a natural, much smaller scope to reset it at.
+static void resetZ3CtxGlobal() {
+  delete Z3CtxGlobal;
+  Z3CtxGlobal = new z3::context;
+}
 
 cl::OptionCategory SiMBAOpt("SiMBA++ Options");
 
@@ -121,10 +148,10 @@ LLVMParser::LLVMParser(const std::string &filename,
 
   this->IsExternalSimplifier = !UseExternalSimplifier.empty();
 
-  // Create a new z3 global context
-  if (!Z3CtxGlobal) {
-    Z3CtxGlobal = new z3::context;
-  }
+  // Create a fresh z3 global context - see resetZ3CtxGlobal's own comment
+  // for why this resets on every construction rather than reusing
+  // whatever the previous LLVMParser instance (if any) left behind.
+  resetZ3CtxGlobal();
 }
 
 LLVMParser::LLVMParser(llvm::Module *M, bool Parallel, bool Verify,
@@ -151,10 +178,10 @@ LLVMParser::LLVMParser(llvm::Module *M, bool Parallel, bool Verify,
 
   this->IsExternalSimplifier = !UseExternalSimplifier.empty();
 
-  // Create a new z3 global context
-  if (!Z3CtxGlobal) {
-    Z3CtxGlobal = new z3::context;
-  }
+  // Create a fresh z3 global context - see resetZ3CtxGlobal's own comment
+  // for why this resets on every construction rather than reusing
+  // whatever the previous LLVMParser instance (if any) left behind.
+  resetZ3CtxGlobal();
 }
 
 LLVMParser::LLVMParser(llvm::Function *F, bool Parallel, bool Verify,
@@ -184,10 +211,10 @@ LLVMParser::LLVMParser(llvm::Function *F, bool Parallel, bool Verify,
   // Disable instruction count as it has a big performance impact
   this->CountInstructions = false;
 
-  // Create a new z3 global context
-  if (!Z3CtxGlobal) {
-    Z3CtxGlobal = new z3::context;
-  }
+  // Create a fresh z3 global context - see resetZ3CtxGlobal's own comment
+  // for why this resets on every construction rather than reusing
+  // whatever the previous LLVMParser instance (if any) left behind.
+  resetZ3CtxGlobal();
 }
 
 LLVMParser::~LLVMParser() {}
@@ -581,6 +608,76 @@ int LLVMParser::countVariables(std::string &expr, char Var) {
   return VarCount;
 }
 
+// Runs the actual Z3-proving work for one candidate. Deliberately its own,
+// small function containing the only C++ objects with destructors
+// involved (Z3ExpOpt, the OPTSTATUS local) - proveWithZ3Guarded's __try
+// block below calls this rather than doing the work inline, since mixing
+// SEH __try/__except directly with such objects in the same function is
+// unsupported by MSVC/clang-cl. See proveWithZ3Guarded for why this
+// exists at all.
+static void doProveWithZ3(LLVMParser *Self, std::string &SimpExpr,
+                          std::vector<std::string> &Vars,
+                          llvm::SmallVectorImpl<BFSEntry> &AST,
+                          llvm::SmallVectorImpl<llvm::Value *> &Variables,
+                          bool &Result) {
+  OPTSTATUS Proved;
+  auto Z3ExpOpt = Self->getOptimizedZ3Expression(*Z3CtxGlobal, SimpExpr, Vars,
+                                                 AST, Variables, Proved);
+
+  if (Proved == OPT_PROVED) {
+    Result = true;
+  } else if (Proved == OPT_NOT_VALID) {
+    Result = false;
+  } else if (OPT_PROVE_ME) {
+    // prove() is a free function (declared in Z3Prover.h), not a member -
+    // matches how verify() itself originally called it, unqualified.
+    Result = prove((Z3ExpOpt != 0));
+  }
+}
+
+// Extensive investigation (see session/commit history) traced a
+// reproducible crash on SiMBA-heavy targets (denuvomaximum) to a hardware
+// access violation deep inside libz3 (a corrupted argument reaching
+// Z3_inc_ref) on an otherwise completely ordinary Z3 API call - not a Z3
+// API-level error (Z3_get_error_code reports Z3_OK; check_error's
+// z3::exception never fires) and not explained by any of: a stub cttz
+// case, a Z3VarMap leak, Z3 symbol name reuse, a DLL/header version
+// mismatch (a standalone repro against the exact same libz3.dll/z3++.h
+// works fine), -march=native codegen, or Z3CtxGlobal accumulating state
+// across the whole process (a fresh per-LLVMParser context - see
+// resetZ3CtxGlobal - reproduces it too). Whatever the precise mechanism,
+// it manifests as a genuine hardware exception (SEH, not a C++
+// exception), which a plain try/catch cannot intercept.
+//
+// Wrapping the call in Windows SEH turns that hard, whole-process crash
+// into a recoverable failure for just this one MBA candidate - the same
+// outcome verify() already treats as normal for OPT_NOT_VALID. The Z3
+// context is discarded and rebuilt afterward since its internal state
+// can no longer be trusted once a call into it has corrupted memory.
+static bool proveWithZ3Guarded(LLVMParser *Self, std::string &SimpExpr,
+                               std::vector<std::string> &Vars,
+                               llvm::SmallVectorImpl<BFSEntry> &AST,
+                               llvm::SmallVectorImpl<llvm::Value *> &Variables,
+                               bool Debug) {
+  bool Result = false;
+#if defined(SIMBA_HAVE_SEH)
+  __try {
+    doProveWithZ3(Self, SimpExpr, Vars, AST, Variables, Result);
+  } __except (EXCEPTION_EXECUTE_HANDLER) {
+    if (Debug) {
+      outs() << "[Z3] Proving crashed with a hardware exception - "
+                "treating this candidate as not proved and resetting the "
+                "shared Z3 context\n";
+    }
+    resetZ3CtxGlobal();
+    Result = false;
+  }
+#else
+  doProveWithZ3(Self, SimpExpr, Vars, AST, Variables, Result);
+#endif
+  return Result;
+}
+
 bool LLVMParser::verify(int ASTSize, llvm::SmallVectorImpl<BFSEntry> &AST,
                         std::string &SimpExpr,
                         llvm::SmallVectorImpl<llvm::Value *> &Variables,
@@ -683,23 +780,25 @@ bool LLVMParser::verify(int ASTSize, llvm::SmallVectorImpl<BFSEntry> &AST,
     */
 
     // New way: opt(Exp0 - Exp1) != 0
-    OPTSTATUS Proved;
-    auto Z3ExpOpt = getOptimizedZ3Expression(*Z3CtxGlobal, SimpExpr, Vars, AST,
-                                             Variables, Proved);
-
-    // Prove expressions
+    // See proveWithZ3Guarded's own comment for why this goes through a
+    // dedicated SEH-guarded wrapper rather than calling
+    // getOptimizedZ3Expression/prove directly: a genuine hardware
+    // exception (not a catchable z3::exception) has been observed to
+    // escape from inside libz3 on SiMBA-heavy targets. A plain try/catch
+    // around a z3::exception is kept too, for the ordinary Z3 API-level
+    // error case check_error/Z3_THROW is actually designed to catch.
     auto start = high_resolution_clock::now();
 
     bool Result = false;
-    if (Proved == OPT_PROVED) {
-      // Solved by optimization
-      Result = 1;
-    } else if (Proved == OPT_NOT_VALID) {
-      // Solved by optimization
-      Result = 0;
-    } else if (OPT_PROVE_ME) {
-      // Solve with Z3
-      Result = prove((Z3ExpOpt != 0));
+    try {
+      Result = proveWithZ3Guarded(this, SimpExpr, Vars, AST, Variables,
+                                  this->Debug);
+    } catch (z3::exception &e) {
+      if (this->Debug) {
+        outs() << "[Z3] Proving threw: " << e.msg() << " - treating as not "
+                                                        "proved\n";
+      }
+      Result = false;
     }
 
     auto stop = high_resolution_clock::now();
