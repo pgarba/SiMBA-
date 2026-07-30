@@ -59,25 +59,38 @@ using namespace std::chrono;
 // Global z3 context to speed to things
 z3::context *Z3CtxGlobal = nullptr;
 
-// LLVMParser is constructed fresh per function (see SiMBAPass::run, which
-// stack-allocates one LLVMParser per function it processes) - but
-// Z3CtxGlobal used to be created once, lazily, on the very first
-// LLVMParser construction and then reused, unreset, for the rest of the
-// process's entire lifetime.
+// Z3CtxGlobal is created once, lazily, on the first LLVMParser
+// construction and then shared for the rest of the process - LLVMParser
+// itself is constructed fresh per function (see SiMBAPass::run), so its
+// lifetime is much shorter than the context's on purpose.
 //
-// This was investigated as a candidate cause for a reproducible crash on
-// SiMBA-heavy targets (denuvomaximum): a segfault deep inside libz3 (in
-// Z3_inc_ref) on an otherwise completely ordinary bv_const call. Tested
-// directly and confirmed NOT sufficient on its own - the crash
-// reproduces identically even with a context this fresh (bounded to one
-// function's worth of prior Z3 activity instead of the whole process).
-// The actual fix is the SEH guard in doProveWithZ3/proveWithZ3Guarded
-// below. Kept anyway as a reasonable hygiene improvement in its own
-// right - there's no good reason for one Z3 context to silently
-// accumulate state for a whole multi-hour lift when LLVMParser's own
-// lifetime already gives a natural, much smaller scope to reset it at.
-static void resetZ3CtxGlobal() {
-  delete Z3CtxGlobal;
+// Recreating the context per LLVMParser was tried, as a supposed hygiene
+// improvement, while chasing a reproducible crash on SiMBA-heavy targets
+// (denuvomaximum): an access violation deep inside libz3, first in
+// Z3_inc_ref and ultimately in Z3_del_context. It was in fact the *cause*
+// of that crash. prove() (Z3Prover.cpp) caches one solver for the whole
+// process, built from the context of the first conjecture it sees;
+// freeing that context out from under it left the cached solver pointing
+// into freed memory, and the next prove() corrupted Z3's heap through it.
+// So: one context, created once, and any code that does tear it down has
+// to drop the cached solver first (see abandonZ3CtxGlobal below, and
+// resetZ3Solver in Z3Prover.h).
+static void ensureZ3CtxGlobal() {
+  if (!Z3CtxGlobal) {
+    Z3CtxGlobal = new z3::context;
+  }
+}
+
+// Recovery path for proveWithZ3Guarded only: a hardware fault has come out
+// of libz3, so the context's internal state is no longer trustworthy and
+// gets replaced. Note what this deliberately does *not* do - it never runs
+// Z3's own destructors over the abandoned context. Walking a heap Z3 has
+// already corrupted is what turned the fault into a whole-process crash
+// (Z3_del_context faulting from inside the exception handler). The old
+// context is leaked instead; a fault here is rare and terminal-ish enough
+// that leaking it is much the better trade.
+static void abandonZ3CtxGlobal() {
+  abandonZ3Solver();
   Z3CtxGlobal = new z3::context;
 }
 
@@ -148,10 +161,10 @@ LLVMParser::LLVMParser(const std::string &filename,
 
   this->IsExternalSimplifier = !UseExternalSimplifier.empty();
 
-  // Create a fresh z3 global context - see resetZ3CtxGlobal's own comment
-  // for why this resets on every construction rather than reusing
-  // whatever the previous LLVMParser instance (if any) left behind.
-  resetZ3CtxGlobal();
+  // Create the shared z3 context if this is the first parser - see
+  // ensureZ3CtxGlobal's own comment for why it is created once and shared
+  // rather than recreated per LLVMParser.
+  ensureZ3CtxGlobal();
 }
 
 LLVMParser::LLVMParser(llvm::Module *M, bool Parallel, bool Verify,
@@ -178,10 +191,10 @@ LLVMParser::LLVMParser(llvm::Module *M, bool Parallel, bool Verify,
 
   this->IsExternalSimplifier = !UseExternalSimplifier.empty();
 
-  // Create a fresh z3 global context - see resetZ3CtxGlobal's own comment
-  // for why this resets on every construction rather than reusing
-  // whatever the previous LLVMParser instance (if any) left behind.
-  resetZ3CtxGlobal();
+  // Create the shared z3 context if this is the first parser - see
+  // ensureZ3CtxGlobal's own comment for why it is created once and shared
+  // rather than recreated per LLVMParser.
+  ensureZ3CtxGlobal();
 }
 
 LLVMParser::LLVMParser(llvm::Function *F, bool Parallel, bool Verify,
@@ -211,10 +224,10 @@ LLVMParser::LLVMParser(llvm::Function *F, bool Parallel, bool Verify,
   // Disable instruction count as it has a big performance impact
   this->CountInstructions = false;
 
-  // Create a fresh z3 global context - see resetZ3CtxGlobal's own comment
-  // for why this resets on every construction rather than reusing
-  // whatever the previous LLVMParser instance (if any) left behind.
-  resetZ3CtxGlobal();
+  // Create the shared z3 context if this is the first parser - see
+  // ensureZ3CtxGlobal's own comment for why it is created once and shared
+  // rather than recreated per LLVMParser.
+  ensureZ3CtxGlobal();
 }
 
 LLVMParser::~LLVMParser() {}
@@ -635,25 +648,18 @@ static void doProveWithZ3(LLVMParser *Self, std::string &SimpExpr,
   }
 }
 
-// Extensive investigation (see session/commit history) traced a
-// reproducible crash on SiMBA-heavy targets (denuvomaximum) to a hardware
-// access violation deep inside libz3 (a corrupted argument reaching
-// Z3_inc_ref) on an otherwise completely ordinary Z3 API call - not a Z3
-// API-level error (Z3_get_error_code reports Z3_OK; check_error's
-// z3::exception never fires) and not explained by any of: a stub cttz
-// case, a Z3VarMap leak, Z3 symbol name reuse, a DLL/header version
-// mismatch (a standalone repro against the exact same libz3.dll/z3++.h
-// works fine), -march=native codegen, or Z3CtxGlobal accumulating state
-// across the whole process (a fresh per-LLVMParser context - see
-// resetZ3CtxGlobal - reproduces it too). Whatever the precise mechanism,
-// it manifests as a genuine hardware exception (SEH, not a C++
-// exception), which a plain try/catch cannot intercept.
+// Last-resort net around the Z3-proving call. The specific crash this was
+// originally written for turned out to be a use-after-free on our side -
+// the cached global solver outliving its context, see ensureZ3CtxGlobal -
+// and is fixed at the source, so this should now never fire. It is kept
+// because a fault escaping libz3 is a hardware exception (SEH), not a
+// catchable z3::exception, so without it *any* such fault takes the whole
+// lift down mid-run; with it, one MBA candidate is treated as not proved,
+// which is an outcome verify() already handles as normal (OPT_NOT_VALID).
 //
-// Wrapping the call in Windows SEH turns that hard, whole-process crash
-// into a recoverable failure for just this one MBA candidate - the same
-// outcome verify() already treats as normal for OPT_NOT_VALID. The Z3
-// context is discarded and rebuilt afterward since its internal state
-// can no longer be trusted once a call into it has corrupted memory.
+// It reports unconditionally rather than only under Debug: a fault
+// reaching here means something is genuinely wrong, and silently
+// swallowing it is how the underlying bug stayed hidden.
 static bool proveWithZ3Guarded(LLVMParser *Self, std::string &SimpExpr,
                                std::vector<std::string> &Vars,
                                llvm::SmallVectorImpl<BFSEntry> &AST,
@@ -664,12 +670,10 @@ static bool proveWithZ3Guarded(LLVMParser *Self, std::string &SimpExpr,
   __try {
     doProveWithZ3(Self, SimpExpr, Vars, AST, Variables, Result);
   } __except (EXCEPTION_EXECUTE_HANDLER) {
-    if (Debug) {
-      outs() << "[Z3] Proving crashed with a hardware exception - "
-                "treating this candidate as not proved and resetting the "
-                "shared Z3 context\n";
-    }
-    resetZ3CtxGlobal();
+    errs() << "[Z3] Proving faulted with a hardware exception - treating "
+              "this candidate as not proved and replacing the shared Z3 "
+              "context. This should not happen; please report it.\n";
+    abandonZ3CtxGlobal();
     Result = false;
   }
 #else
@@ -2399,9 +2403,18 @@ z3::expr LLVMParser::getZ3ExpressionFromAST(
       ValueMAP[ICmp] = new z3::expr(
           boolToBV(Z3Ctx, *Res, CurInst->getType()->getIntegerBitWidth()));
     } else if (auto PTI = dyn_cast<PtrToIntInst>(CurInst)) {
-      ValueMAP[PTI] = new z3::expr(*ValueMAP[PTI->getOperand(0)]);
+      // Via getZ3Val, not ValueMAP[...] directly: the operand is not
+      // necessarily an instruction already lowered into ValueMAP (these
+      // casts get introduced around constants and function arguments in
+      // getOptimizedZ3Expression). DenseMap::operator[] would silently
+      // default-construct a null z3::expr* for such a key, and the
+      // dereference below would then read the ast/context fields out of
+      // address zero and hand the garbage to Z3_inc_ref.
+      ValueMAP[PTI] = new z3::expr(
+          *getZ3Val(Z3Ctx, PTI->getOperand(0), ValueMAP, OverrideBitWidth));
     } else if (auto ITP = dyn_cast<IntToPtrInst>(CurInst)) {
-      ValueMAP[ITP] = new z3::expr(*ValueMAP[ITP->getOperand(0)]);
+      ValueMAP[ITP] = new z3::expr(
+          *getZ3Val(Z3Ctx, ITP->getOperand(0), ValueMAP, OverrideBitWidth));
     } else if (auto Call = dyn_cast<CallInst>(CurInst)) {
       auto CI = Call->getCalledFunction();
       switch (CI->getIntrinsicID()) {
@@ -2450,7 +2463,10 @@ z3::expr LLVMParser::getZ3ExpressionFromAST(
               Call->getArgOperand(0)->getType()->getIntegerBitWidth();
 
           auto v = z3::expr_vector(Z3Ctx);
-          for (int i = BitWidth - 1; i >= 0; i++) {
+          // i--, not i++: counting up from BitWidth-1 never reaches the
+          // i >= 0 exit, so this ran away extracting bits past the end of
+          // the vector until it exhausted memory.
+          for (int i = BitWidth - 1; i >= 0; i--) {
             v.push_back(Op0->extract(i, i));
           }
           auto r = concat(v);
