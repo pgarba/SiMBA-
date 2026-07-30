@@ -2418,9 +2418,24 @@ z3::expr LLVMParser::getZ3ExpressionFromAST(
           ValueMAP[Call] = new z3::expr(z3::abs(*Op0));
         } break;
         case Intrinsic::cttz: {
-          // Not supported for now!
-          //auto Op0 = getZ3Val(Z3Ctx, Call->getArgOperand(0), ValueMAP, false);
-          //ValueMAP[Call] = new z3::expr(z3::(*Op0));
+          auto Op0 = getZ3Val(Z3Ctx, Call->getArgOperand(0), ValueMAP, false);
+          unsigned BitWidth = Op0->get_sort().bv_size();
+
+          // Z3's bitvector theory has no native count-trailing-zeros -
+          // build it as a chain of ITEs checking each bit from the LSB
+          // upward, matching evaluateAST's own __builtin_ctz semantics
+          // (used when this same AST is concretely evaluated rather than
+          // symbolically proven) so both paths agree. An all-zero input
+          // is UB for __builtin_ctz too, so falling back to BitWidth here
+          // is as good a definition as any for that case.
+          auto Result = Z3Ctx.bv_val((uint64_t)BitWidth, BitWidth);
+          for (int i = (int)BitWidth - 1; i >= 0; i--) {
+            auto BitSet = Op0->extract(i, i) == Z3Ctx.bv_val(1, 1);
+            Result = z3::ite(BitSet, Z3Ctx.bv_val((uint64_t)i, BitWidth),
+                             Result);
+          }
+
+          ValueMAP[Call] = new z3::expr(Result);
         } break;
         case Intrinsic::usub_sat: {
           auto Op0 = getZ3Val(Z3Ctx, Call->getArgOperand(0), ValueMAP, false);
@@ -2442,6 +2457,21 @@ z3::expr LLVMParser::getZ3ExpressionFromAST(
 
     // Set last inst
     LastInst = ValueMAP[CurInst];
+  }
+
+  // Every case above either sets ValueMAP[CurInst] or report_fatal_errors
+  // out - but DenseMap::operator[] silently default-constructs (null) an
+  // entry for a key it's never seen, so a case that matches syntactically
+  // but leaves ValueMAP unset for its own result (as the cttz intrinsic
+  // case used to, before it was implemented) would otherwise surface here
+  // as a null LastInst - dereferenced two lines down without this check,
+  // crashing inside Z3's own reference counting on a value that looks
+  // like ordinary heap garbage rather than a recognizable null pointer.
+  if (!LastInst) {
+    report_fatal_error(
+        "[getZ3ExpressionFromAST] LastInst is null - AST root never "
+        "resolved to a value",
+        false);
   }
 
   z3::expr Result = *LastInst;
@@ -2758,8 +2788,25 @@ z3::expr LLVMParser::getOptimizedZ3Expression(
   if (!F->getReturnType()->isPointerTy()) {
     BitWidth = F->getReturnType()->getIntegerBitWidth();
   }
+
   auto Z3ExpOpt =
       getZ3ExpressionFromAST(Z3Ctx, OptAST, FArgs, Z3VarMap, BitWidth);
+
+  // getZ3ExpressionFromAST's own cleanup deliberately skips entries that
+  // match Z3VarMap's values (variables), leaving them for the caller to
+  // own/reuse. This is the only caller, and Z3VarMap is function-local and
+  // never consulted again after this point, so nothing reuses these - free
+  // them here rather than leaking one z3::expr (and its Z3_inc_ref'd AST
+  // node) per call. Z3ExpOpt already holds its own independently
+  // ref-counted copy, so this is safe regardless of whether it aliases one
+  // of these. A real leak either way - one node per verify() attempt,
+  // against a single shared, process-lifetime Z3 context (Z3CtxGlobal) -
+  // even though it wasn't the cause of the specific denuvomaximum crash
+  // this was investigated alongside (confirmed by testing: the crash
+  // still reproduced identically with this fix alone applied).
+  for (auto &Entry : Z3VarMap) {
+    delete Entry.second;
+  }
 
   // Clean up
   F->eraseFromParent();
