@@ -813,6 +813,7 @@ bool LLVMParser::isSupportedInstruction(llvm::Value *V) {
         outs() << "[!] Unsupported intrinsic: " << "\n";
         CI->dump();
         // report_fatal_error("Unsupported intrinsic");
+        // Check SLOT (https://github.com/mikekben/SLOT) for implementations
         return false;
       }
     }
@@ -1801,6 +1802,20 @@ llvm::APInt LLVMParser::evaluateAST(
       ConstantInt *Index = dyn_cast<ConstantInt>(
           getVal(GEP->getOperand(1), ValueStack, Variables, Par));
 
+      if (!Ptr || !Index) {
+        // One of the operands evaluated to a Constant that isn't a plain
+        // integer (e.g. a genuine pointer-typed constant such as a null
+        // or inttoptr base, rather than the "pointers modeled as
+        // integers" shape this GEP case otherwise assumes) - not
+        // evaluable here. Fail gracefully through the same Error
+        // contract the caller already relies on for every other
+        // unevaluable expression (see the InstResult==null check at the
+        // end of this function), instead of dereferencing a null
+        // ConstantInt*.
+        Error = true;
+        return APInt(1, 0);
+      }
+
       // Todo: Ensure its 64bit type here
       InstResult = ConstantInt::get(Index->getType(),
                                     Ptr->getValue() + Index->getValue());
@@ -1967,6 +1982,12 @@ llvm::APInt LLVMParser::evaluateAST(
           auto Op0 = getVal(Call->getArgOperand(0), ValueStack, Variables, Par);
           auto a = dyn_cast<ConstantInt>(Op0)->getZExtValue();
           auto r = __builtin_abs(a);
+          InstResult = ConstantInt::get(Op0->getType(), r);
+        } break;
+        case Intrinsic::cttz: {
+          auto Op0 = getVal(Call->getArgOperand(0), ValueStack, Variables, Par);
+          auto a = dyn_cast<ConstantInt>(Op0)->getZExtValue();
+          auto r = __builtin_ctz(a);
           InstResult = ConstantInt::get(Op0->getType(), r);
         } break;
         default: {
@@ -2395,6 +2416,11 @@ z3::expr LLVMParser::getZ3ExpressionFromAST(
         case Intrinsic::abs: {
           auto Op0 = getZ3Val(Z3Ctx, Call->getArgOperand(0), ValueMAP, false);
           ValueMAP[Call] = new z3::expr(z3::abs(*Op0));
+        } break;
+        case Intrinsic::cttz: {
+          // Not supported for now!
+          //auto Op0 = getZ3Val(Z3Ctx, Call->getArgOperand(0), ValueMAP, false);
+          //ValueMAP[Call] = new z3::expr(z3::(*Op0));
         } break;
         case Intrinsic::usub_sat: {
           auto Op0 = getZ3Val(Z3Ctx, Call->getArgOperand(0), ValueMAP, false);
