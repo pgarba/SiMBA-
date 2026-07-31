@@ -628,11 +628,11 @@ int LLVMParser::countVariables(std::string &expr, char Var) {
 // SEH __try/__except directly with such objects in the same function is
 // unsupported by MSVC/clang-cl. See proveWithZ3Guarded for why this
 // exists at all.
-static void doProveWithZ3(LLVMParser *Self, std::string &SimpExpr,
-                          std::vector<std::string> &Vars,
-                          llvm::SmallVectorImpl<BFSEntry> &AST,
-                          llvm::SmallVectorImpl<llvm::Value *> &Variables,
-                          bool &Result) {
+void doProveWithZ3(LLVMParser *Self, std::string &SimpExpr,
+                   std::vector<std::string> &Vars,
+                   llvm::SmallVectorImpl<BFSEntry> &AST,
+                   llvm::SmallVectorImpl<llvm::Value *> &Variables,
+                   bool &Result) {
   OPTSTATUS Proved;
   auto Z3ExpOpt = Self->getOptimizedZ3Expression(*Z3CtxGlobal, SimpExpr, Vars,
                                                  AST, Variables, Proved);
@@ -725,7 +725,12 @@ bool LLVMParser::verify(int ASTSize, llvm::SmallVectorImpl<BFSEntry> &AST,
   for (int i = 0; i < NUM_TEST_CASES; i++) {
     for (int j = 0; j < VNumber; j++) {
       auto v = SP64.next();
-      par.push_back(APInt(BitWidth, v, false, true));
+      // Truncate explicitly rather than relying on APInt's implicitTrunc
+      // constructor argument - that overload doesn't exist in every LLVM
+      // version this needs to build against (e.g. LLVM 18).
+      uint64_t Truncated =
+          (BitWidth >= 64) ? v : (v & ((uint64_t(1) << BitWidth) - 1));
+      par.push_back(APInt(BitWidth, Truncated, false));
     }
 
     // Eval AST
@@ -2181,6 +2186,15 @@ bool LLVMParser::doesDominateInst(DominatorTree *DT, const Instruction *InstA,
   return DA->getLevel() < DB->getLevel();
 }
 
+// z3::expr::bit2bool() isn't provided by every z3++.h shipped by distros
+// (e.g. Ubuntu's libz3-dev) - call the underlying Z3 C API directly, since
+// that's stable across Z3 versions/vendors.
+static z3::expr bit2bool(const z3::expr &Bv, unsigned Idx) {
+  Z3_ast R = Z3_mk_bit2bool(Bv.ctx(), Idx, Bv);
+  Bv.ctx().check_error();
+  return z3::expr(Bv.ctx(), R);
+}
+
 z3::expr LLVMParser::getZ3ExpressionFromAST(
     z3::context &Z3Ctx, llvm::SmallVectorImpl<BFSEntry> &AST,
     llvm::SmallVectorImpl<llvm::Value *> &Variables,
@@ -2343,17 +2357,17 @@ z3::expr LLVMParser::getZ3ExpressionFromAST(
 
       // Cast to bool if needed
       if (Cond->get_sort().is_bool() == false) {
-        Cond = new z3::expr(Cond->bit2bool(0));
+        Cond = new z3::expr(bit2bool(*Cond, 0));
       }
 
       // Cast bool to bv if needed
       if (VTrueBitWidth == 1 && VTrue->get_sort().is_bool() == false) {
-        VTrue = new z3::expr(VTrue->bit2bool(0));
+        VTrue = new z3::expr(bit2bool(*VTrue, 0));
       }
 
       // Check is cast to bool is needed
       if (VFalseBitWidth == 1 && VFalse->get_sort().is_bool() == false) {
-        VFalse = new z3::expr(VFalse->bit2bool(0));
+        VFalse = new z3::expr(bit2bool(*VFalse, 0));
       }
 
       auto Res = z3::ite(*Cond, *VTrue, *VFalse);
