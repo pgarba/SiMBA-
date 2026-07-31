@@ -3,15 +3,26 @@ cmake_minimum_required(VERSION 3.5.0 FATAL_ERROR)
 project(SiMBA++)
 set(CMAKE_CXX_STANDARD 17)
 if(${CMAKE_SYSTEM_NAME} MATCHES "Windows")
-    set(BuildDir "c:/libs")
-    set(LLVM_DIR "${BuildDir}/lib/cmake/llvm/")
-    set(CMAKE_PREFIX_PATH "${BuildDir}/")
-    set(Z3_INCLUDE_DIRS "${BuildDir}/include/")
-    set(Z3_LIBRARIES "${BuildDir}/lib/libz3.lib")
+    # Default location of a prebuilt LLVM+Z3 tree on Windows. Override with
+    # -DBuildDir=... (or set LLVM_DIR/Z3_INCLUDE_DIRS/Z3_LIBRARIES directly)
+    # if LLVM/Z3 are installed somewhere else, instead of editing this file.
+    set(BuildDir "c:/libs" CACHE PATH "Root directory of a prebuilt Windows LLVM/Z3 tree")
+    if(NOT DEFINED LLVM_DIR)
+        set(LLVM_DIR "${BuildDir}/lib/cmake/llvm/" CACHE PATH "Directory containing LLVMConfig.cmake")
+    endif()
+    list(APPEND CMAKE_PREFIX_PATH "${BuildDir}/")
+    if(NOT DEFINED Z3_INCLUDE_DIRS)
+        set(Z3_INCLUDE_DIRS "${BuildDir}/include/")
+    endif()
+    if(NOT DEFINED Z3_LIBRARIES)
+        set(Z3_LIBRARIES "${BuildDir}/lib/libz3.lib")
+    endif()
 endif()
 
 if(${CMAKE_SYSTEM_NAME} MATCHES "Linux")
-    set(Z3_INCLUDE_DIRS “/usr/include”)
+    if(NOT DEFINED Z3_INCLUDE_DIRS)
+        set(Z3_INCLUDE_DIRS "/usr/include")
+    endif()
 endif()
 
 #https://github.com/JonathanSalwan/Triton/blob/master/CMakeLists.txt#L177
@@ -86,7 +97,17 @@ set(LLVM_LIBS ${LLVM_LIBS} ${LDF})
 
 # z3
 message(STATUS "Compiling with Z3 SMT solver")
-find_package(Z3 REQUIRED)
+if(WIN32)
+    # CONFIG (not the default Module-then-Config search order) is required here:
+    # LLVM's own cmake package ships a Module-mode FindZ3.cmake (in
+    # <llvm>/lib/cmake/llvm/FindZ3.cmake, added to CMAKE_MODULE_PATH by
+    # find_package(LLVM CONFIG) above) that does its own find_path/find_library
+    # search and silently wins over the Z3_DIR-hinted Config package below it,
+    # since plain find_package() without CONFIG tries Module mode first.
+    find_package(Z3 REQUIRED CONFIG)
+else()
+    find_package(Z3 REQUIRED)
+endif()
 message(STATUS "Z3 version: ${Z3_VERSION}")
 if(TARGET z3::libz3)
     link_libraries(z3::libz3)
