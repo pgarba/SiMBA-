@@ -2186,13 +2186,13 @@ bool LLVMParser::doesDominateInst(DominatorTree *DT, const Instruction *InstA,
   return DA->getLevel() < DB->getLevel();
 }
 
-// z3::expr::bit2bool() isn't provided by every z3++.h shipped by distros
-// (e.g. Ubuntu's libz3-dev) - call the underlying Z3 C API directly, since
-// that's stable across Z3 versions/vendors.
+// Neither z3::expr::bit2bool() nor the C API it wraps (Z3_mk_bit2bool) is
+// available on every Z3 build this needs to compile against (both are
+// missing under Ubuntu's libz3-dev) - build the same "is this bit set"
+// Bool expression from extract() + equality instead, which every Z3
+// version's API exposes.
 static z3::expr bit2bool(const z3::expr &Bv, unsigned Idx) {
-  Z3_ast R = Z3_mk_bit2bool(Bv.ctx(), Idx, Bv);
-  Bv.ctx().check_error();
-  return z3::expr(Bv.ctx(), R);
+  return Bv.extract(Idx, Idx) == Bv.ctx().bv_val(1, 1);
 }
 
 z3::expr LLVMParser::getZ3ExpressionFromAST(
