@@ -106,7 +106,7 @@ if(WIN32)
     # since plain find_package() without CONFIG tries Module mode first.
     find_package(Z3 REQUIRED CONFIG)
 else()
-    find_package(Z3 REQUIRED)
+    find_package(Z3 REQUIRED CONFIG)
 endif()
 message(STATUS "Z3 version: ${Z3_VERSION}")
 if(TARGET z3::libz3)
