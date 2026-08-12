@@ -1,5 +1,7 @@
 #include "LLVMParser.h"
 
+#include <functional>
+
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/IR/Function.h"
@@ -2176,14 +2178,34 @@ llvm::Constant *LLVMParser::getConstantInt(llvm::Type *Ty, APInt Value) {
 
 bool LLVMParser::doesDominateInst(DominatorTree *DT, const Instruction *InstA,
                                   const Instruction *InstB) {
+  if (InstA == InstB) return false;
+
+  const BasicBlock *BA = InstA->getParent();
+  const BasicBlock *BB = InstB->getParent();
+
   // Use ordered basic block in case the 2 instructions are in the same
   // block.
-  if (InstA->getParent() == InstB->getParent())
-    return InstA->comesBefore(InstB);
+  if (BA == BB) return InstA->comesBefore(InstB);
 
-  DomTreeNode *DA = DT->getNode(InstA->getParent());
-  DomTreeNode *DB = DT->getNode(InstB->getParent());
-  return DA->getLevel() < DB->getLevel();
+  DomTreeNode *DA = DT->getNode(BA);
+  DomTreeNode *DB = DT->getNode(BB);
+  if (DA->getLevel() != DB->getLevel()) return DA->getLevel() < DB->getLevel();
+
+  // Same dominator-tree level but different blocks. Neither instruction can
+  // be an operand of the other (that would require one block to dominate the
+  // other, which forces different levels), so any consistent order will do -
+  // but it has to *be* an order. Reporting these as equivalent is what makes
+  // this comparator not a strict weak ordering: for X and Y in one block and
+  // Z in a sibling block at the same level, X and Y each compare equivalent
+  // to Z while comparing strictly against each other, which breaks the
+  // transitivity std::sort relies on. std::sort is then free to emit any
+  // permutation, including one that places an instruction ahead of an
+  // operand it needs - and evaluateAST walks the sorted AST assuming the
+  // opposite, so getVal hits a value that is not a constant, not a
+  // collected variable and not yet on the ValueStack, and aborts with
+  // "V not found!". Tie-break on the block address (via std::less, which is
+  // well defined for unrelated pointers) to make this a total order.
+  return std::less<const BasicBlock *>{}(BA, BB);
 }
 
 // Neither z3::expr::bit2bool() nor the C API it wraps (Z3_mk_bit2bool) is
