@@ -367,4 +367,4 @@ user's repro) runs clean; `--mba … --simplifier general` still correct.
    (original = ground truth in all 6); the port's results are not. All 6 expressions
    contain `<<` (desugared to `x * 2**n`) and 3-4 variables. The C++ port is also slower
    on this file (17/100 hit the 25 s deadline; 0.8x speedup vs Python). Reproduce with
-   `python MBA\bench_compare.py 100 8`; per-case counterexamples: `MBA/_dbg_qsynth.py`.
+   `python MBA\bench_compare.py 100 8`; per-case counterexamples: `MBA/_dbg_qsynth.py`. **Detailed fix plan for a fresh session: `MBA/QSYNTH_EA_FIX_PLAN.md`** (stage bisect, ranked hypotheses, step-by-step, acceptance criteria, env notes).
