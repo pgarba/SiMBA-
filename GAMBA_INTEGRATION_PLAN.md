@@ -358,3 +358,13 @@ user's repro) runs clean; `--mba … --simplifier general` still correct.
    `.github/workflows/cmake.yml` (`mba_differential` job). Measured: 100% / 100% / 97.5% at 8-bit.
 5. **[DONE] Cleanup.** Deleted temp `MBA/bisect_general.py`, `MBA/investigate_general.py`, all
    `MBA_TRACE` debug traces, and the temp batch/output files.
+
+6. **[OPEN] Correctness bug on 6 `qsynth_ea` expressions (found by the benchmark).**
+   The benchmark (`MBA/BENCHMARK_PLAN.md`, 8-bit, first 100 per file) fast-checks every
+   result against the dataset ground truth: 100/100 valid on 6 of 7 datasets, but 6
+   `qsynth_ea` results are refuted (indices 3, 52, 88, 91, 93, 98; e.g. index 3, a
+   non-constant expression, is returned as the constant `-1`). The dataset is consistent
+   (original = ground truth in all 6); the port's results are not. All 6 expressions
+   contain `<<` (desugared to `x * 2**n`) and 3-4 variables. The C++ port is also slower
+   on this file (17/100 hit the 25 s deadline; 0.8x speedup vs Python). Reproduce with
+   `python MBA\bench_compare.py 100 8`; per-case counterexamples: `MBA/_dbg_qsynth.py`.

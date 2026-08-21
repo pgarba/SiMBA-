@@ -66,6 +66,39 @@ The standalone `mba_cli` exposes the same checks directly:
 `mba_cli prove <bitCount> <orig> <simp>` (Z3; the standalone build links no
 Z3, so `prove` is a no-op there — use `SiMBA++.exe --prove` for real proofs).
 
+# GAMBA benchmark (Python oracle vs. C++ port)
+
+For each test file of the vendored GAMBA datasets (first 100 expressions,
+8-bit), both implementations simplify all expressions (fresh process per
+expression) and every result is fast-checked against the dataset's
+`groundtruth` column. Methodology: `MBA/BENCHMARK_PLAN.md`; reproduce with
+`python MBA\bench_compare.py 100 8` (raw numbers: `MBA/bench_results.csv`).
+
+| test file | C++ port (s) | C++ valid | Python GAMBA (s) | Python valid | speedup |
+|---|---:|---:|---:|---:|---:|
+| mba_obf_nonlinear | 2.1 | 100/100 | 86.4 | 100/100 | 40.7x |
+| mba_flatten | 2.1 | 100/100 | 85.5 | 100/100 | 41.3x |
+| syntia | 21.1 | 97/100 | 83.6 | 100/100 | 4.0x |
+| mba_obf_linear | 2.1 | 100/100 | 85.6 | 100/100 | 40.8x |
+| qsynth_ea | 110.8 | 77/100 | 92.0 | 100/100 | 0.8x |
+| neureduce | 2.1 | 100/100 | 85.9 | 100/100 | 41.0x |
+| loki_tiny | 2.0 | 100/100 | 85.3 | 100/100 | 41.8x |
+
+"valid" = solved and fast-check equivalent to the ground truth (the ground
+truth is a correct simplification of the original, so the two checks agree).
+Python times include ~0.85 s of per-expression interpreter start-up (numpy
+import); the C++ binary start-up is ~ms.
+
+- `syntia`: the 3 unsolved C++ expressions are the known 97.5% solve-rate
+  (they hit the 25 s deadline).
+- `qsynth_ea`: the port is slower here (17/100 hit the 25 s deadline, 0.8x
+  speedup) and **6 of its results are refuted by the fast-check** (77/100
+  valid) — a correctness bug on those inputs: the dataset is consistent
+  (original = ground truth in all 6), but the port's result is not
+  (e.g. index 3, a non-constant expression, is returned as the constant
+  `-1`). Open item; see `GAMBA_INTEGRATION_PLAN.md` item 6 and
+  `MBA/_dbg_qsynth.py` for the per-case counterexamples.
+
 # General Options
 
 ```
