@@ -138,10 +138,13 @@ class LinearSimplifier {
   std::pair<std::vector<int>, bool> determineIntersections(
       const std::set<std::string> &variables,
       const std::vector<std::set<std::string>> &partitionV) const;
+  // NOTE: `lrem` is passed by reference (mirroring Python's list-by-reference
+  // semantics): terms that cannot be partitioned are appended to it, and the
+  // caller must use the updated list when composing the result.
   std::vector<std::vector<int>> partition(
       const std::vector<std::set<std::string>> &v, const std::vector<int> &l1,
       const std::vector<int> &l2, const std::vector<int> &l3,
-      std::vector<int> lrem);
+      std::vector<int> &lrem);
   std::string composeTerms(const std::vector<std::string> &l,
                            const std::vector<int> &indices, bool leadingSign) const;
   bool isBitwiseWithBinop(const std::string &expr) const;

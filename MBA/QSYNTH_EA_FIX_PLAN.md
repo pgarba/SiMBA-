@@ -3,6 +3,21 @@
 Self-contained plan for a fresh session. All paths relative to `C:\github\SiMBA-`
 (branch `feat/gamba-native-verification`, pushed to origin).
 
+## STATUS: FIXED
+
+Root cause: `LinearSimplifier::partition` took its `lrem` argument **by value**, while
+the Python oracle's `__partition` mutates the list **in place**. Terms the partitioner
+could not place into a disjoint partition were appended to a *copy* the caller never
+saw, so `simplifyPartsAndCompose` composed only the original `lrem` and silently dropped
+the rest — a confidently-wrong, "simpler" result.
+
+Fix: `partition` now takes `lrem` by non-const reference (`std::vector<int> &lrem`),
+mirroring the Python list-by-reference semantics (single call site: `trySplit`).
+
+Verified: all 6 cases now verify equivalent; benchmark 83/100 solved, 83/100 valid
+(was 77/100 valid), solve rate unchanged. Regression guard `MBA/diff_qsynth_ea.py`
+wired into `MBA/run_all_tests.py`. All temporary instrumentation removed.
+
 ## 1. Symptoms (established facts)
 
 - The benchmark (`MBA/BENCHMARK_PLAN.md`, 8-bit, first 100 lines of

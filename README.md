@@ -80,7 +80,7 @@ expression) and every result is fast-checked against the dataset's
 | mba_flatten | 2.1 | 100/100 | 85.5 | 100/100 | 41.3x |
 | syntia | 21.1 | 97/100 | 83.6 | 100/100 | 4.0x |
 | mba_obf_linear | 2.1 | 100/100 | 85.6 | 100/100 | 40.8x |
-| qsynth_ea | 110.8 | 77/100 | 92.0 | 100/100 | 0.8x |
+| qsynth_ea | 110.8 | 83/100 | 92.0 | 100/100 | 0.8x |
 | neureduce | 2.1 | 100/100 | 85.9 | 100/100 | 41.0x |
 | loki_tiny | 2.0 | 100/100 | 85.3 | 100/100 | 41.8x |
 
@@ -92,12 +92,17 @@ import); the C++ binary start-up is ~ms.
 - `syntia`: the 3 unsolved C++ expressions are the known 97.5% solve-rate
   (they hit the 25 s deadline).
 - `qsynth_ea`: the port is slower here (17/100 hit the 25 s deadline, 0.8x
-  speedup) and **6 of its results are refuted by the fast-check** (77/100
-  valid) — a correctness bug on those inputs: the dataset is consistent
-  (original = ground truth in all 6), but the port's result is not
-  (e.g. index 3, a non-constant expression, is returned as the constant
-  `-1`). Open item; see `GAMBA_INTEGRATION_PLAN.md` item 6 and
-  `MBA/_dbg_qsynth.py` for the per-case counterexamples.
+  speedup). All 83 solved results are fast-check equivalent to the ground
+  truth (83/100 valid). A former correctness bug on 6 of these inputs (the
+  dataset is consistent — original = ground truth — but the port's result was
+  not; e.g. index 3, a non-constant expression, was returned as the constant
+  `-1`) is now fixed: the linear simplifier's term-partitioning helper took
+  its remainder list **by value**, so terms it could not place into a disjoint
+  partition were appended to a copy that the caller never saw and were
+  silently dropped from the composed result. It now takes the list by
+  reference, mirroring the Python oracle's list-by-reference semantics.
+  Regression guard: `MBA/diff_qsynth_ea.py` (ground-truth verification over
+  the whole dataset).
 
 # General Options
 

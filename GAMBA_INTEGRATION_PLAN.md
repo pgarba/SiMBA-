@@ -359,7 +359,7 @@ user's repro) runs clean; `--mba … --simplifier general` still correct.
 5. **[DONE] Cleanup.** Deleted temp `MBA/bisect_general.py`, `MBA/investigate_general.py`, all
    `MBA_TRACE` debug traces, and the temp batch/output files.
 
-6. **[OPEN] Correctness bug on 6 `qsynth_ea` expressions (found by the benchmark).**
+6. **[FIXED] Correctness bug on 6 `qsynth_ea` expressions (found by the benchmark).**
    The benchmark (`MBA/BENCHMARK_PLAN.md`, 8-bit, first 100 per file) fast-checks every
    result against the dataset ground truth: 100/100 valid on 6 of 7 datasets, but 6
    `qsynth_ea` results are refuted (indices 3, 52, 88, 91, 93, 98; e.g. index 3, a
@@ -367,4 +367,22 @@ user's repro) runs clean; `--mba … --simplifier general` still correct.
    (original = ground truth in all 6); the port's results are not. All 6 expressions
    contain `<<` (desugared to `x * 2**n`) and 3-4 variables. The C++ port is also slower
    on this file (17/100 hit the 25 s deadline; 0.8x speedup vs Python). Reproduce with
-   `python MBA\bench_compare.py 100 8`; per-case counterexamples: `MBA/_dbg_qsynth.py`. **Detailed fix plan for a fresh session: `MBA/QSYNTH_EA_FIX_PLAN.md`** (stage bisect, ranked hypotheses, step-by-step, acceptance criteria, env notes).
+   `python MBA\bench_compare.py 100 8`; per-case counterexamples: `MBA/_dbg_qsynth.py`. **Detailed fix plan: `MBA/QSYNTH_EA_FIX_PLAN.md`** (stage bisect, ranked hypotheses, step-by-step, acceptance criteria, env notes).
+
+    **Root cause.** The failing expressions reduce to bitwise-linear sub-expressions (e.g.
+    `a^b|c^d`) that the general path routes to the **linear** simplifier. In
+    `LinearSimplifier::trySplit`, the term-partitioning helper `partition(v, l1, l2, l3,
+    lrem)` took `lrem` **by value**, whereas the Python oracle's `__partition` mutates the
+    list **in place** (`lrem.append(i)` for every term it cannot place into a disjoint
+    partition). When the remaining variables intersected all terms (as with `a^b|c^d`,
+    whose generic form has `remV = {a,b,c,d}`), every non-constant term was appended to a
+    *copy* of `lrem` that the caller never saw, so `simplifyPartsAndCompose` composed only
+    the original `lrem` and **silently dropped all the other terms** — yielding a
+    confidently-wrong, "simpler" result that `checkSolutionComplexity` accepted.
+
+    **Fix.** `partition` now takes `lrem` by non-const reference (`std::vector<int> &lrem`)
+    so the appends propagate to the caller, mirroring the Python list-by-reference
+    semantics (single call site: `trySplit`). All 6 cases now verify equivalent; the
+    benchmark reports 83/100 solved, 83/100 valid (was 77/100 valid), solve rate unchanged.
+    Regression guard: `MBA/diff_qsynth_ea.py` (ground-truth verification over the whole
+    dataset, wired into `MBA/run_all_tests.py`).

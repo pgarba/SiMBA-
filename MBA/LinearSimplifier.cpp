@@ -983,7 +983,7 @@ std::pair<std::vector<int>, bool> LinearSimplifier::determineIntersections(
 std::vector<std::vector<int>> LinearSimplifier::partition(
     const std::vector<std::set<std::string>> &v, const std::vector<int> &l1,
     const std::vector<int> &l2, const std::vector<int> &l3,
-    std::vector<int> lrem) {
+    std::vector<int> &lrem) {
   std::vector<std::set<std::string>> partitionV;
   std::vector<std::vector<int>> partitionT;
   std::set<std::string> remV;

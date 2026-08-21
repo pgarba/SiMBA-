@@ -24,6 +24,7 @@ TESTS = [
     ("bitwise", "diff_bitwise.py", False),
     ("simplify_linear", "diff_simplify.py", True),
     ("general", "diff_general.py", True),
+    ("qsynth_ea_groundtruth", "diff_qsynth_ea.py", True),
 ]
 
 
