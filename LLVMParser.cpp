@@ -50,9 +50,48 @@
 #include "Modulo.h"
 #include "ShuttingYard.h"
 #include "Simplifier.h"
+#include "SimplifierRouter.h"
 #include "Z3Prover.h"
 
 // #define DEBUG_SIMPLIFICATION
+
+// GCC builtins used in the intrinsic evaluation below are not available on
+// plain MSVC; provide portable equivalents (clang-cl understands the GCC
+// spellings natively, so this is skipped under clang-cl). These run only in
+// the rare constant-evaluation paths, so portability beats intrinsic speed.
+#if defined(_MSC_VER) && !defined(__clang__)
+#include <intrin.h>
+static inline int __builtin_popcount(uint64_t x) {
+  int c = 0;
+  while (x) {
+    x &= x - 1;
+    c++;
+  }
+  return c;
+}
+static inline uint16_t __builtin_bswap16(uint16_t x) {
+  return _byteswap_ushort(x);
+}
+static inline uint32_t __builtin_bswap32(uint32_t x) {
+  return _byteswap_ulong(x);
+}
+static inline uint64_t __builtin_bswap64(uint64_t x) {
+  return _byteswap_uint64(x);
+}
+static inline long long __builtin_abs(long long x) {
+  return x < 0 ? -x : x;
+}
+static inline int __builtin_ctz(uint64_t x) {
+  if (x == 0)
+    return 0; // LLVM ctz convention: 0 for x == 0
+  int c = 0;
+  while ((x & 1) == 0) {
+    x >>= 1;
+    c++;
+  }
+  return c;
+}
+#endif
 
 using namespace llvm;
 using namespace std;
@@ -527,11 +566,66 @@ int LLVMParser::simplifyMBAModule() {
     Simplifier S(BitWidth, false, VNumber, ResultVector);
 
     std::string SimpExpr;
-    S.simplify(SimpExpr, false, false);
+
+    // Phase 9: route to the selected simplifier (--simplifier). The native
+    // selection (default) keeps the original path below untouched.
+    bool Routed = false;
+    std::vector<std::string> RoutedVNames = VNames;
+    {
+      DominatorTree DT(*F);
+      SmallVector<BFSEntry, 16> AST;
+      SmallVector<llvm::Value *, 8> RoutedVars;
+      this->getAST(&DT, Terminator, AST, RoutedVars, false);
+
+      if (!RoutedVars.empty()) {
+        // Reorder the used variables into the original declaration order so
+        // the letter mapping is deterministic ('a' = first declared used
+        // argument, ...).
+        SmallVector<llvm::Value *, 8> OrderedVars;
+        for (auto &V : Variables)
+          for (auto &RV : RoutedVars)
+            if (RV == V)
+              OrderedVars.push_back(RV);
+
+        auto Expr = this->getASTAsString(AST, OrderedVars);
+
+        std::string RoutedRepl;
+        Routed = LSiMBA::TrySelectedSimplifier(Expr, RoutedRepl, BitWidth,
+                                               this->Prove);
+        if (Routed) {
+          SimpExpr = RoutedRepl;
+
+          // The routed expression's letters refer to OrderedVars; rebuild the
+          // name mapping so the j-th declared argument gets the letter the
+          // expression uses for it. Unused arguments get letters beyond the
+          // used range so they never collide with the expression's letters.
+          RoutedVNames.assign(VNames.size(), "");
+          int UnusedIdx = 0;
+          for (size_t j = 0; j < VNames.size(); j++) {
+            char Letter = 0;
+            for (size_t i = 0; i < OrderedVars.size(); i++) {
+              if (OrderedVars[i] == Variables[j]) {
+                Letter = 'a' + i;
+                break;
+              }
+            }
+            if (Letter)
+              RoutedVNames[j] = std::string(1, Letter);
+            else
+              RoutedVNames[j] = std::string(
+                  1, 'a' + OrderedVars.size() + UnusedIdx++);
+          }
+        }
+      }
+    }
+
+    if (!Routed) {
+      S.simplify(SimpExpr, false, false);
+    }
 
     // Convert simplified expression to LLVM IR
-    auto FSimp =
-        createLLVMFunction(this->M, Variables, SimpExpr, VNames, RetTy);
+    auto FSimp = createLLVMFunction(
+        this->M, Variables, SimpExpr, RoutedVNames, RetTy);
 
     // Verify if simplification is valid
     if (this->Verify && !this->verify(F, FSimp, Modulus)) {
@@ -1300,8 +1394,27 @@ bool LLVMParser::findReplacements(llvm::DominatorTree *DT,
     F->eraseFromParent();
     */
 #endif
+    // Phase 9: route to the selected simplifier (--simplifier). The native
+    // selection (default) keeps the original path below untouched.
+    bool Routed = false;
+    {
+      auto Expr = getASTAsString(Cand.AST, Cand.Variables);
+
+      if (this->Debug) {
+        outs() << "[*] Routing expression (BitWidth: " << BitWidth
+               << "): '" << Expr << "'\n";
+      }
+
+      Routed = LSiMBA::TrySelectedSimplifier(Expr, Cand.Replacement, BitWidth,
+                                             this->Prove);
+      if (Routed && this->Debug) {
+        outs() << "[*] Selected simplifier produced: '" << Cand.Replacement
+               << "'\n";
+      }
+    }
+
     // Use external simplifier
-    if (!UseExternalSimplifier.empty()) {
+    if (!Routed && !UseExternalSimplifier.empty()) {
       std::string &Path = UseExternalSimplifier;
       auto Expr = getASTAsString(Cand.AST, Cand.Variables);
 
@@ -1326,7 +1439,7 @@ bool LLVMParser::findReplacements(llvm::DominatorTree *DT,
           outs() << "[*] Failed!\n";
         }
       }
-    } else {
+    } else if (!Routed) {
       S.simplify(Cand.Replacement, false, false);
 #ifdef DEBUG_SIMPLIFICATION
       outs() << "[*] Simplified Expression: " << Cand.Replacement << "\n";
@@ -1440,7 +1553,16 @@ bool LLVMParser::walkSubAST(llvm::DominatorTree *DT,
       bool SkipVerify = false;
       Simplifier S(BitWidth, false, C.Variables.size(), ResultVector);
 
-      if (!UseExternalSimplifier.empty()) {
+      // Phase 9: route to the selected simplifier (--simplifier). The native
+      // selection (default) keeps the original path below untouched.
+      bool Routed = false;
+      {
+        auto Expr = getASTAsString(C.AST, C.Variables);
+        Routed = LSiMBA::TrySelectedSimplifier(Expr, C.Replacement, BitWidth,
+                                               this->Prove);
+      }
+
+      if (!Routed && !UseExternalSimplifier.empty()) {
         std::string &Path = UseExternalSimplifier;
         auto Expr = getASTAsString(C.AST, C.Variables);
 
@@ -1456,7 +1578,7 @@ bool LLVMParser::walkSubAST(llvm::DominatorTree *DT,
           SkipVerify = true;
           C.isValid = false;
         }
-      } else {
+      } else if (!Routed) {
         S.simplify(C.Replacement, false, false);
       }
 

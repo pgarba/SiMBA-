@@ -2,6 +2,12 @@ cmake_minimum_required(VERSION 3.5.0 FATAL_ERROR)
 
 project(SiMBA++)
 set(CMAKE_CXX_STANDARD 17)
+
+# The CMake targets below link the Z3 backend; enable the Z3 proof path in
+# MBA/Verify.cpp (proveEquivalent) for them. The lightweight mba_cli
+# differential tool (MBA/build_general.bat) does not link Z3 and is built
+# without this define, so proveEquivalent degrades to a safe no-op there.
+add_compile_definitions(MBA_HAS_Z3)
 if(${CMAKE_SYSTEM_NAME} MATCHES "Windows")
     # Default location of a prebuilt LLVM+Z3 tree on Windows. Override with
     # -DBuildDir=... (or set LLVM_DIR/Z3_INCLUDE_DIRS/Z3_LIBRARIES directly)
@@ -51,7 +57,9 @@ execute_process(COMMAND ${LLVM_TOOLS_BINARY_DIR}/llvm-config --system-libs OUTPU
 execute_process(COMMAND ${LLVM_TOOLS_BINARY_DIR}/llvm-config --ldflags OUTPUT_VARIABLE LDF)
 
 execute_process(COMMAND ${LLVM_TOOLS_BINARY_DIR}/llvm-config --cxxflags OUTPUT_VARIABLE CMAKE_CXX_FLAGS)
-string(STRIP ${CMAKE_CXX_FLAGS} CMAKE_CXX_FLAGS)
+if(CMAKE_CXX_FLAGS)
+    string(STRIP ${CMAKE_CXX_FLAGS} CMAKE_CXX_FLAGS)
+endif()
 
 # llvm-config's own --cxxflags disables C++ exceptions (LLVM's own build
 # convention, e.g. /EHs-c- on MSVC/clang-cl) - fine for LLVM's own code,
@@ -88,9 +96,15 @@ else()
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fexceptions")
 endif()
 
-string(STRIP ${LLVM_LIBS} LLVM_LIBS)
-string(STRIP ${SYS_LIBS} SYS_LIBS)
-string(STRIP ${LDF} LDF)
+if(LLVM_LIBS)
+    string(STRIP ${LLVM_LIBS} LLVM_LIBS)
+endif()
+if(SYS_LIBS)
+    string(STRIP ${SYS_LIBS} SYS_LIBS)
+endif()
+if(LDF)
+    string(STRIP ${LDF} LDF)
+endif()
 
 set(LLVM_LIBS ${LLVM_LIBS} ${SYS_LIBS})
 set(LLVM_LIBS ${LLVM_LIBS} ${LDF})
@@ -122,11 +136,19 @@ endif()
 
 message(STATUS "Z3 include directory: " ${Z3_CXX_INCLUDE_DIRS})
 message(STATUS "Z3 library: " ${Z3_LIBRARIES})
-include_directories(${Z3_CXX_INCLUDE_DIRS} "include")
+include_directories(${Z3_CXX_INCLUDE_DIRS} "include" "${CMAKE_CURRENT_SOURCE_DIR}")
 
 # Disable some LLVM warnings for Visual Studio
 if(WIN32)
     add_definitions("/wd4624" "/wd4146" "/wd4244" "/wd4267")
+
+    # The prebuilt tree at ${BuildDir} keeps its .lib files in ${BuildDir}/lib.
+    # Make sure the linker can find the plain-named LLVM libraries used below
+    # (the llvm-config --libs passthrough is empty when the tree ships without
+    # llvm-config.exe, e.g. the c:/libs prebuild).
+    if(EXISTS "${BuildDir}/lib")
+        set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} /LIBPATH:${BuildDir}/lib")
+    endif()
 endif()
 
 include_directories(${LLVM_INCLUDE_DIRS} "include")
@@ -144,13 +166,26 @@ if(CMAKE_BUILD_TYPE STREQUAL "Release")
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -O3 -pipe -fomit-frame-pointer -march=native")
 endif()
 
-add_executable(SiMBA++ "CSiMBA.cpp" "CSiMBA.h" "LLVMParser.cpp" "LLVMParser.h" "Simplifier.h" "MBAChecker.cpp" "MBAChecker.h" "Simplifier.cpp" "ShuttingYard.cpp" "Modulo.cpp" "Modulo.h" "Z3Prover.cpp" "Z3Prover.h")
+# Phase 9: GAMBA native C++ port sources (namespace LSiMBA::MBA). They use
+# llvm::APInt (LLVM headers from ${LLVM_INCLUDE_DIRS}) and link LLVMSupport.
+set(MBA_SOURCES
+    "MBA/Node.cpp" "MBA/Parser.cpp" "MBA/Batch.cpp"
+    "MBA/RefineA.cpp" "MBA/RefineB.cpp" "MBA/RefineC.cpp" "MBA/RefineD.cpp"
+    "MBA/Expand.cpp" "MBA/Substitute.cpp" "MBA/Bitwise.cpp"
+    "MBA/Implicant.cpp" "MBA/Dnf.cpp" "MBA/BitwiseFactory.cpp"
+    "MBA/LinearSimplifier.cpp" "MBA/GeneralSimplifier.cpp" "MBA/Verify.cpp")
+
+add_executable(SiMBA++ "CSiMBA.cpp" "CSiMBA.h" "LLVMParser.cpp" "LLVMParser.h" "Simplifier.h" "MBAChecker.cpp" "MBAChecker.h" "Simplifier.cpp" "ShuttingYard.cpp" "Modulo.cpp" "Modulo.h" "Z3Prover.cpp" "Z3Prover.h" "SimplifierRouter.cpp" "SimplifierRouter.h" ${MBA_SOURCES})
 
 #set_target_properties(SiMBA++ PROPERTIES
 #    COMPILE_FLAGS " -fno-rtti"
 #)
 
-target_link_libraries(SiMBA++
+# LLVM libraries needed by the SiMBA++ sources. The extra set beyond the
+# original list (BitWriter/BitstreamReader/MC/ProfileData/TargetParser/Linker)
+# is required by the c:/libs LLVM 19.1 prebuild, where several symbols
+# (e.g. TargetRegistry::lookupTarget, IRMover) moved between components.
+set(SIMBA_LLVM_LIBS
         LLVMipo
         LLVMScalarOpts
         LLVMInstCombine
@@ -160,11 +195,33 @@ target_link_libraries(SiMBA++
         LLVMOption
         LLVMObject
         LLVMBitReader
+        LLVMBitWriter
+        LLVMBitstreamReader
+        LLVMMC
+        LLVMProfileData
+        LLVMTargetParser
+        LLVMLinker
         LLVMCore
         LLVMSupport
         LLVMPasses
+        # Extra components required by the c:/libs LLVM 19.1 prebuild (the
+        # dwarf::*/demangle/remarks/coro symbols moved out of the core libs).
+        LLVMDebugInfoDWARF
+        LLVMDebugInfoCodeView
+        LLVMDebugInfoPDB
+        LLVMCoroutines
+        LLVMRemarks
+        LLVMDemangle
+        LLVMTextAPI
         ${Z3_LIBRARIES}
 )
+
+target_link_libraries(SiMBA++ ${SIMBA_LLVM_LIBS})
+
+if(WIN32)
+    # LLVMSupport's ErrorHandling pulls in Windows ntdll symbols (Rtl*).
+    target_link_libraries(SiMBA++ ntdll)
+endif()
 
 # SiMBA++ static
 add_library(LSiMBA++ STATIC  "Z3Prover.cpp" "Z3Prover.h" "LLVMParser.cpp" "LLVMParser.h" "Simplifier.h" "MBAChecker.cpp" "MBAChecker.h" "Simplifier.cpp" "ShuttingYard.cpp" "Modulo.cpp" "Modulo.h")
@@ -196,7 +253,7 @@ add_test(NAME MBAs_Linear_64bit_unsigned_llvm
         WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/tests)
 
 # SiMBAPass
-add_library(SiMBAPass SHARED Z3Prover.h Z3Prover.cpp Simplifier.h Simplifier.cpp SiMBAPass.cpp SiMBAPass.h LLVMParser.cpp LLVMParser.h Simplifier.h Simplifier.cpp ShuttingYard.cpp MBAChecker.cpp MBAChecker.h Modulo.cpp Modulo.h)
+add_library(SiMBAPass SHARED Z3Prover.h Z3Prover.cpp Simplifier.h Simplifier.cpp SiMBAPass.cpp SiMBAPass.h LLVMParser.cpp LLVMParser.h Simplifier.h Simplifier.cpp ShuttingYard.cpp MBAChecker.cpp MBAChecker.h Modulo.cpp Modulo.h SimplifierRouter.cpp SimplifierRouter.h ${MBA_SOURCES})
 
 # No rtti
 set_target_properties(SiMBAPass PROPERTIES
@@ -206,21 +263,7 @@ set_target_properties(SiMBAPass PROPERTIES
 if(APPLE)
     set(PASS_LDFLAGS "-Wl,-undefined,dynamic_lookup -Wl,-no_pie")
 elseif(WIN32)
-    target_link_libraries(SiMBAPass
-            LLVMipo
-            LLVMScalarOpts
-            LLVMInstCombine
-            LLVMTransformUtils
-            LLVMAnalysis
-            LLVMTarget
-            LLVMOption
-            LLVMObject
-            LLVMBitReader
-            LLVMCore
-            LLVMSupport
-            LLVMPasses
-            ${Z3_LIBRARIES}
-    )
+    target_link_libraries(SiMBAPass ${SIMBA_LLVM_LIBS})
 endif()
 
 target_link_libraries(SiMBAPass ${PASS_LDFLAGS})
