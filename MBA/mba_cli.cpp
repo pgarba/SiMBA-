@@ -9,6 +9,7 @@
 // On parse failure, prints "ERROR: <message>".
 #include <cstdio>
 #include <cstdlib>
+#include <fstream>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -101,6 +102,30 @@ int main(int argc, char **argv) {
     else
       printf("%s\n", ok ? "PROVED" : "NOT PROVED");
     return ok ? 0 : 1;
+  }
+
+  if (mode == "generalbatch") {
+    // mba_cli generalbatch <bitCount> <file>
+    // Reads expressions from <file> (one per line; blank and '#' lines
+    // skipped) and prints one simplified result per line (empty line on
+    // failure). All lines are processed in a single process, avoiding the
+    // per-expression process start-up of the single-expression mode.
+    std::ifstream in(expr);
+    if (!in) {
+      fprintf(stderr, "cannot open %s\n", expr.c_str());
+      return 1;
+    }
+    std::string line;
+    while (std::getline(in, line)) {
+      while (!line.empty() && (line.back() == '\r' || line.back() == ' ' ||
+                               line.back() == '\t'))
+        line.pop_back();
+      if (line.empty() || line[0] == '#')
+        continue;
+      std::string res = simplifyMba(line, bitCount, false, false, -1);
+      printf("%s\n", res.c_str());
+    }
+    return 0;
   }
 
   auto root = parse(expr, bitCount, true, false, false);
