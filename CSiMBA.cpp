@@ -16,6 +16,7 @@
 #include "LLVMParser.h"
 #include "ShuttingYard.h"
 #include "Simplifier.h"
+#include "SimplifierRouter.h"
 
 using namespace std;
 using namespace llvm;
@@ -175,6 +176,48 @@ int main(int argc, char **argv) {
 void SimplifySingleMBA() {
   std::string SimpMBA = "";
   auto start = high_resolution_clock::now();
+
+  // Phase 9: route to the selected simplifier (--simplifier). The native
+  // selection (default) keeps the original code path below untouched.
+  auto R = LSiMBA::RouteSimplify(StrMBA, SimpMBA, BitCount, ProveZ3,
+                                 UseFastCheck, RunParallel, CheckLinear);
+
+  if (R == LSiMBA::RouteResult::SUCCESS) {
+    auto stop = high_resolution_clock::now();
+    auto duration = duration_cast<milliseconds>(stop - start);
+    printf("[+] [Simplified MBA] '%s' time: %dms\n", SimpMBA.c_str(),
+           (int)duration.count());
+    return;
+  }
+
+  if (R == LSiMBA::RouteResult::SKIPPED) {
+    auto stop = high_resolution_clock::now();
+    auto duration = duration_cast<milliseconds>(stop - start);
+    printf("[!] [Simplified MBA] Skipped. time: %dms\n", (int)duration.count());
+    return;
+  }
+
+  if (R == LSiMBA::RouteResult::FAILED) {
+    auto stop = high_resolution_clock::now();
+    auto duration = duration_cast<milliseconds>(stop - start);
+    printf(
+        "[!] [Simplified MBA] No result from the selected simplifier. time: "
+        "%dms\n",
+        (int)duration.count());
+    return;
+  }
+
+  if (R == LSiMBA::RouteResult::INVALID) {
+    auto stop = high_resolution_clock::now();
+    auto duration = duration_cast<milliseconds>(stop - start);
+    printf(
+        "[!] [Simplified MBA] Not valid replacement! (verification failed) "
+        "'%s' time: %dms\n",
+        SimpMBA.c_str(), (int)duration.count());
+    return;
+  }
+
+  // NATIVE: original path (baseline behavior unchanged)
   auto Result = LSiMBA::Simplifier::simplify_linear_mba(
       StrMBA, SimpMBA, BitCount, ProveZ3, CheckLinear);
   auto stop = high_resolution_clock::now();
@@ -323,14 +366,39 @@ void SimplifyLLVMModule() {
 
 void RunSimplifier(std::string &MBA, std::string &SimpMBA, std::string &ExpMBA,
                    int &Counter, int &Valid) {
-  // Simplify MBA
-  auto Result = LSiMBA::Simplifier::simplify_linear_mba(
-      MBA, SimpMBA, BitCount, ProveZ3, CheckLinear, UseFastCheck, RunParallel);
+  // Phase 9: route to the selected simplifier (--simplifier). The native
+  // selection (default) keeps the original path below untouched.
+  auto R = LSiMBA::RouteSimplify(MBA, SimpMBA, BitCount, ProveZ3, UseFastCheck,
+                                 RunParallel, CheckLinear);
 
-  // Simplify Groundtruth
-  if (IgnoreExpected == false && SimplifyExpected == true) {
-    LSiMBA::Simplifier::simplify_linear_mba(MBA, ExpMBA, BitCount, false, false,
-                                            false, RunParallel);
+  if (R == LSiMBA::RouteResult::SKIPPED) {
+    printf("[%d] Skipped (see gate message above)\n", Counter);
+    return;
+  }
+
+  bool Result;
+  if (R == LSiMBA::RouteResult::SUCCESS) {
+    // The selected simplifier's result passed verification (fast-check and,
+    // with --prove, the Z3 proof).
+    Result = true;
+  } else if (R == LSiMBA::RouteResult::INVALID) {
+    // A result was produced but failed verification (counterexample printed
+    // above) - report it as an invalid transformation, never as valid.
+    Result = false;
+  } else if (R == LSiMBA::RouteResult::FAILED) {
+    Result = false;
+    SimpMBA = "";
+  } else {
+    // NATIVE: original path (baseline behavior unchanged)
+    Result = LSiMBA::Simplifier::simplify_linear_mba(
+        MBA, SimpMBA, BitCount, ProveZ3, CheckLinear, UseFastCheck,
+        RunParallel);
+
+    // Simplify Groundtruth (native path only, as before)
+    if (IgnoreExpected == false && SimplifyExpected == true) {
+      LSiMBA::Simplifier::simplify_linear_mba(MBA, ExpMBA, BitCount, false,
+                                              false, false, RunParallel);
+    }
   }
 
   // Check if valid replacement

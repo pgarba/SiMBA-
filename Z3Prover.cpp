@@ -17,18 +17,21 @@ llvm::cl::opt<bool> PrintSMT(
     llvm::cl::value_desc("print-smt"), llvm::cl::init(false),
     llvm::cl::cat(SiMBAOpt));
 
-// Add timeout parameter as string
-llvm::cl::opt<std::string> timeout(
+// Timeout in seconds. Bounds the Z3 solver (passed to Z3 in milliseconds)
+// and, since Phase 9, also bounds the selected MBA simplifier (see
+// SimplifierRouter.cpp: the GeneralSimplifier deadline + Python subprocess).
+llvm::cl::opt<int> timeout(
     "timeout", llvm::cl::Optional,
-    llvm::cl::desc("Timeout for Z3 solver (Default 700)"),
-    llvm::cl::value_desc("timeout"), llvm::cl::init("700"),
+    llvm::cl::desc("Timeout in seconds for the Z3 solver / simplifiers "
+                  "(Default 30)"),
+    llvm::cl::value_desc("timeout"), llvm::cl::init(30),
     llvm::cl::cat(SiMBAOpt));
 
 // Accept unknown as unsat
 llvm::cl::opt<bool> AcceptUnknown(
     "accept-unknown", llvm::cl::Optional,
     llvm::cl::desc("Accept unknown as unsat (Needed on timeout)"),
-    llvm::cl::value_desc("accept-unknown"), llvm::cl::init(true),
+    llvm::cl::value_desc("accept-unknown"), llvm::cl::init(false),
     llvm::cl::cat(SiMBAOpt));
 
 // Global solver to speed up things.
@@ -68,7 +71,8 @@ bool prove(z3::expr conjecture) {
 
   // Create new solver if needed
   if (!Solver) {
-    Z3_global_param_set("timeout", timeout.c_str());
+    // Z3's "timeout" parameter is in milliseconds.
+    Z3_global_param_set("timeout", std::to_string(timeout * 1000).c_str());
 
     auto t = (z3::tactic(c, "simplify") & z3::tactic(c, "bit-blast") &
               z3::tactic(c, "smt"));
