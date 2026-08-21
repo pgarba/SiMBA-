@@ -3,6 +3,8 @@
 #include "GeneralSimplifier.h"
 
 #include <algorithm>
+#include <cstdlib>
+#include <cstdio>
 
 #include "Verify.h"
 
@@ -21,7 +23,20 @@ GeneralSimplifier::GeneralSimplifier(int bitCount, bool modRed, int verifBitCoun
       modulus(bitCount >= 64 ? ~0ULL : (1ULL << bitCount)),
       modRed(modRed),
       verifBitCount(verifBitCount),
-      timeoutSec(timeoutSec) {}
+      timeoutSec(timeoutSec) {
+  const char *p = std::getenv("MBASIMBA_PERF");
+  perf.enabled = (p != nullptr && p[0] == '1');
+}
+
+// A3: lazily-created zero constant node (equivalent to parse("0", ...)).
+std::shared_ptr<Node> GeneralSimplifier::getZero() {
+  if (zeroNode == nullptr) {
+    zeroNode = std::make_shared<Node>(NodeType::CONSTANT, bitCount, modRed);
+    zeroNode->constant = MBAOps::fromSigned(0);
+    zeroNode->reduceConstant();
+  }
+  return zeroNode;
+}
 
 // Returns the number of variables occurring in the given expression.
 int GeneralSimplifier::getVariableCount(const std::string &expr) {
@@ -320,9 +335,7 @@ bool GeneralSimplifier::trySimplifySumNonlinearPart(const std::shared_ptr<Node> 
   if (node->children.size() == 1) {
     node->copy(*node->children[0]);
   } else if (node->children.empty()) {
-    auto zero = parse("0", bitCount, modRed, true, true);
-    if (zero != nullptr)
-      node->copy(*zero);
+    node->copy(*getZero());
   }
 
   return true;
@@ -406,9 +419,7 @@ bool GeneralSimplifier::simplifyNonlinearSubexpressionLinearPart(
         node->copy(*node->children[0]);
     } else {
       // assert: node.type in [PRODUCT, CONJUNCTION]
-      auto zero = parse("0", bitCount, modRed, true, true);
-      if (zero != nullptr)
-        node->copy(*zero);
+      node->copy(*getZero());
     }
   } else {
     // del node.children[1:node.linearEnd]
@@ -422,14 +433,41 @@ bool GeneralSimplifier::simplifyNonlinearSubexpressionLinearPart(
 
 // Refactor the given node.
 bool GeneralSimplifier::refactor(const std::shared_ptr<Node> &node) {
-  std::string orig = node->toString();
+  if (perf.enabled)
+    perf.refactorCalls++;
+
+  // A1: skip the expensive expand+factorize rebuild when the node is
+  // byte-identical to a previous no-change refactor. expand+factorize are
+  // idempotent, so re-running them on such a node is a guaranteed no-op.
+  uintptr_t key = reinterpret_cast<uintptr_t>(node.get());
+  std::string cur = node->toString();
+  auto it = noChangeFingerprint.find(key);
+  if (it != noChangeFingerprint.end() && it->second == cur) {
+    if (perf.enabled)
+      perf.refactorSkips++;
+    return false;
+  }
+
+  std::chrono::steady_clock::time_point t0;
+  if (perf.enabled)
+    t0 = std::chrono::steady_clock::now();
 
   node->expand(true);
   node->markLinear();
   node->factorizeSums(true);
   node->markLinear();
 
-  return node->toString() != orig;
+  if (perf.enabled)
+    perf.tRefactor +=
+        std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+
+  std::string after = node->toString();
+  bool changed = after != cur;
+  if (changed)
+    noChangeFingerprint.erase(key);  // node changed; reset its fingerprint
+  else
+    noChangeFingerprint[key] = cur;  // remember the no-change fingerprint
+  return changed;
 }
 
 // Perform one step of the nonlinear subexpression simplification.
@@ -440,7 +478,13 @@ bool GeneralSimplifier::simplifyNonlinearSubexpressionStep(const std::shared_ptr
   bool changed = false;
 
   if (node->linearEnd > 0) {
+    std::chrono::steady_clock::time_point t0;
+    if (perf.enabled)
+      t0 = std::chrono::steady_clock::now();
     bool ch = simplifyNonlinearSubexpressionLinearPart(node);
+    if (perf.enabled)
+      perf.tLinear +=
+          std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
     if (ch)
       changed = true;
   }
@@ -456,8 +500,14 @@ bool GeneralSimplifier::simplifyNonlinearSubexpressionStep(const std::shared_ptr
   }
 
   if (!noSubst && node->type != NodeType::NEGATION) {
+    std::chrono::steady_clock::time_point t0;
+    if (perf.enabled)
+      t0 = std::chrono::steady_clock::now();
     if (simplifyViaSubstitution(node))
       changed = true;
+    if (perf.enabled)
+      perf.tSubst +=
+          std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
   }
 
   return changed;
@@ -486,6 +536,8 @@ bool GeneralSimplifier::simplifyNonlinearSubexpression(const std::shared_ptr<Nod
   for (int i = 0; i < maxIt; ++i) {
     if (std::chrono::steady_clock::now() > deadline)
       break;
+    if (perf.enabled)
+      perf.iters++;
 
     bool ch = simplifyNonlinearSubexpressionStep(node, parent, noRefactor, noSubst);
     if (ch)
@@ -711,26 +763,40 @@ bool GeneralSimplifier::checkVerify(const std::string &orig,
 
 // Simplify the given expression.
 std::string GeneralSimplifier::simplify(const std::string &expr, bool useZ3) {
+  noChangeFingerprint.clear();  // A1: fresh per expression
+
+  std::chrono::steady_clock::time_point tStart;
+  if (perf.enabled)
+    tStart = std::chrono::steady_clock::now();
+
   // Mirror the Python 30s timeout with a wall-clock deadline.
   deadline = std::chrono::steady_clock::now() + std::chrono::seconds(timeoutSec);
 
+  std::string result;
   auto root = parse(expr, bitCount, modRed, true, true);
-  if (root == nullptr)
-    return "";
+  if (root != nullptr) {
+    simplifySubexpression(root, nullptr);
 
-  simplifySubexpression(root, nullptr);
+    root->polish();
 
-  root->polish();
+    std::string simpl = root->toString();
 
-  std::string simpl = root->toString();
+    bool z3ok = !useZ3 || verifyUsingZ3(expr, simpl);
+    if (z3ok && checkVerify(expr, root))
+      result = simpl;
+  }
 
-  if (useZ3 && !verifyUsingZ3(expr, simpl))
-    return "";
+  if (perf.enabled) {
+    perf.tTotal +=
+        std::chrono::duration<double>(std::chrono::steady_clock::now() - tStart).count();
+    fprintf(stderr,
+            "PERF iters=%ld refactor=%ld skips=%ld tLinear=%.4f tRefactor=%.4f "
+            "tSubst=%.4f tTotal=%.4f\n",
+            perf.iters, perf.refactorCalls, perf.refactorSkips, perf.tLinear,
+            perf.tRefactor, perf.tSubst, perf.tTotal);
+  }
 
-  if (!checkVerify(expr, root))
-    return "";
-
-  return simpl;
+  return result;
 }
 
 // Simplify the given expression with the given number of bits.

@@ -7,6 +7,7 @@
 #include <memory>
 #include <set>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #include "LinearSimplifier.h"
@@ -47,6 +48,25 @@ class GeneralSimplifier {
   // Wall-clock deadline mirroring the Python 30s timeout.
   std::chrono::steady_clock::time_point deadline;
 
+  // A1: per-node fingerprint (toString) of the last refactor that found no
+  // change. refactor() skips the expensive expand+factorize rebuild when the
+  // node is byte-identical to such a fingerprint (expand+factorize are
+  // idempotent, so the rebuild would be a no-op). Keyed by node address;
+  // cleared at the start of each simplify() call.
+  std::unordered_map<uintptr_t, std::string> noChangeFingerprint;
+
+  // A3: lazily-created zero constant node, reused instead of parse("0", ...).
+  std::shared_ptr<Node> zeroNode;
+
+  // Phase-0 profiling (gated by MBASIMBA_PERF=1); prints to stderr.
+  struct PerfCounters {
+    bool enabled = false;
+    long iters = 0, refactorCalls = 0, refactorSkips = 0;
+    double tLinear = 0, tRefactor = 0, tSubst = 0, tTotal = 0;
+  };
+  PerfCounters perf;
+
+  std::shared_ptr<Node> getZero();
   std::string getVname(int i) const;
   int64_t modRedInt(int64_t n) const;
   void collectAndEnumerateVariables(const std::shared_ptr<Node> &tree);
