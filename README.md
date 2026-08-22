@@ -68,21 +68,55 @@ Z3, so `prove` is a no-op there — use `SiMBA++.exe --prove` for real proofs).
 
 # GAMBA benchmark (Python oracle vs. C++ port)
 
-For each test file of the vendored GAMBA datasets (first 100 expressions,
-8-bit), both implementations simplify all expressions (fresh process per
-expression) and every result is fast-checked against the dataset's
-`groundtruth` column. Methodology: `MBA/BENCHMARK_PLAN.md`; reproduce with
-`python MBA\bench_compare.py 100 8` (raw numbers: `MBA/bench_results.csv`).
+For each test file (first 100 expressions, 8-bit, fresh process per
+expression) the implementations simplify all expressions and every result is
+fast-checked against the dataset's `groundtruth` column. The first block is the
+seven vendored GAMBA datasets (methodology: `MBA/BENCHMARK_PLAN.md`; reproduce
+with `python MBA\bench_compare.py 100 8`, raw numbers: `MBA/bench_results.csv`);
+the second block is the `data/` test files, benchmarking the SiMBA++ native
+linear simplifier against the GAMBA port (reproduce with
+`python MBA\bench_simba_data.py 100 8`, raw numbers: `MBA/bench_simba_data.csv`).
 
-| test file | C++ before fix (s) | C++ port (s) | C++ valid | Python GAMBA (s) | Python valid | speedup |
-|---|---:|---:|---:|---:|---:|---:|
-| mba_obf_nonlinear | 2.1 | 2.0 | 100/100 | 86.4 | 100/100 | 43.2x |
-| mba_flatten | 2.1 | 1.9 | 100/100 | 85.5 | 100/100 | 45.0x |
-| syntia | 21.1 | 1.9 | 100/100 | 83.6 | 100/100 | 44.0x |
-| mba_obf_linear | 2.1 | 2.0 | 100/100 | 85.6 | 100/100 | 42.8x |
-| qsynth_ea | 110.8 | 4.0 | 100/100 | 92.0 | 100/100 | 23.0x |
-| neureduce | 2.1 | 1.9 | 100/100 | 85.9 | 100/100 | 45.2x |
-| loki_tiny | 2.0 | 1.9 | 100/100 | 85.3 | 100/100 | 44.9x |
+| test file | C++ before fix (s) | C++ port (s) | C++ valid | Python GAMBA (s) | Python valid | speedup | SiMBA++ (s) | SiMBA++ valid |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| mba_obf_nonlinear | 2.1 | 2.0 | 100/100 | 86.4 | 100/100 | 43.2x | — | — |
+| mba_flatten | 2.1 | 1.9 | 100/100 | 85.5 | 100/100 | 45.0x | — | — |
+| syntia | 21.1 | 1.9 | 100/100 | 83.6 | 100/100 | 44.0x | — | — |
+| mba_obf_linear | 2.1 | 2.0 | 100/100 | 85.6 | 100/100 | 42.8x | — | — |
+| qsynth_ea | 110.8 | 4.0 | 100/100 | 92.0 | 100/100 | 23.0x | — | — |
+| neureduce | 2.1 | 1.9 | 100/100 | 85.9 | 100/100 | 45.2x | — | — |
+| loki_tiny | 2.0 | 1.9 | 100/100 | 85.3 | 100/100 | 44.9x | — | — |
+| e1_2vars | — | 1.8 | 100/100 | — | — | — | 1.7 | 100/100 |
+| e1_3vars | — | 1.9 | 100/100 | — | — | — | 1.7 | 100/100 |
+| e1_4vars | — | 3.6 | 100/100 | — | — | — | 1.9 | 100/100 |
+| e1_5vars | — | 11.9 | 100/100 | — | — | — | 2.6 | 100/100 |
+| e1_6vars | — | 88.4 | 100/100 | — | — | — | 6.6 | 100/100 |
+| e2_2vars | — | 1.8 | 100/100 | — | — | — | 1.7 | 100/100 |
+| e2_3vars | — | 1.9 | 100/100 | — | — | — | 1.7 | 100/100 |
+| e2_4vars | — | 3.6 | 100/100 | — | — | — | 1.9 | 100/100 |
+| e3_2vars | — | 1.8 | 100/100 | — | — | — | 1.7 | 100/100 |
+| e3_3vars | — | 1.9 | 100/100 | — | — | — | 1.7 | 100/100 |
+| e3_4vars | — | 3.7 | 100/100 | — | — | — | 1.9 | 100/100 |
+| e4_2vars | — | 1.9 | 100/100 | — | — | — | 1.7 | 100/100 |
+| e4_3vars | — | 2.0 | 100/100 | — | — | — | 1.7 | 100/100 |
+| e4_4vars | — | 3.7 | 100/100 | — | — | — | 1.9 | 100/100 |
+| e5_2vars | — | 1.8 | 100/100 | — | — | — | 1.7 | 100/100 |
+| e5_3vars | — | 1.9 | 100/100 | — | — | — | 1.7 | 100/100 |
+| e5_4vars | — | 3.7 | 100/100 | — | — | — | 1.9 | 100/100 |
+| pldi_linear | — | 1.8 | 100/100 | — | — | — | 1.7 | 100/100 |
+| pldi_poly | — | 1.8 | 100/100 | — | — | — | 1.6 | 0/100 |
+| pldi_nonpoly | — | 1.9 | 100/100 | — | — | — | 1.6 | 0/100 |
+| test_data | — | 1.8 | 100/100 | — | — | — | 1.7 | 100/100 |
+| mbablast_ds1 | — | 0.9 | 53/53 | — | — | — | 0.8 | 53/53 |
+| mbablast_ds2_8 | — | 1.7 | 100/100 | — | — | — | 1.5 | 100/100 |
+
+`SiMBA++ (s)`/`SiMBA++ valid` are the native SiMBA++ **linear** simplifier
+(`--simplifier=native`); `C++ port` is the GAMBA native port. The port solves
+every `data/` file 100/100 — including the nonlinear `pldi_poly`/`pldi_nonpoly`,
+which the linear simplifier cannot solve (0/100) — so the port extends SiMBA++
+to nonlinear MBAs. On the linear files the two are comparable, and the native is
+faster on the high-variance files (e.g. `e1_6vars`: 6.6 s vs 88.4 s).
+`mbablast_ds1` has 53 expressions.
 
 `C++ port (s)` is the current (post-fix) time; `C++ before fix (s)` is the
 time before the correctness pass (see below). The pass removed the bad
