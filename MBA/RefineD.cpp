@@ -2119,6 +2119,10 @@ bool Node::checkBitwAndOpInSum() {
         continue;
       if (bitw->children.empty() || !bitw->children[0]->isConstant(-1))
         continue;
+      // The formula x - (x&y) -> x&~y only holds when the product is exactly
+      // (-1)*(conjunction); any further factor invalidates it.
+      if (bitw->children.size() != 2)
+        continue;
 
       bitw = bitw->children[1];
       if (bitw->type != NodeType::CONJUNCTION)

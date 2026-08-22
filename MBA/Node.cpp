@@ -494,7 +494,15 @@ void Node::reorderAndDetermineLinearEnd() {
     if (child->state == NodeState::BITWISE ||
         (!bitwise && child->state == NodeState::LINEAR)) {
       if (linearEnd < i) {
-        children.erase(children.begin() + i);
+        // Python uses list.remove(child), which removes the first element that
+        // IS `child` (identity; Node has no __eq__). A children vector may hold
+        // the same object twice (aliasing via copy), so erasing by index i would
+        // remove a different occurrence than Python does.
+        auto it = std::find_if(children.begin(), children.end(),
+                               [&child](const std::shared_ptr<Node> &p) {
+                                 return p.get() == child.get();
+                               });
+        children.erase(it);
         children.insert(children.begin() + linearEnd, child);
       }
       linearEnd += 1;
@@ -510,7 +518,14 @@ void Node::reorderAndDetermineLinearEndProduct() {
     auto child = children[i];
     if (child->state != NodeState::NONLINEAR && child->state != NodeState::MIXED) {
       if (linearEnd < i) {
-        children.erase(children.begin() + i);
+        // Match Python's list.remove(child) (remove by identity, first
+        // occurrence) rather than erasing by index; see the non-product
+        // variant above for why this matters under aliasing.
+        auto it = std::find_if(children.begin(), children.end(),
+                               [&child](const std::shared_ptr<Node> &p) {
+                                 return p.get() == child.get();
+                               });
+        children.erase(it);
         children.insert(children.begin() + linearEnd, child);
       }
       linearEnd += 1;

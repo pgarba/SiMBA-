@@ -381,8 +381,14 @@ void Node::flattenProduct() {
       child->children.erase(child->children.begin());
     }
 
-    for (int k = static_cast<int>(child->children.size()) - 1; k >= 0; --k)
-      children.insert(children.begin() + i + k, child->children[k]);
+    // Insert the child's factors consecutively at position i, mirroring the
+    // Python slice assignment `self.children[i:i] = child.children`. The
+    // previous per-element insert at position i + k went past the end of the
+    // vector (out-of-range iterator, undefined behavior) whenever
+    // i + k > children.size() after the child was erased, causing access
+    // violations on expressions with nested products.
+    children.insert(children.begin() + i, child->children.begin(),
+                    child->children.end());
     i += child->children.size();
   }
 
