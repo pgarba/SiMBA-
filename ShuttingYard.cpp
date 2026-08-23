@@ -143,12 +143,48 @@ void exprToTokens(const std::string &expr, veque::veque<Token> &tokens,
       const auto s = std::string(b, p);
       tokens.push_back(Token{Token::Type::Number, s});
       --p;
+    } else if (strncmp(p, "sext[", 5) == 0 || strncmp(p, "zext[", 5) == 0) {
+      // Materializable cast: op[SW:TW](operand). Emit a single unary Operator
+      // token whose str is "s<SW>:<TW>" (sext) or "z<SW>:<TW>" (zext); the
+      // following (operand) is tokenized normally.
+      char op = *p;  // 's' (sext) or 'z' (zext)
+      const char *bracket = p + 4;  // points at '['
+      const char *colon = strchr(bracket, ':');
+      const char *endBracket = strchr(bracket, ']');
+      if (colon && endBracket && colon < endBracket) {
+        std::string swStr(bracket + 1, colon);
+        std::string twStr(colon + 1, endBracket);
+        int sw = 0, tw = 0;
+        try {
+          sw = std::stoi(swStr);
+          tw = std::stoi(twStr);
+        } catch (...) {
+          sw = 0;
+          tw = 0;
+        }
+        std::string s = std::string(1, op) + std::to_string(sw) + ":" +
+                        std::to_string(tw);
+        tokens.push_back(Token{Token::Type::Operator, s, 9, false, true});
+        p = endBracket;  // loop's ++p moves past ']'
+      }
     } else {
       Token::Type t = Token::Type::Unknown;
       int precedence = -1;
       bool rightAssociative = false;
       bool unary = false;
       char c = *p;
+
+      // Multi-character shift operators '<<' and '>>' (GAMBA notation). A
+      // single '<' or '>' (not doubled) is not a valid operator.
+      if ((c == '<' || c == '>') && (p + 1)[0] == c) {
+        t = Token::Type::Operator;
+        precedence = 5;
+        const auto s = std::string(2, c);
+        tokens.push_back(Token{t, s, precedence, rightAssociative, unary});
+        ++p; // consume the second character
+        continue;
+      }
+
       switch (c) {
         default:
           llvm::outs() << "[exprToTokens]: Unkown Token '" << c << "'\n";
@@ -177,6 +213,10 @@ void exprToTokens(const std::string &expr, veque::veque<Token> &tokens,
           precedence = 8;
           break;
         case '/':
+          t = Token::Type::Operator;
+          precedence = 7;
+          break;
+        case '%':
           t = Token::Type::Operator;
           precedence = 7;
           break;
@@ -399,12 +439,19 @@ void createLLVMReplacement(llvm::Instruction *InsertionPoint,
         if (Var->getType()->isPointerTy()) {
           // Keep the pointer for now as this can only be a GEP
         } else if (Var->getType() != IntType) {
+          // Sign-extend narrow variables (isSigned=true) so the materialized IR
+          // matches the original AST, which sign-extends narrow opaque
+          // variables. A zero-extend here made the native linear form -- fitted
+          // on the {0,1} truth table, which is blind to sign-extension --
+          // value-wrong for inputs with the top bit set (e.g. an i8 byte >=
+          // 128). verify() cross-checks against the original AST, so a form
+          // that relied on zero-extension is rejected rather than emitted.
           if (IntType->isPointerTy()) {
             Var = Builder.CreateIntCast(Variables[ArgIndex],
                                         Type::getInt64Ty(IntType->getContext()),
-                                        false, "CastedVar");
+                                        true, "CastedVar");
           } else {
-            Var = Builder.CreateIntCast(Variables[ArgIndex], IntType, false,
+            Var = Builder.CreateIntCast(Variables[ArgIndex], IntType, true,
                                         "CastedVar");
           }
         }
@@ -443,7 +490,7 @@ void createLLVMReplacement(llvm::Instruction *InsertionPoint,
               // stackAP.push_back(~rhsAP);
               stackAP.push_back(Builder.CreateNot(rhsAP));
               break;
-            case '!':
+            case '!': {
               // stackAP.push_back(rhsAP);
               /*
               %4 = icmp ne i32 %3, 0, !dbg !19
@@ -455,6 +502,41 @@ void createLLVMReplacement(llvm::Instruction *InsertionPoint,
                   Cmp, llvm::ConstantInt::getTrue(Builder.getContext()));
               stackAP.push_back(Not);
               break;
+            }
+            case 's':
+            case 'z': {
+              // Materializable cast: str is "s<SW>:<TW>" (sext) or
+              // "z<SW>:<TW>" (zext). The operand (rhsAP) is the variable as
+              // cast to IntType by the Variable case (a ZExt/SEXT of the
+              // original narrow value, or the value itself). Recover the
+              // original narrow value and emit a real sext/zext to IntType.
+              const std::string &s = token.str;
+              auto colonPos = s.find(':');
+              int sw = 0, tw = 0;
+              if (colonPos != std::string::npos) {
+                try {
+                  sw = std::stoi(s.substr(1, colonPos - 1));
+                  tw = std::stoi(s.substr(colonPos + 1));
+                } catch (...) {
+                  sw = 0;
+                  tw = 0;
+                }
+              }
+              llvm::Value *src = rhsAP;
+              if (auto *CI = llvm::dyn_cast<llvm::CastInst>(rhsAP))
+                src = CI->getOperand(0);
+              bool isSext = (s[0] == 's');
+              auto *srcTy = src->getType();
+              if (srcTy->isIntegerTy() &&
+                  srcTy->getIntegerBitWidth() < IntType->getIntegerBitWidth())
+                stackAP.push_back(
+                    Builder.CreateIntCast(src, IntType, isSext, "CastedVar"));
+              else
+                stackAP.push_back(
+                    isSext ? Builder.CreateSExt(src, IntType)
+                           : Builder.CreateZExt(src, IntType));
+              break;
+            }
           }
         } else {
           // binary operators
@@ -516,8 +598,14 @@ void createLLVMReplacement(llvm::Instruction *InsertionPoint,
               }
               break;
             case '/':
-              // stackAP.push_back(lhsAP.sdiv(rhsAP));
-              stackAP.push_back(Builder.CreateSDiv(lhsAP, rhsAP));
+              // Unsigned division: the MBA ring interprets '/' mod 2^B as an
+              // unsigned udiv, so emit udiv (not sdiv).
+              stackAP.push_back(Builder.CreateUDiv(lhsAP, rhsAP));
+              break;
+            case '%':
+              // Unsigned remainder: the MBA ring interprets '%' mod 2^B as an
+              // unsigned urem, so emit urem (not srem).
+              stackAP.push_back(Builder.CreateURem(lhsAP, rhsAP));
               break;
             case '&':
               // stackAP.push_back(lhsAP & rhsAP);
@@ -683,8 +771,14 @@ llvm::Function *createLLVMFunction(
               stackAP.push_back(Builder.CreateMul(lhsAP, rhsAP));
               break;
             case '/':
-              // stackAP.push_back(lhsAP.sdiv(rhsAP));
-              stackAP.push_back(Builder.CreateSDiv(lhsAP, rhsAP));
+              // Unsigned division: the MBA ring interprets '/' mod 2^B as an
+              // unsigned udiv, so emit udiv (not sdiv).
+              stackAP.push_back(Builder.CreateUDiv(lhsAP, rhsAP));
+              break;
+            case '%':
+              // Unsigned remainder: the MBA ring interprets '%' mod 2^B as an
+              // unsigned urem, so emit urem (not srem).
+              stackAP.push_back(Builder.CreateURem(lhsAP, rhsAP));
               break;
             case '&':
               // stackAP.push_back(lhsAP & rhsAP);
@@ -764,7 +858,16 @@ APInt eval(std::string expr, llvm::SmallVectorImpl<APInt> &par, int BitWidth,
   // Replace variables with values in expression
   for (int i = 0; i < par.size(); i++) {
     std::string var = "X[" + std::to_string(i) + "]";
-    std::string val = std::to_string(par[i].getZExtValue());
+    // Sign-extend narrow variables to BitWidth so the evaluation matches the
+    // original AST (which sign-extends narrow opaque variables). A zero-extend
+    // here made the native linear form -- fitted on the {0,1} truth table, which
+    // is blind to sign-extension -- value-wrong for inputs with the top bit set
+    // (e.g. an i8 byte >= 128), so verify() rejected the correct 3-op form and
+    // the tool fell back to a longer algebraic form.
+    uint64_t v = par[i].getZExtValue();
+    if (par[i].getBitWidth() < BitWidth)
+      v = par[i].sext(BitWidth).getZExtValue();
+    std::string val = std::to_string(v);
 
     replace_all(expr, var, val);
   }
@@ -816,6 +919,36 @@ APInt eval(std::string expr, llvm::SmallVectorImpl<APInt> &par, int BitWidth,
               // printf("! operator not implemented\n");
               // exit(-1);
               break;
+            case 's':
+            case 'z': {
+              // Materializable cast: str is "s<SW>:<TW>" (sext) or
+              // "z<SW>:<TW>" (zext). Take the low SW bits of the operand and
+              // sign/zero-extend to BitWidth. This matches the original AST
+              // (which truncates the narrow opaque variable to its type width)
+              // for ALL full-width inputs.
+              const std::string &s = token.str;
+              auto colonPos = s.find(':');
+              int sw = 0, tw = 0;
+              if (colonPos != std::string::npos) {
+                try {
+                  sw = std::stoi(s.substr(1, colonPos - 1));
+                  tw = std::stoi(s.substr(colonPos + 1));
+                } catch (...) {
+                  sw = 0;
+                  tw = 0;
+                }
+              }
+              if (sw > 0 && sw < BitWidth) {
+                APInt truncated = rhsAP.trunc(sw);
+                if (s[0] == 's')
+                  stackAP.push_back(truncated.sext(BitWidth));
+                else
+                  stackAP.push_back(truncated.zext(BitWidth));
+              } else {
+                stackAP.push_back(rhsAP);
+              }
+              break;
+            }
           }
         } else {
           Operations++;
@@ -845,7 +978,14 @@ APInt eval(std::string expr, llvm::SmallVectorImpl<APInt> &par, int BitWidth,
               stackAP.push_back(lhsAP.shl(rhsAP));
               break;
             case '/':
-              stackAP.push_back(lhsAP.sdiv(rhsAP));
+              // Unsigned semantics (MBA values are mod 2^B); guard div-by-zero.
+              stackAP.push_back(
+                  rhsAP.isZero() ? APInt(BitWidth, 0) : lhsAP.udiv(rhsAP));
+              break;
+            case '%':
+              // Unsigned remainder; guard div-by-zero.
+              stackAP.push_back(
+                  rhsAP.isZero() ? APInt(BitWidth, 0) : lhsAP.urem(rhsAP));
               break;
             case '&':
               stackAP.push_back(lhsAP & rhsAP);
@@ -1005,6 +1145,10 @@ z3::expr getZ3ExprFromString(z3::context &Z3Ctx, std::string &expr,
             case '/': {
               auto DivExpr = lhsAP / rhsAP;
               stackAP.push_back(DivExpr);
+            } break;
+            case '%': {
+              auto RemExpr = z3::urem(lhsAP, rhsAP);
+              stackAP.push_back(RemExpr);
             } break;
             case '&': {
               auto AndExpr = lhsAP & rhsAP;
