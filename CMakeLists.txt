@@ -94,6 +94,11 @@ if(MSVC)
 else()
     string(REPLACE "-fno-exceptions" "" CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS}")
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fexceptions")
+    # The MBA/ native port uses `xor` (and friends) as an identifier, which
+    # MSVC accepts but clang/gcc reject (they are C++ alternative-token
+    # keywords). Disable the operator-name synonyms so the port compiles on
+    # non-MSVC toolchains. No source uses these tokens as operators.
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fno-operator-names")
 endif()
 
 if(LLVM_LIBS)

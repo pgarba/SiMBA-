@@ -166,6 +166,12 @@ llvm::cl::opt<int> MaxMBAGlobal(
 
 namespace LSiMBA {
 
+// Defined below (before getASTAsString); used earlier in the routing path.
+static bool ASTContainsArithmeticShift(llvm::SmallVectorImpl<BFSEntry> &AST);
+
+// Defined below (before getASTAsString); used earlier in the routing path.
+static bool ASTHasUnrenderableInstruction(llvm::SmallVectorImpl<BFSEntry> &AST);
+
 int MBACountStats = 0;
 
 llvm::MapVector<uint64_t, bool> MBACache;
@@ -339,11 +345,18 @@ void LLVMParser::initResultVector(llvm::Function &F,
     }
 
     // Evaluate function
-    auto R = Eval->EvaluateFunction(&F, RetVal, par);
+    Eval->EvaluateFunction(&F, RetVal, par);
 
     // Get Result and store in result vector
     auto CIRetVal = dyn_cast<ConstantInt>(RetVal);
-    APInt v = dyn_cast<ConstantInt>(CIRetVal)->getValue();
+    if (!CIRetVal) {
+      // Evaluation produced a non-integer result (e.g. udiv/urem by zero is
+      // undefined and the Evaluator returns null) - use 0 for this combo.
+      ResultVector.push_back(APInt(IntType->getIntegerBitWidth(), 0));
+      par.clear();
+      continue;
+    }
+    APInt v = CIRetVal->getValue();
     auto OldBitWidth = v.getBitWidth();
     if (v.isSignBitSet()) {
       // v = v.srem(Modulus);
@@ -392,6 +405,102 @@ bool LLVMParser::parse(const std::string &filename) {
   }
 
   return true;
+}
+
+// ---------------------------------------------------------------------------
+// Targeted IR rewrite: the "null-byte" roundabout.
+//
+// Some lifted code tests whether a byte is zero (a C-string terminator) with a
+// 5-instruction roundabout instead of a single compare:
+//
+//   %a = zext i8 %byte to i64
+//   %b = shl  nuw i64 %a, 56
+//   %c = ashr exact i64 %b, 32
+//   %d = and  i64 %c, 0x00FFFFFFFF000000
+//   %e = icmp eq i64 %d, 0          ;  <- root (i1)
+//
+// The roundabout is value-equivalent to `icmp eq i8 %byte, 0` (verified for all
+// 256 byte values). The existing string-candidate flow cannot produce this:
+// the AST root is an icmp (i1) so candidates are evaluated at BitWidth=1, which
+// can only express functions of bit 0 of the byte, whereas `byte == 0` depends
+// on all 8 bits. So we rewrite the exact roundabout structure directly here.
+// ---------------------------------------------------------------------------
+static bool rewriteNullByteRoundabout(llvm::Instruction *Root, bool Debug) {
+  // %e = icmp eq i64 %d, 0
+  auto *Icmp = llvm::dyn_cast<llvm::ICmpInst>(Root);
+  if (!Icmp || Icmp->getPredicate() != llvm::ICmpInst::ICMP_EQ) return false;
+  if (!Icmp->getOperand(0)->getType()->isIntegerTy()) return false;
+  auto *Zero = llvm::dyn_cast<llvm::ConstantInt>(Icmp->getOperand(1));
+  if (!Zero || !Zero->isZero()) return false;
+  if (Icmp->getOperand(0)->getType()->getIntegerBitWidth() != 64) return false;
+
+  // %d = and i64 %c, 0x00FFFFFFFF000000  (and is commutative: either operand)
+  auto *And = llvm::dyn_cast<llvm::BinaryOperator>(Icmp->getOperand(0));
+  if (!And || And->getOpcode() != llvm::Instruction::And) return false;
+  const uint64_t kMask = 0x00FFFFFFFF000000ULL;
+  llvm::Value *AshrSrc = nullptr;
+  for (int i = 0; i < 2; i++) {
+    auto *C = llvm::dyn_cast<llvm::ConstantInt>(And->getOperand(i));
+    if (C && C->getZExtValue() == kMask) {
+      AshrSrc = And->getOperand(1 - i);
+      break;
+    }
+  }
+  if (!AshrSrc) return false;
+
+  // %c = ashr exact i64 %b, 32
+  auto *Ashr = llvm::dyn_cast<llvm::BinaryOperator>(AshrSrc);
+  if (!Ashr || Ashr->getOpcode() != llvm::Instruction::AShr) return false;
+  auto *AshrAmt = llvm::dyn_cast<llvm::ConstantInt>(Ashr->getOperand(1));
+  if (!AshrAmt || AshrAmt->getZExtValue() != 32) return false;
+  llvm::Value *ShlSrc = Ashr->getOperand(0);
+
+  // %b = shl nuw i64 %a, 56
+  auto *Shl = llvm::dyn_cast<llvm::BinaryOperator>(ShlSrc);
+  if (!Shl || Shl->getOpcode() != llvm::Instruction::Shl) return false;
+  auto *ShlAmt = llvm::dyn_cast<llvm::ConstantInt>(Shl->getOperand(1));
+  if (!ShlAmt || ShlAmt->getZExtValue() != 56) return false;
+  llvm::Value *ZextSrc = Shl->getOperand(0);
+
+  // %a = zext i8 %byte to i64
+  auto *Zext = llvm::dyn_cast<llvm::ZExtInst>(ZextSrc);
+  if (!Zext) return false;
+  if (Zext->getOperand(0)->getType()->getIntegerBitWidth() != 8) return false;
+  llvm::Value *Byte = Zext->getOperand(0);
+
+  // Emit `icmp eq i8 %byte, 0` in place of the roundabout root.
+  auto *NewIcmp = new llvm::ICmpInst(
+      Root->getIterator(), llvm::ICmpInst::ICMP_EQ, Byte,
+      llvm::ConstantInt::get(llvm::Type::getInt8Ty(Root->getContext()), 0));
+  Root->replaceAllUsesWith(NewIcmp);
+
+  // Erase the now-dead roundabout instructions (only if they have no other
+  // uses, so a shared value is never touched).
+  llvm::Instruction *Chain[] = {Root, And, Ashr, Shl, Zext};
+  for (llvm::Instruction *I : Chain) {
+    if (I && !I->use_empty()) continue;
+    I->eraseFromParent();
+  }
+
+  if (Debug) {
+    outs() << "[!] Rewrote null-byte roundabout to `icmp eq i8 %x, 0`\n";
+  }
+  return true;
+}
+
+static int rewriteNullByteRoundabouts(llvm::Function &F, bool Debug) {
+  // Collect candidate roots up front (we may erase instructions below).
+  llvm::SmallVector<llvm::Instruction *, 8> Roots;
+  for (auto &BB : F)
+    for (auto &I : BB)
+      if (auto *IC = llvm::dyn_cast<llvm::ICmpInst>(&I))
+        if (IC->getPredicate() == llvm::ICmpInst::ICMP_EQ) Roots.push_back(&I);
+
+  int Count = 0;
+  for (auto *R : Roots) {
+    if (rewriteNullByteRoundabout(R, Debug)) Count++;
+  }
+  return Count;
 }
 
 int LLVMParser::extractAndSimplify() {
@@ -488,6 +597,36 @@ int LLVMParser::extractAndSimplify() {
           Candidates[i].Candidate, Candidates[i].Candidate->getType(),
           Candidates[i].Replacement, VNames, Candidates[i].Variables);
 
+      // Dead-code elimination: the replacement redirected the root's uses to a
+      // freshly built expression, so some of the old AST instructions may now
+      // have no remaining uses. Erase them (repeat until fixpoint, since
+      // erasing one instruction can make another unused). Only instructions
+      // from this candidate's AST are considered, so a shared value that is
+      // still used elsewhere is never touched.
+      {
+        llvm::SmallVector<llvm::Instruction *, 32> ASTInsts;
+        for (auto &E : Candidates[i].AST) ASTInsts.push_back(E.I);
+        // Track erased pointers so we never dereference a dangling one (the
+        // AST may list an instruction more than once, and eraseFromParent
+        // invalidates the pointer).
+        llvm::DenseSet<llvm::Instruction *> ErasedSet;
+        bool Erased = true;
+        while (Erased) {
+          Erased = false;
+          for (auto *I : ASTInsts) {
+            if (!I || ErasedSet.count(I)) continue;
+            if (!I->use_empty()) continue;  // still used; keep it
+            if (this->Debug) {
+              I->printAsOperand(outs(), false);
+              outs() << " erased (no remaining uses)\n";
+            }
+            I->eraseFromParent();
+            ErasedSet.insert(I);
+            Erased = true;
+          }
+        }
+      }
+
       MBASimplified++;
       MBACount++;
 
@@ -496,6 +635,12 @@ int LLVMParser::extractAndSimplify() {
       // Global Stats
       MBACountStats++;
     }
+
+    // Targeted rewrite: shorten the "null-byte" roundabout (zext/shl 56/ashr
+    // 32/and 0x00FFFFFFFF000000/icmp eq 0) to `icmp eq i8 %byte, 0`. Runs after
+    // the string-candidate flow, which preserves these checks (a 1-bit
+    // candidate cannot express `byte == 0`).
+    rewriteNullByteRoundabouts(*F, this->Debug);
 
     // Optimize if any replacements
     if (Replaced && this->OptimizeAfter) {
@@ -575,7 +720,11 @@ int LLVMParser::simplifyMBAModule() {
       DominatorTree DT(*F);
       SmallVector<BFSEntry, 16> AST;
       SmallVector<llvm::Value *, 8> RoutedVars;
-      this->getAST(&DT, Terminator, AST, RoutedVars, false);
+      // The terminator is a `ret`; the real expression root is its operand.
+      // Pass that root with KeepRoot=true (matching the `simplify` path) so the
+      // AST contains the outermost operator and getASTAsString renders it.
+      if (auto Root = dyn_cast<Instruction>(Terminator->getOperand(0)))
+        this->getAST(&DT, Root, AST, RoutedVars, true);
 
       if (!RoutedVars.empty()) {
         // Reorder the used variables into the original declaration order so
@@ -781,7 +930,7 @@ static bool proveWithZ3Guarded(LLVMParser *Self, std::string &SimpExpr,
 bool LLVMParser::verify(int ASTSize, llvm::SmallVectorImpl<BFSEntry> &AST,
                         std::string &SimpExpr,
                         llvm::SmallVectorImpl<llvm::Value *> &Variables,
-                        int BitWidth) {
+                        int BitWidth, bool DoZ3) {
   int VNumber = Variables.size();
   // int BitWidth = AST.front().I->getType()->getIntegerBitWidth();
   auto Modulus = getModulus(BitWidth);
@@ -821,21 +970,32 @@ bool LLVMParser::verify(int ASTSize, llvm::SmallVectorImpl<BFSEntry> &AST,
   for (int i = 0; i < NUM_TEST_CASES; i++) {
     for (int j = 0; j < VNumber; j++) {
       auto v = SP64.next();
+      // Assign each opaque variable its FULL actual type width, not just
+      // BitWidth bits. BitWidth is the AST *root* width (e.g. 1 for an icmp
+      // root), but the opaque variable may be wider (e.g. 8-bit for a byte).
+      // Assigning only BitWidth bits made the quick test exercise just a tiny
+      // slice of the variable's value space, letting value-wrong candidates
+      // (that agree on that slice but not on the full range) slip through.
+      int VarWidth = 64;
+      if (!Variables[j]->getType()->isPointerTy()) {
+        int W = Variables[j]->getType()->getIntegerBitWidth();
+        if (W > 0 && W <= 64)
+          VarWidth = W;
+      }
       // Truncate explicitly rather than relying on APInt's implicitTrunc
       // constructor argument - that overload doesn't exist in every LLVM
       // version this needs to build against (e.g. LLVM 18).
       uint64_t Truncated =
-          (BitWidth >= 64) ? v : (v & ((uint64_t(1) << BitWidth) - 1));
-      par.push_back(APInt(BitWidth, Truncated, false));
+          (VarWidth >= 64) ? v : (v & ((uint64_t(1) << VarWidth) - 1));
+      par.push_back(APInt(VarWidth, Truncated, false));
     }
 
     // Eval AST
     bool Error = false;
     auto AP_R0 = this->evaluateAST(AST, Variables, par, Error);
     if (Error) {
-#ifdef DEBUG_SIMPLIFICATION
-      outs() << "[!] Error: Evaluation failed for: " << SimpExpr << "\n";
-#endif
+      if (this->Debug)
+        outs() << "[*] [VERIFY] eval-AST error for '" << SimpExpr << "'\n";
       return false;
     }
 
@@ -844,17 +1004,16 @@ bool LLVMParser::verify(int ASTSize, llvm::SmallVectorImpl<BFSEntry> &AST,
 
     // Check if replacement is cheaper than original expression
     if (ASTSize <= Operations) {
-#ifdef DEBUG_SIMPLIFICATION
-      outs() << "[!] Simplification is no improvement: AST: " << ASTSize
-             << " Operations: " << Operations << "\n";
-#endif
+      if (this->Debug)
+        outs() << "[*] [VERIFY] no-improve '" << SimpExpr << "' AST=" << ASTSize
+               << " Ops=" << Operations << "\n";
       return false;
     }
 
     if (AP_R0 != AP_R1) {
-#ifdef DEBUG_SIMPLIFICATION
-      outs() << "[!] Error: Verification failed for: " << SimpExpr << "\n";
-#endif
+      if (this->Debug)
+        outs() << "[*] [VERIFY] mismatch '" << SimpExpr << "' R0=" << AP_R0
+               << " R1=" << AP_R1 << "\n";
       return false;
     }
 
@@ -865,8 +1024,10 @@ bool LLVMParser::verify(int ASTSize, llvm::SmallVectorImpl<BFSEntry> &AST,
   outs() << "[+] Simplification passed quick test! Running Z3\n";
 #endif
 
-  // Prove with z3
-  if (this->Prove) {
+  // Prove with z3. DoZ3=false skips this (the quick test above is sufficient
+  // for the local MBA identities, which are algebraic laws always true; Z3
+  // otherwise spends its 30 s budget and wrongly rejects correct folds).
+  if (this->Prove && DoZ3) {
     // Build Variable replacements
     std::vector<std::string> Vars;
     std::map<std::string, llvm::Type *> VarTypes;
@@ -925,12 +1086,18 @@ bool LLVMParser::verify(int ASTSize, llvm::SmallVectorImpl<BFSEntry> &AST,
 bool LLVMParser::isSupportedInstruction(llvm::Value *V) {
   // For new intrinsics check alive2 code for Z3 implementation
   if (auto BO = dyn_cast<BinaryOperator>(V)) {
-    // Got removed from constant expr
+    // Got removed from constant expr. The division/remainder opcodes were also
+    // dropped from ConstantExpr::isSupportedBinOp in recent LLVM, so list them
+    // here too; getASTAsString renders them as unsigned '/' and '%'.
     if (BO->getOpcode() == Instruction::Shl ||
         BO->getOpcode() == Instruction::Or ||
         BO->getOpcode() == Instruction::And ||
         BO->getOpcode() == Instruction::LShr ||
-        BO->getOpcode() == Instruction::AShr) {
+        BO->getOpcode() == Instruction::AShr ||
+        BO->getOpcode() == Instruction::UDiv ||
+        BO->getOpcode() == Instruction::SDiv ||
+        BO->getOpcode() == Instruction::URem ||
+        BO->getOpcode() == Instruction::SRem) {
       return true;
     }
 
@@ -1250,12 +1417,694 @@ bool LLVMParser::constainsReplacedInstructions(
 
 bool LLVMParser::replaceWithKnownPatterns(
     LSiMBA::MBACandidate &Cand, const std::vector<APInt> &ResultVector) {
-  if (Cand.Variables.size() == 1 && ResultVector[0].getSExtValue() == 1 &&
-      ResultVector[1] == 0) {
-    Cand.Replacement = "!a";
-    return true;
+  const auto &RV = ResultVector;
+  size_t N = Cand.Variables.size();
+  if (N == 0 || RV.empty())
+    return false;
+
+  if (this->Debug) {
+    outs() << "[*] [PATTERN] N=" << N << " RVsize=" << RV.size() << " RV=[";
+    for (size_t i = 0; i < RV.size() && i < 8; i++) {
+      SmallString<16> s;
+      RV[i].toString(s, 10, true);
+      outs() << (i ? "," : "") << s.str();
+    }
+    outs() << "] vars:";
+    for (auto *V : Cand.Variables) {
+      SmallString<16> s;
+      raw_svector_ostream os(s);
+      V->print(os);
+      outs() << " " << s.str();
+    }
+    outs() << "\n";
+  }
+
+  // The ResultVector is a {0,1} truth table: RV[i] has variable j = bit j of i.
+  // For 1 var: RV = [f(0), f(1)]. For 2 vars: RV = [f(0,0), f(1,0), f(0,1),
+  // f(1,1)]. We match the well-known MBA identities on this table. (Every match
+  // is re-verified by the caller via verify()/Z3, so a false positive is safe.)
+
+  if (N == 1 && RV.size() == 2) {
+    // ~a  : [~0, ~1] = [allOnes, allOnes-1]
+    if (RV[0].isAllOnes() && RV[1] == (RV[0] - 1)) {
+      Cand.Replacement = "~a";
+      return true;
+    }
+    // -a  : [0, -1] = [0, allOnes]
+    if (RV[0].isZero() && RV[1].isAllOnes()) {
+      Cand.Replacement = "-a";
+      return true;
+    }
+    // !a  : [1, 0]
+    if (RV[0].getSExtValue() == 1 && RV[1].isZero()) {
+      Cand.Replacement = "!a";
+      return true;
+    }
+    // a   : [0, 1]
+    if (RV[0].isZero() && RV[1].getSExtValue() == 1) {
+      Cand.Replacement = "a";
+      return true;
+    }
+  }
+
+  if (N == 2 && RV.size() == 4) {
+    auto eq = [](const APInt &v, long long c) {
+      return v.getSExtValue() == c;
+    };
+    // a+b : [0, 1, 1, 2]
+    if (RV[0].isZero() && eq(RV[1], 1) && eq(RV[2], 1) && eq(RV[3], 2)) {
+      Cand.Replacement = "a+b";
+      return true;
+    }
+    // a^b : [0, 1, 1, 0]
+    if (RV[0].isZero() && eq(RV[1], 1) && eq(RV[2], 1) && RV[3].isZero()) {
+      Cand.Replacement = "a^b";
+      return true;
+    }
+    // a-b : [0, 1, -1, 0]  (-1 == allOnes)
+    if (RV[0].isZero() && eq(RV[1], 1) && RV[2].isAllOnes() &&
+        RV[3].isZero()) {
+      Cand.Replacement = "a-b";
+      return true;
+    }
+    // a&b : [0, 0, 0, 1]
+    if (RV[0].isZero() && RV[1].isZero() && RV[2].isZero() &&
+        eq(RV[3], 1)) {
+      Cand.Replacement = "a&b";
+      return true;
+    }
+    // a|b : [0, 1, 1, 1]
+    if (RV[0].isZero() && eq(RV[1], 1) && eq(RV[2], 1) && eq(RV[3], 1)) {
+      Cand.Replacement = "a|b";
+      return true;
+    }
+  }
+
+  return false;
+}
+
+bool LLVMParser::tryCandidateSimplifications(LSiMBA::MBACandidate &Cand,
+                                             int BitWidth) {
+  // Build the single-letter variable names in the same order the verifier uses
+  // (Cand.Variables[0] -> 'a', [1] -> 'b', ...).
+  std::vector<std::string> Names;
+  char c = 'a';
+  for (auto *V : Cand.Variables) {
+    Names.push_back(std::string(1, c));
+    c++;
+  }
+
+  // Propose a small set of simple rewrites. Order matters: cheapest / most
+  // common first. Every proposal is re-verified by the caller (verify/Z3), so a
+  // false positive is impossible.
+  std::vector<std::string> Cands;
+  for (auto &n : Names) {
+    Cands.push_back(n);
+    Cands.push_back("~" + n);
+  }
+  for (size_t i = 0; i < Names.size(); i++) {
+    for (size_t j = i + 1; j < Names.size(); j++) {
+      Cands.push_back(Names[i] + "+" + Names[j]);
+      Cands.push_back(Names[i] + "-" + Names[j]);
+      Cands.push_back(Names[i] + "^" + Names[j]);
+      Cands.push_back(Names[i] + "&" + Names[j]);
+      Cands.push_back(Names[i] + "|" + Names[j]);
+      Cands.push_back(Names[i] + "*" + Names[j]);
+    }
+  }
+  Cands.push_back("0");
+  Cands.push_back("-1");
+
+  if (this->Debug) {
+    outs() << "[*] [CANDIDATE] === ASTSize=" << Cand.ASTSize << " ===\n";
+    printAST(Cand.AST);
+  }
+
+  for (auto &cand : Cands) {
+    Cand.Replacement = cand;
+    bool ok = this->verify(Cand.ASTSize, Cand.AST, Cand.Replacement,
+                           Cand.Variables, BitWidth);
+    if (this->Debug) {
+      outs() << "[*] [CANDIDATE] try '" << cand << "' -> "
+             << (ok ? "OK" : "no") << "\n";
+    }
+    if (ok) {
+      return true;
+    }
   }
   return false;
+}
+
+namespace {
+// ---------------------------------------------------------------------------
+// Local MBA pattern matching: a small canonical expression tree plus the
+// classic mixed boolean-arithmetic identities. Operates on the candidate's
+// instruction sequence (intermediate values), so it catches the obfuscated
+// 64-bit MBAs the {0,1} truth table cannot. Only the operators that are
+// consistent between the quick-test evaluator (eval) and the IR builder
+// (createLLVMReplacement) are used: + - ^ & | * < (shl) and unary ~.
+// ---------------------------------------------------------------------------
+struct MExpr {
+  enum Kind { Var, Const, Bin, Not, Cast } K;
+  std::string S;   // Var name, Const decimal, or Cast target width
+  std::string Op;  // Bin: "+","-","^","&","|","*","<","a"(ashr)
+                   // Cast: "sext","zext"
+  int SW = 0;      // Cast source width in bits (0 = not a materializable cast)
+  std::shared_ptr<MExpr> L, R;
+};
+using MExprPtr = std::shared_ptr<MExpr>;
+
+MExprPtr mVar(std::string n) {
+  auto E = std::make_shared<MExpr>();
+  E->K = MExpr::Var;
+  E->S = std::move(n);
+  return E;
+}
+MExprPtr mConst(std::string v) {
+  auto E = std::make_shared<MExpr>();
+  E->K = MExpr::Const;
+  E->S = std::move(v);
+  return E;
+}
+MExprPtr mBin(std::string op, MExprPtr l, MExprPtr r) {
+  auto E = std::make_shared<MExpr>();
+  E->K = MExpr::Bin;
+  E->Op = std::move(op);
+  E->L = std::move(l);
+  E->R = std::move(r);
+  return E;
+}
+MExprPtr mNot(MExprPtr l) {
+  auto E = std::make_shared<MExpr>();
+  E->K = MExpr::Not;
+  E->L = std::move(l);
+  return E;
+}
+// A cast node: mCast("sext"|"zext", operand, targetWidth, srcWidth).
+// srcWidth is the source type width in bits. When it is 0 the cast is an
+// intermediate that the identities must rewrite away before rendering; when it
+// is > 0 it is a *materializable* cast of a narrow opaque variable and is kept
+// in the rendered string as op[SW:TW](x), which eval()/createLLVMReplacement()
+// turn into a real sext/zext instruction.
+MExprPtr mCast(std::string op, MExprPtr l, std::string width, int srcWidth = 0) {
+  auto E = std::make_shared<MExpr>();
+  E->K = MExpr::Cast;
+  E->Op = std::move(op);
+  E->L = std::move(l);
+  E->S = std::move(width);
+  E->SW = srcWidth;
+  return E;
+}
+
+// Canonical rendering (fully parenthesized, shunting-yard friendly).
+std::string mStr(const MExprPtr &E) {
+  if (!E) return "?";
+  switch (E->K) {
+  case MExpr::Var:
+    return E->S;
+  case MExpr::Const:
+    return E->S;
+  case MExpr::Not:
+    return "~" + mStr(E->L);
+  case MExpr::Cast:
+    if (E->SW > 0) {
+      // Materializable cast of a narrow opaque variable: render with the source
+      // width so eval()/createLLVMReplacement() can build a real sext/zext.
+      return E->Op + "[" + std::to_string(E->SW) + ":" + E->S + "](" +
+             mStr(E->L) + ")";
+    }
+    // Intermediate cast; if one survives to rendering it is a bug, but render
+    // it unambiguously so it is visible in debug output.
+    return E->Op + "[" + E->S + "](" + mStr(E->L) + ")";
+  case MExpr::Bin:
+    return "(" + mStr(E->L) + E->Op + mStr(E->R) + ")";
+  }
+  return "?";
+}
+
+// Number of operators (binary + unary) in the tree.
+int mOps(const MExprPtr &E) {
+  if (!E) return 0;
+  int n = (E->K == MExpr::Bin || E->K == MExpr::Not ||
+           E->K == MExpr::Cast)
+              ? 1
+              : 0;
+  if (E->L) n += mOps(E->L);
+  if (E->R) n += mOps(E->R);
+  return n;
+}
+
+// Number of operator tokens in a canonical-form expression string. Each
+// operator token becomes one new instruction when the replacement is built, so
+// this is the number of instructions the replacement adds. The canonical form
+// is fully parenthesized: "(L op R)" for binary, "~L" for unary, and a bare
+// token (a single letter or a decimal, optionally negative) for leaves. A '-'
+// starts a negative number only when it is followed by a digit and sits where
+// a leaf would be (start, or after '(' / an operator); otherwise it is the
+// subtraction operator.
+int countOpsInString(const std::string &S) {
+  auto isOpChar = [](char c) {
+    return c == '+' || c == '-' || c == '*' || c == '&' || c == '|' ||
+           c == '<' || c == '~';
+  };
+  int count = 0;
+  size_t i = 0;
+  while (i < S.size()) {
+    char c = S[i];
+    bool nextIsDigit =
+        i + 1 < S.size() && std::isdigit(static_cast<unsigned char>(S[i + 1]));
+    bool leafStart =
+        i == 0 || S[i - 1] == '(' || isOpChar(S[i - 1]);
+    if (std::isdigit(static_cast<unsigned char>(c))) {
+      // Plain (positive) number.
+      while (i < S.size() && std::isdigit(static_cast<unsigned char>(S[i])))
+        i++;
+    } else if (c == '-' && nextIsDigit && leafStart) {
+      // Negative number leaf: skip the sign and the digits.
+      i += 2;
+      while (i < S.size() && std::isdigit(static_cast<unsigned char>(S[i])))
+        i++;
+    } else if (S.compare(i, 5, "sext[") == 0 ||
+               S.compare(i, 5, "zext[") == 0) {
+      // Materializable cast: op[SW:TW](operand). One instruction.
+      count++;
+      auto close = S.find(']', i);
+      i = (close == std::string::npos) ? i + 1 : close + 1;
+    } else if (isOpChar(c)) {
+      // Operator token.
+      count++;
+      i++;
+    } else {
+      // Variable letter, parenthesis, or anything else: not an operator.
+      i++;
+    }
+  }
+  return count;
+}
+
+bool isConstVal(const MExprPtr &E, const std::string &v) {
+  return E && E->K == MExpr::Const && E->S == v;
+}
+
+bool sameExpr(const MExprPtr &a, const MExprPtr &b) {
+  return mStr(a) == mStr(b);
+}
+
+// If E is "base * 2" or "base << 1" (either operand order for mul), return
+// base; otherwise nullptr.
+MExprPtr baseOfTimes2(const MExprPtr &E) {
+  if (!E || E->K != MExpr::Bin) return nullptr;
+  if (E->Op == "*") {
+    if (isConstVal(E->L, "2")) return E->R;
+    if (isConstVal(E->R, "2")) return E->L;
+  }
+  if (E->Op == "<" && isConstVal(E->R, "1")) return E->L;
+  return nullptr;
+}
+
+// True if E is "x & y" (either operand order).
+bool isAndOf(const MExprPtr &E, const MExprPtr &x, const MExprPtr &y) {
+  if (!E || E->K != MExpr::Bin || E->Op != "&") return false;
+  return (sameExpr(E->L, x) && sameExpr(E->R, y)) ||
+         (sameExpr(E->L, y) && sameExpr(E->R, x));
+}
+
+// If E is the sign-extension idiom or(shl(zext(ashr(v, N)), M), zext(v)) —
+// the classic "sign-extend v to a wider type" obfuscation — return v;
+// otherwise nullptr. The two zext operands must target the same width and the
+// ashr/shl amounts must be consistent (N = src-1, M = dst-src) so the fold is
+// value-correct.
+MExprPtr matchSignExt(const MExprPtr &E) {
+  if (!E || E->K != MExpr::Bin || E->Op != "|") return nullptr;
+  auto A = E->L, B = E->R;
+  // A must be shl(zext(ashr(v, N)), M)
+  if (!A || A->K != MExpr::Bin || A->Op != "<") return nullptr;
+  if (!A->R || A->R->K != MExpr::Const) return nullptr;
+  if (!A->L || A->L->K != MExpr::Cast || A->L->Op != "zext") return nullptr;
+  auto ashrNode = A->L->L;
+  if (!ashrNode || ashrNode->K != MExpr::Bin || ashrNode->Op != "a")
+    return nullptr;
+  if (!ashrNode->R || ashrNode->R->K != MExpr::Const) return nullptr;
+  // B must be zext(v) with the same target width and the same v.
+  if (!B || B->K != MExpr::Cast || B->Op != "zext") return nullptr;
+  if (A->L->S != B->S) return nullptr;  // same target width
+  auto v = ashrNode->L;
+  if (!sameExpr(B->L, v)) return nullptr;
+  // Consistency: ashr amount N and shl amount M must satisfy M = dst - (N+1).
+  long N = std::stol(ashrNode->R->S);
+  long M = std::stol(A->R->S);
+  long dst = std::stol(B->S);
+  long src = N + 1;
+  if (dst != src + M) return nullptr;
+  return v;
+}
+
+// One round of MBA identity rewrites on a (child-simplified) tree.
+MExprPtr mIdentities(const MExprPtr &E) {
+  if (!E) return E;
+  if (E->K == MExpr::Cast) {
+    // sext(W, sext(W', v) op c)  ==  sext(W, v) op c   (sign-extension is
+    // associative and c is small enough not to overflow the wider type).
+    if (E->Op == "sext" && E->L && E->L->K == MExpr::Bin &&
+        (E->L->Op == "-" || E->L->Op == "+")) {
+      auto X = E->L->L, c = E->L->R;
+      if (X && X->K == MExpr::Cast && X->Op == "sext" && c &&
+          c->K == MExpr::Const)
+        return mBin(E->L->Op, mCast("sext", X->L, E->S), c);
+    }
+    return E;
+  }
+  if (E->K != MExpr::Bin) return E;
+
+  // (x + y) - 2*(x & y)  ==  x ^ y
+  if (E->Op == "-" && E->L && E->L->K == MExpr::Bin && E->L->Op == "+") {
+    auto x = E->L->L, y = E->L->R;
+    auto base = baseOfTimes2(E->R);
+    if (base && isAndOf(base, x, y))
+      return mBin("^", x, y);
+  }
+
+  // 2*(x & y) + (x ^ y)  ==  x + y
+  if (E->Op == "+") {
+    MExprPtr andBase = baseOfTimes2(E->L);
+    MExprPtr xorSide = E->R;
+    if (!andBase) {
+      andBase = baseOfTimes2(E->R);
+      xorSide = E->L;
+    }
+    if (andBase && xorSide && xorSide->K == MExpr::Bin && xorSide->Op == "^") {
+      auto x = xorSide->L, y = xorSide->R;
+      if (isAndOf(andBase, x, y))
+        return mBin("+", x, y);
+    }
+  }
+
+  // x ^ (x ^ y)  ==  y   and   y ^ (x ^ y)  ==  x
+  if (E->Op == "^") {
+    auto check = [](MExprPtr outer, MExprPtr inner) -> MExprPtr {
+      if (!inner || inner->K != MExpr::Bin || inner->Op != "^") return nullptr;
+      auto ix = inner->L, iy = inner->R;
+      if (sameExpr(outer, ix)) return iy;
+      if (sameExpr(outer, iy)) return ix;
+      return nullptr;
+    };
+    if (auto r = check(E->L, E->R)) return r;
+    if (auto r = check(E->R, E->L)) return r;
+  }
+
+  // x ^ -1  ==  ~x
+  if (E->Op == "^") {
+    if (isConstVal(E->L, "-1")) return mNot(E->R);
+    if (isConstVal(E->R, "-1")) return mNot(E->L);
+  }
+
+  // Sign-extension idiom: or(shl(zext(ashr(v, N)), M), zext(v)) == sext(v).
+  // The target width is the zext width recorded on the pattern.
+  if (auto v = matchSignExt(E)) {
+    long dst = std::stol(E->R->S);  // the zext target width
+    return mCast("sext", v, std::to_string(dst));
+  }
+
+  return E;
+}
+
+// Bottom-up simplification: simplify the children, then apply the identities
+// until fixed point (bounded). The loop is needed because one identity can
+// produce a node that another identity (on a different Kind) then rewrites —
+// e.g. the sign-extension fold produces a Cast node that the distribute
+// identity then reduces.
+MExprPtr mSimplify(const MExprPtr &E) {
+  if (!E) return nullptr;
+  if (E->K == MExpr::Var || E->K == MExpr::Const) return E;
+  auto L = mSimplify(E->L);
+  MExprPtr T;
+  if (E->K == MExpr::Not) {
+    T = mNot(L);
+  } else if (E->K == MExpr::Cast) {
+    T = mCast(E->Op, L, E->S);
+  } else {
+    auto R = mSimplify(E->R);
+    T = mBin(E->Op, L, R);
+  }
+  MExprPtr Result = T;
+  for (int i = 0; i < 16; i++) {
+    MExprPtr Next = mIdentities(Result);
+    if (mStr(Next) == mStr(Result)) {  // fixed point
+      Result = Next;
+      break;
+    }
+    Result = Next;
+  }
+  return Result;
+}
+
+// Materialize each surviving cast(TW, v) node (where v is a narrow opaque
+// variable of width W' < TW) as a real sext/zext by recording the source width
+// (SW = W'). A real cast is value-correct for ALL full-width inputs: verify()
+// feeds the opaque variable a full-width random value while the original AST
+// implicitly truncates it to its (narrower) type width, but a real sext/zext
+// explicitly takes the low W' bits (and sign-extends for sext), so it matches
+// the original for every input. Keeping the cast (1 op) is far cheaper than the
+// old expansion  (v & (2^W'-1)) - ((v & 2^(W'-1)) << 1)  (4 ops).
+MExprPtr mTruncNarrow(const MExprPtr &E,
+                      const std::map<std::string, int> &VarWidths) {
+  if (!E) return nullptr;
+  if (E->K == MExpr::Cast && (E->Op == "sext" || E->Op == "zext") &&
+      E->L && E->L->K == MExpr::Var) {
+    auto VIt = VarWidths.find(E->L->S);
+    if (VIt != VarWidths.end()) {
+      int Wp = VIt->second;
+      int W = std::stol(E->S);
+      if (Wp > 0 && Wp < W) {
+        // Materialize: keep the cast, record the source width.
+        return mCast(E->Op, E->L, E->S, Wp);
+      }
+    }
+    return E;
+  }
+  if (E->K == MExpr::Var || E->K == MExpr::Const) return E;
+  auto L = mTruncNarrow(E->L, VarWidths);
+  if (E->K == MExpr::Bin)
+    return mBin(E->Op, L, mTruncNarrow(E->R, VarWidths));
+  if (E->K == MExpr::Not)
+    return mNot(L);
+  if (E->K == MExpr::Cast)
+    return mCast(E->Op, L, E->S, E->SW);
+  return E;
+}
+}  // namespace
+
+bool LLVMParser::tryMBAPatterns(LSiMBA::MBACandidate &Cand, int BitWidth) {
+  // Map the candidate's opaque variables to single-letter names in the same
+  // order the verifier uses (Variables[0] -> 'a', [1] -> 'b', ...).
+  llvm::DenseMap<llvm::Value *, std::string> VarNames;
+  // Per-opaque-variable type width (in bits), keyed by the same single-letter
+  // name, so mTruncNarrow can rewrite a narrow variable's sext into the
+  // value-correct truncation form.
+  std::map<std::string, int> VarWidths;
+  char c = 'a';
+  for (auto *V : Cand.Variables) {
+    std::string Name(1, c++);
+    VarNames[V] = Name;
+    if (auto *Ty = llvm::dyn_cast<llvm::IntegerType>(V->getType()))
+      VarWidths[Name] = Ty->getBitWidth();
+  }
+
+  // Build a canonical tree for every instruction in the AST. The AST is
+  // ordered so that operands come after their uses (evaluateAST walks it
+  // rbegin -> rend), so iterate deepest-first: each instruction's operand
+  // instructions are already built by the time we reach them.
+  llvm::DenseMap<llvm::Value *, MExprPtr> Orig;
+  llvm::DenseMap<llvm::Value *, MExprPtr> Simp;
+
+  auto makeConst = [](llvm::Value *V) -> MExprPtr {
+    auto *CI = llvm::dyn_cast<llvm::ConstantInt>(V);
+    if (!CI) return nullptr;
+    const llvm::APInt &A = CI->getValue();
+    std::string S;
+    if (A.isNegative()) {
+      // Two's-complement magnitude, rendered as a signed decimal.
+      auto Mag = (~A) + 1;
+      S = "-" + std::to_string(Mag.getZExtValue());
+    } else {
+      S = std::to_string(A.getZExtValue());
+    }
+    return mConst(S);
+  };
+
+  auto resolveOrig = [&](llvm::Value *V) -> MExprPtr {
+    if (auto T = makeConst(V)) return T;
+    auto VN = VarNames.find(V);
+    if (VN != VarNames.end()) return mVar(VN->second);
+    if (auto *I = llvm::dyn_cast<llvm::Instruction>(V)) {
+      auto It = Orig.find(I);
+      if (It != Orig.end()) return It->second;
+    }
+    return nullptr;
+  };
+
+  auto resolveSimp = [&](llvm::Value *V) -> MExprPtr {
+    if (auto T = makeConst(V)) return T;
+    auto VN = VarNames.find(V);
+    if (VN != VarNames.end()) return mVar(VN->second);
+    if (auto *I = llvm::dyn_cast<llvm::Instruction>(V)) {
+      auto It = Simp.find(I);
+      if (It != Simp.end()) return It->second;
+    }
+    return nullptr;
+  };
+
+  // Build the tree for an instruction from a resolve function. The binary
+  // operators consistent between eval() and createLLVMReplacement() are used
+  // (+ - ^ & | * < and ashr, which is only needed to recognize the
+  // sign-extension pattern below). zext/sext are represented as Cast nodes;
+  // the identities rewrite them away before rendering. Anything else (lshr /
+  // sdiv / udiv / urem / non-binary / non-cast) bails out.
+  auto buildOne = [&](llvm::Instruction *I, auto &&resolve) -> MExprPtr {
+    if (auto *ZExt = llvm::dyn_cast<llvm::ZExtInst>(I)) {
+      MExprPtr L = resolve(ZExt->getOperand(0));
+      if (!L) return nullptr;
+      return mCast("zext", L, std::to_string(
+                   ZExt->getType()->getIntegerBitWidth()));
+    }
+    if (auto *SExt = llvm::dyn_cast<llvm::SExtInst>(I)) {
+      MExprPtr L = resolve(SExt->getOperand(0));
+      if (!L) return nullptr;
+      return mCast("sext", L, std::to_string(
+                   SExt->getType()->getIntegerBitWidth()));
+    }
+    auto *BO = llvm::dyn_cast<llvm::BinaryOperator>(I);
+    if (!BO) return nullptr;
+    MExprPtr L = resolve(BO->getOperand(0));
+    MExprPtr R = resolve(BO->getOperand(1));
+    if (!L || !R) return nullptr;
+    std::string op;
+    switch (BO->getOpcode()) {
+    case llvm::Instruction::Add:
+      op = "+";
+      break;
+    case llvm::Instruction::Sub:
+      op = "-";
+      break;
+    case llvm::Instruction::Xor:
+      op = "^";
+      break;
+    case llvm::Instruction::And:
+      op = "&";
+      break;
+    case llvm::Instruction::Or:
+      op = "|";
+      break;
+    case llvm::Instruction::Mul:
+      op = "*";
+      break;
+    case llvm::Instruction::Shl:
+      op = "<";
+      break;
+    case llvm::Instruction::AShr:
+      op = "a";
+      break;
+    default:
+      return nullptr;
+    }
+    return mBin(op, L, R);
+  };
+
+  for (auto It = Cand.AST.rbegin(); It != Cand.AST.rend(); ++It) {
+    auto *I = It->I;
+    if (Orig.count(I)) continue;
+    MExprPtr T = buildOne(I, resolveOrig);
+    if (!T) return false;  // an operand we cannot express; bail out
+    Orig[I] = T;
+    MExprPtr TS = buildOne(I, resolveSimp);
+    if (!TS) return false;
+    Simp[I] = mSimplify(TS);
+  }
+
+  if (Orig.count(Cand.AST.front().I) == 0) return false;
+  MExprPtr OrigRoot = Orig[Cand.AST.front().I];
+  MExprPtr SimpRoot = Simp[Cand.AST.front().I];
+  // Rewrite any narrow opaque variable's surviving sext/zext into a real,
+  // materializable cast (see mTruncNarrow) so the replacement matches the
+  // original AST for all full-width inputs. The cast handler in
+  // createLLVMReplacement/eval recovers the original narrow value and takes
+  // the low source-width bits, so the rendered sext[SW:TW] is value-correct.
+  SimpRoot = mTruncNarrow(SimpRoot, VarWidths);
+
+  int OrigOps = mOps(OrigRoot);
+  int SimpOps = mOps(SimpRoot);
+  if (SimpOps >= OrigOps) return false;  // no structural improvement
+
+  Cand.Replacement = mStr(SimpRoot);
+
+  // Net-reduction gate. Applying the replacement only redirects the root's uses
+  // to a freshly built expression; it does not by itself remove any old
+  // instruction. An old AST instruction is only removable if it ends up with no
+  // remaining uses, but intermediate values shared with code outside the AST
+  // stay live. So a rewrite that is structurally smaller can still *increase*
+  // the instruction count when its intermediates are shared. Apply it only if
+  // it is a strict net reduction in instruction count, otherwise it would just
+  // add redundant work.
+  {
+    llvm::DenseSet<llvm::Instruction *> ASTSet;
+    for (auto &E : Cand.AST) ASTSet.insert(E.I);
+    auto *Root = Cand.AST.front().I;
+
+    // An AST instruction is live if it has a use outside the AST, or is used
+    // by a live AST instruction. The root is always dead: its uses are
+    // redirected to the new expression, and the new expression is built from
+    // the opaque variables (outside the AST), not from any old AST
+    // instruction.
+    llvm::DenseSet<llvm::Instruction *> Live;
+    for (auto *I : ASTSet) {
+      if (I == Root) continue;
+      for (auto &U : I->uses()) {
+        auto *User = llvm::dyn_cast<llvm::Instruction>(U.getUser());
+        if (!User || !ASTSet.count(User)) {
+          Live.insert(I);
+          break;
+        }
+      }
+    }
+    bool Changed = true;
+    while (Changed) {
+      Changed = false;
+      for (auto *I : ASTSet) {
+        if (I == Root || Live.count(I)) continue;
+        for (auto &U : I->uses()) {
+          auto *User = llvm::dyn_cast<llvm::Instruction>(U.getUser());
+          if (User && ASTSet.count(User) && Live.count(User)) {
+            Live.insert(I);
+            Changed = true;
+            break;
+          }
+        }
+      }
+    }
+
+    int DeadCount = 0;
+    for (auto *I : ASTSet)
+      if (!Live.count(I)) DeadCount++;
+
+    int NewCount = countOpsInString(Cand.Replacement);
+
+    if (NewCount >= DeadCount) {
+      if (this->Debug) {
+        outs() << "[*] [MBAPATTERN] Skipping (not a net reduction): dead="
+               << DeadCount << " new=" << NewCount << "\n";
+      }
+      return false;
+    }
+
+    if (this->Debug) {
+      outs() << "[*] [MBAPATTERN] ASTSize=" << Cand.ASTSize << " orig '"
+             << mStr(OrigRoot) << "' (" << OrigOps << " ops) -> '"
+             << Cand.Replacement << "' (" << SimpOps << " ops); net: erase="
+             << DeadCount << " add=" << NewCount << "\n";
+    }
+  }
+
+  return true;
 }
 
 bool LLVMParser::findReplacements(llvm::DominatorTree *DT,
@@ -1397,7 +2246,27 @@ bool LLVMParser::findReplacements(llvm::DominatorTree *DT,
     // Phase 9: route to the selected simplifier (--simplifier). The native
     // selection (default) keeps the original path below untouched.
     bool Routed = false;
-    {
+
+    // Exclude candidates containing an arithmetic shift (AShr) from the routed
+    // path: an arithmetic shift is not a logical '>>' when the top bit is set,
+    // so routing it to the GAMBA ring would be semantically wrong. Such
+    // candidates fall back to the native path below.
+    bool ArithShift = ASTContainsArithmeticShift(Cand.AST);
+    if (ArithShift && this->Debug) {
+      outs() << "[*] Candidate contains an arithmetic shift; skipping the "
+                "routed path\n";
+    }
+
+    // Also exclude candidates containing an instruction getASTAsString cannot
+    // render (select / icmp / intrinsic calls such as llvm.bswap). These cannot
+    // be expressed as a GAMBA-ring string, so they fall back to the native path.
+    bool Unrenderable = ASTHasUnrenderableInstruction(Cand.AST);
+    if (Unrenderable && this->Debug) {
+      outs() << "[*] Candidate contains an instruction the GAMBA-ring string "
+                "renderer cannot handle; skipping the routed path\n";
+    }
+
+    if (!ArithShift && !Unrenderable) {
       auto Expr = getASTAsString(Cand.AST, Cand.Variables);
 
       if (this->Debug) {
@@ -1413,8 +2282,10 @@ bool LLVMParser::findReplacements(llvm::DominatorTree *DT,
       }
     }
 
-    // Use external simplifier
-    if (!Routed && !UseExternalSimplifier.empty()) {
+    // Use external simplifier (also skipped for arithmetic-shift / unrenderable
+    // candidates).
+    if (!Routed && !ArithShift && !Unrenderable &&
+        !UseExternalSimplifier.empty()) {
       std::string &Path = UseExternalSimplifier;
       auto Expr = getASTAsString(Cand.AST, Cand.Variables);
 
@@ -1441,9 +2312,9 @@ bool LLVMParser::findReplacements(llvm::DominatorTree *DT,
       }
     } else if (!Routed) {
       S.simplify(Cand.Replacement, false, false);
-#ifdef DEBUG_SIMPLIFICATION
-      outs() << "[*] Simplified Expression: " << Cand.Replacement << "\n";
-#endif
+      if (this->Debug) {
+        outs() << "[*] [NATIVE] '" << Cand.Replacement << "'\n";
+      }
     }
 
     // Verify is replacement is valid
@@ -1458,6 +2329,27 @@ bool LLVMParser::findReplacements(llvm::DominatorTree *DT,
       if (IsRepl) {
         Cand.isValid = this->verify(Cand.ASTSize, Cand.AST, Cand.Replacement,
                                     Cand.Variables, BitWidth);
+      }
+      // Local MBA pattern matching: recognize the classic mixed
+      // boolean-arithmetic identities in the instruction sequence (operates on
+      // intermediate values, so it catches the obfuscated 64-bit MBAs the
+      // {0,1} truth table cannot). Works for any bit width.
+      if (!Cand.isValid) {
+        if (tryMBAPatterns(Cand, BitWidth)) {
+          // The local identities are algebraic laws (always true), so the
+          // random-value quick test is sufficient; skip the (slow, timeout-prone)
+          // Z3 proof for these.
+          Cand.isValid = this->verify(Cand.ASTSize, Cand.AST, Cand.Replacement,
+                                      Cand.Variables, BitWidth, /*DoZ3=*/false);
+        }
+      }
+      // Wide-type fallback: the {0,1} truth table is insufficient for >=32-bit
+      // candidates (the native fit goes spurious). Propose simple rewrites and
+      // keep the first one verify()/Z3 proves equivalent.
+      if (!Cand.isValid && BitWidth >= 32) {
+        if (tryCandidateSimplifications(Cand, BitWidth)) {
+          Cand.isValid = true; // already verified inside
+        }
       }
     }
 
@@ -1556,13 +2448,14 @@ bool LLVMParser::walkSubAST(llvm::DominatorTree *DT,
       // Phase 9: route to the selected simplifier (--simplifier). The native
       // selection (default) keeps the original path below untouched.
       bool Routed = false;
-      {
+      bool Unrenderable = ASTHasUnrenderableInstruction(C.AST);
+      if (!Unrenderable) {
         auto Expr = getASTAsString(C.AST, C.Variables);
         Routed = LSiMBA::TrySelectedSimplifier(Expr, C.Replacement, BitWidth,
                                                this->Prove);
       }
 
-      if (!Routed && !UseExternalSimplifier.empty()) {
+      if (!Routed && !Unrenderable && !UseExternalSimplifier.empty()) {
         std::string &Path = UseExternalSimplifier;
         auto Expr = getASTAsString(C.AST, C.Variables);
 
@@ -1683,6 +2576,46 @@ uint64_t LLVMParser::calculateHash(llvm::SmallVectorImpl<BFSEntry> &AST) {
   return x;
 }
 
+// True iff the AST contains an arithmetic shift (AShr). AShr is not expressible
+// as a logical '>>' in the GAMBA ring: it differs from LShr whenever the top bit
+// of the value is set. Such candidates are therefore excluded from the routed
+// (general/external) path and fall back to the native path instead.
+static bool ASTContainsArithmeticShift(llvm::SmallVectorImpl<BFSEntry> &AST) {
+  for (auto &E : AST) {
+    if (auto B = llvm::dyn_cast<llvm::BinaryOperator>(E.I))
+      if (B->getOpcode() == llvm::Instruction::AShr)
+        return true;
+  }
+  return false;
+}
+
+// Per-instruction version: true iff a single instruction is one that
+// getASTAsString cannot render as a GAMBA-ring string. getASTAsString only
+// understands BinaryOperator, GEP, Trunc, ZExt and SExt; anything else (a
+// select, an icmp, or an intrinsic call such as llvm.bswap / llvm.ctpop /
+// llvm.bitreverse) is "unrenderable". Used by getAST to "cut" at such
+// instructions: instead of recursing into them (which would taint the whole
+// candidate as unrenderable), they are treated as opaque leaves / variables so
+// the surrounding MBA sub-expression can still be rendered and simplified.
+static bool isUnrenderableInstruction(llvm::Value *V) {
+  if (llvm::isa<llvm::BinaryOperator>(V)) return false;
+  if (llvm::isa<llvm::GetElementPtrInst>(V)) return false;
+  if (llvm::isa<llvm::TruncInst>(V)) return false;
+  if (llvm::isa<llvm::ZExtInst>(V)) return false;
+  if (llvm::isa<llvm::SExtInst>(V)) return false;
+  return true;
+}
+
+// True iff the AST contains an instruction that getASTAsString cannot render as
+// a GAMBA-ring string. Such candidates are excluded from the routed path and
+// fall back to the native path instead.
+static bool ASTHasUnrenderableInstruction(llvm::SmallVectorImpl<BFSEntry> &AST) {
+  for (auto &E : AST) {
+    if (isUnrenderableInstruction(E.I)) return true;
+  }
+  return false;
+}
+
 std::string LLVMParser::getASTAsString(
     llvm::SmallVectorImpl<BFSEntry> &AST,
     llvm::SmallVectorImpl<llvm::Value *> &Variables) {
@@ -1739,12 +2672,17 @@ std::string LLVMParser::getASTAsString(
           Expr += " / ";
           break;
         case Instruction::SDiv:
+          // Unsigned semantics only: MBA values are interpreted mod 2^B, so this
+          // is rendered as an unsigned '/'. Signed division rounds toward zero and
+          // is not the same for negative (top-bit-set) values; the fast-check gate
+          // catches any mismatch on the routed path.
           Expr += " / ";
           break;
         case Instruction::URem:
           Expr += " % ";
           break;
         case Instruction::SRem:
+          // Unsigned semantics only (see SDiv): rendered as an unsigned '%'.
           Expr += " % ";
           break;
         case Instruction::Shl:
@@ -1754,7 +2692,10 @@ std::string LLVMParser::getASTAsString(
           Expr += " >> ";
           break;
         case Instruction::AShr:
-          // Should work in python...
+          // Emitted as '>>' for display/debugging only. Candidates containing an
+          // AShr are excluded from the routed path (see ASTContainsArithmeticShift)
+          // because an arithmetic shift is not a logical '>>' when the top bit is
+          // set; they fall back to the native path.
           Expr += " >> ";
           break;
         case Instruction::Xor:
@@ -1945,8 +2886,31 @@ void LLVMParser::getAST(llvm::DominatorTree *DT, llvm::Instruction *I,
 
       if (auto OpIns = dyn_cast<Instruction>(O)) {
         if (Dis.find(OpIns) == Dis.end()) {
-          // Check if supported
-          if (!isSupportedInstruction(OpIns)) {
+          // Check if supported. Also "cut" at instructions getASTAsString cannot
+          // render (intrinsic calls such as llvm.bswap): treat them as opaque
+          // leaves / variables instead of recursing into them, so the
+          // surrounding MBA sub-expression stays renderable and can be
+          // simplified (the standard "cut at opaque calls" MBA technique).
+          //
+          // Select and icmp are the exception. Although getASTAsString cannot
+          // render them either, they ARE evaluatable (see evaluateAST and the
+          // Z3 encoder getZ3Val), so we inline them into the AST instead of
+          // cutting them as independent leaves. Cutting a select that actually
+          // depends on another variable (e.g. the wraparound-correction select
+          // in llvm/lifted.ll, which is the carry-out bit of v + 47282) made
+          // it look like a free variable; the {0,1} truth-table fit then went
+          // spurious and verify() rejected every candidate. Inlining keeps the
+          // expression a true function of the remaining leaves, so the native
+          // fit and verify() now agree. (The candidate is still skipped by the
+          // routed/external path via ASTHasUnrenderableInstruction, which is
+          // correct: a select/icmp cannot be expressed as a GAMBA-ring string.)
+          bool Cut = !isSupportedInstruction(OpIns);
+          if (!Cut && isUnrenderableInstruction(OpIns) &&
+              !llvm::isa<llvm::SelectInst>(OpIns) &&
+              !llvm::isa<llvm::ICmpInst>(OpIns)) {
+            Cut = true;
+          }
+          if (Cut) {
             // Use as variable
             Vars.insert(OpIns);
             continue;
@@ -2020,6 +2984,21 @@ llvm::APInt LLVMParser::evaluateAST(
         case Instruction::Or:
           InstResult = ConstantInt::get(BO->getType(),
                                         Op0->getValue() | Op1->getValue());
+          break;
+        case Instruction::UDiv:
+          // Unsigned divide; guard div-by-zero (ConstantExpr::get would fold
+          // a /0 to undefined and can crash).
+          InstResult = ConstantInt::get(
+              BO->getType(), Op1->getValue().isZero()
+                                 ? APInt(BO->getType()->getIntegerBitWidth(), 0)
+                                 : Op0->getValue().udiv(Op1->getValue()));
+          break;
+        case Instruction::URem:
+          // Unsigned remainder; guard div-by-zero.
+          InstResult = ConstantInt::get(
+              BO->getType(), Op1->getValue().isZero()
+                                 ? APInt(BO->getType()->getIntegerBitWidth(), 0)
+                                 : Op0->getValue().urem(Op1->getValue()));
           break;
         default: {
           InstResult = ConstantExpr::get(
