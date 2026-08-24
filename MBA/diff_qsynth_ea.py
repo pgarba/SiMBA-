@@ -5,7 +5,7 @@ semantically equivalent to the dataset's ground truth.
 This guards against a class of bug where the linear simplifier (reached from
 the general path for bitwise-linear sub-expressions such as `a^b|c^d`)
 silently drops terms and returns a non-equivalent, "simpler" result. See
-QSYNTH_EA_FIX_PLAN.md.
+plans/QSYNTH_EA_FIX_PLAN.md.
 
 Usage: python diff_qsynth_ea.py [N]
 N: number of expressions to check (default 100).

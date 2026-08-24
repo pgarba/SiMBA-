@@ -111,6 +111,24 @@ class LLVMParser {
   bool replaceWithKnownPatterns(LSiMBA::MBACandidate &Cand,
                                 const std::vector<llvm::APInt> &ResultVector);
 
+  /*
+    Fallback for wide (>=32-bit) candidates where the {0,1} truth table is
+    insufficient: propose a small set of simple rewrites (single vars, negations,
+    pairwise ops, constants) and keep the first one verify()/Z3 proves
+    equivalent. Safe: every candidate is re-verified.
+  */
+  bool tryCandidateSimplifications(LSiMBA::MBACandidate &Cand, int BitWidth);
+
+  /*
+    Local MBA pattern matching: recognize the classic mixed boolean-arithmetic
+    identities in the instruction sequence (e.g. a+b-2*(a&b) -> a^b,
+    2*(a&b)+(a^b) -> a+b, x^(x^y) -> y) and rewrite them. Operates on the
+    intermediate values (not just the opaque variables), so it catches the
+    obfuscated 64-bit MBAs that the {0,1} truth table cannot. Every rewrite is
+    re-verified by verify()/Z3, so a false positive is impossible.
+  */
+  bool tryMBAPatterns(LSiMBA::MBACandidate &Cand, int BitWidth);
+
  private:
   std::string OutputFile = "";
 
@@ -162,7 +180,8 @@ class LLVMParser {
 
   bool verify(int ASTSize, llvm::SmallVectorImpl<BFSEntry> &AST,
               std::string &SimpExpr,
-              llvm::SmallVectorImpl<llvm::Value *> &Variables, int BitWidth);
+              llvm::SmallVectorImpl<llvm::Value *> &Variables, int BitWidth,
+              bool DoZ3 = true);
 
   llvm::Instruction *getSingleTerminator(llvm::Function &F);
 

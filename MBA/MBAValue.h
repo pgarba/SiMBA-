@@ -35,6 +35,17 @@ struct MBAOps {
     return MBAValue(128, 2, parts);
   }
 
+  // 2**shift as a 128-bit value (shift in [0, 127]). Used to build the
+  // constant coefficient of a desugared bit term a[i] * 2**shift as a single
+  // constant (rather than a 2**shift POWER node) so the term is recognized as
+  // linear by the simplifier.
+  static MBAValue pow2(int shift) {
+    MBAValue v(128, 0);
+    if (shift >= 0 && shift < 128)
+      v.setBit(shift);
+    return v;
+  }
+
   // Signed decimal string (matches Python str() of the stored value).
   static std::string toStringSigned(const MBAValue &v) {
     llvm::SmallString<40> ss;

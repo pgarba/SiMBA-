@@ -25,7 +25,30 @@ CORPUS = [
     "a << 0", "a << 64", "0 << a", "1 << 63",
     "a & ~a", "a | ~a", "a ^ ~a", "~a & b", "a & b | c ^ d",
     "a + a + a", "a * a * a", "a**3", "a**1", "a**0",
+    # Shift / division / remainder (Tier 1 desugaring).
+    "a >> 1", "a >> 3", "a >> 0", "a >> 63", "a >> 64",
+    "a / 2", "a / 4", "a / 64", "a / 1",
+    "a % 2", "a % 8", "a % 64", "a % 1",
+    "a / 4 + b", "a % 8 + b", "a / 4 * b", "a / 2 + b / 2",
+    "a + b / 4", "a >> 1 * b",
+    # Rejected: zero divisor, nested shift.
+    "a % 0", "a / 0", "a >> 1 << 2",
+    # Tier 2 (native-only): the C++ port now builds first-class >> / / % nodes
+    # for these, so it parses them while the Python oracle still rejects them.
+    # (`a >> 1 * b` already appears in the Tier 1 list above; it is listed in
+    # TIER2_MORE_PERMISSIVE below, not duplicated here.)
+    "a % 3", "a / 3", "a >> b", "(a+b) >> 1", "a >> -1",
+    "a[3] >> 1", "a * b / c",
 ]
+
+# Cases where the native C++ port is intentionally MORE permissive than the
+# Python oracle: the native port builds a first-class Tier 2 operator node
+# (>> / / %) where the oracle still rejects. For these, "cpp parses / py
+# rejects" is the expected (OK) outcome, not a diff.
+TIER2_MORE_PERMISSIVE = {
+    "a % 3", "a / 3", "a >> b", "(a+b) >> 1", "a >> -1",
+    "a[3] >> 1", "a * b / c", "a >> 1 * b",
+}
 
 
 def cpp_parse(expr, bit_count):
@@ -51,6 +74,12 @@ def main():
         py_rejected = p == "<parse error>"
         # Both rejecting is a match; otherwise compare the strings exactly.
         match = (cpp_rejected and py_rejected) or (c == p)
+        # Tier 2: the native port is intentionally more permissive (it builds a
+        # first-class >> / / % node where the oracle still rejects). For these
+        # cases, "cpp parses / py rejects" is the expected outcome.
+        if (not match and e in TIER2_MORE_PERMISSIVE
+                and not cpp_rejected and py_rejected):
+            match = True
         status = "OK  " if match else "DIFF"
         if match:
             ok += 1

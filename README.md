@@ -44,7 +44,7 @@ build:
 
 The port covers the parser, node core, refinement rules, expansion/factorization,
 substitution, the bitwise factory, the linear simplifier, and the general
-(nonlinear) simplifier. See `GAMBA_INTEGRATION_PLAN.md` for the full phase-by-phase
+(nonlinear) simplifier. See `plans/GAMBA_INTEGRATION_PLAN.md` for the full phase-by-phase
 plan and verification status.
 
 The `SiMBA++` CLI routes simplification through
@@ -66,12 +66,50 @@ The standalone `mba_cli` exposes the same checks directly:
 `mba_cli prove <bitCount> <orig> <simp>` (Z3; the standalone build links no
 Z3, so `prove` is a no-op there — use `SiMBA++.exe --prove` for real proofs).
 
+# Missing-operator support (`>>`, `/`, `%`)
+
+The GAMBA expression language now supports `>>` (shift right), `/` (integer
+divide) and `%` (integer remainder) — see
+`plans/GAMBA_MISSING_OPERATORS_PLAN.md`. Two tiers:
+
+- **Tier 1 (bit desugaring):** `var >> k`, `var / 2^k` and `var % 2^k` are
+  desugared at parse time into a sum of bit-slice terms (`a[i] * 2^i`), which
+  the simplifier handles as a linear expression. In the native port, anything
+  else (compound LHS, non-power-of-two or non-constant divisor) builds a
+  first-class Tier 2 operator node instead of erroring (only a constant divisor
+  of zero is still a parse error). The vendored oracle still rejects those cases.
+- **Tier 2 (first-class nodes, native port only):** `RSHIFT`/`UDIV`/`UREM`
+  operator nodes with exact unsigned semantics, so variable divisors and
+  non-power-of-two divisors parse and evaluate. They are marked nonlinear and
+  the general simplifier treats them as **opaque leaves** (children simplified,
+  the operator node itself never rewritten or reordered — the operators are not
+  commutative). The vendored Python oracle is **not** modified for Tier 2 (it
+  still rejects the non-desugarable cases), so the differential suite is not
+  extended with Tier 2 cases. Verified natively via `MBA/test_tier2_semantics.py`
+  (4000 checks @ 8-bit, 1600 @ 16-bit, 0 MISMATCH).
+
+**Semantics note.** All three operators use **unsigned** integer semantics over
+values reduced mod `2^B` (floor division for `/`, remainder for `%`).
+`LLVMParser::getASTAsString` emits `>>` for both `LShr` and `AShr`, `/` for
+both `UDiv` and `SDiv`, and `%` for both `URem` and `SRem`. **`AShr` is
+excluded from the routed string path** (an arithmetic shift is not expressible
+as a logical shift, so it falls back to the native path). The `SDiv`/`SRem` →
+`/`/`%` mapping assumes unsigned semantics (signed division rounds toward zero;
+signed remainder carries the dividend's sign) — the fast-check gate catches any
+mismatch on the routed path.
+
+**Performance note.** The bit-desugaring produces one term per bit-sliced
+variable, and the GAMBA simplifier (Python oracle *and* native port) is
+**exponential** in that count, so 8–16-bit values simplify quickly but
+32/64-bit desugared values are impractically slow. Tier 2 avoids the
+bit-explosion for the general cases.
+
 # GAMBA benchmark (Python oracle vs. C++ port)
 
 For each test file (first 100 expressions, 8-bit, fresh process per
 expression) the implementations simplify all expressions and every result is
 fast-checked against the dataset's `groundtruth` column. The first block is the
-seven vendored GAMBA datasets (methodology: `MBA/BENCHMARK_PLAN.md`; reproduce
+seven vendored GAMBA datasets (methodology: `plans/BENCHMARK_PLAN.md`; reproduce
 with `python MBA\bench_compare.py 100 8`, raw numbers: `MBA/bench_results.csv`);
 the second block is the `data/` test files, benchmarking the SiMBA++ native
 linear simplifier against the GAMBA port (reproduce with

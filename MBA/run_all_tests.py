@@ -16,6 +16,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 # (name, script, takes_N)
 TESTS = [
     ("parse", "diff_parse.py", False),
+    ("divrem_semantics", "test_divrem_semantics.py", False),
     ("parse_dataset", "diff_parse_dataset.py", False),
     ("node", "diff_node.py", True),
     ("refine", "diff_refine.py", True),
@@ -25,6 +26,10 @@ TESTS = [
     ("simplify_linear", "diff_simplify.py", True),
     ("general", "diff_general.py", True),
     ("qsynth_ea_groundtruth", "diff_qsynth_ea.py", True),
+    # Native-only Tier 2 semantics (first-class >> / / % nodes): random-value
+    # eval against a Python unsigned reference. Not a differential test (the
+    # vendored oracle is not modified for Tier 2).
+    ("tier2_semantics", "test_tier2_semantics.py", True),
 ]
 
 
