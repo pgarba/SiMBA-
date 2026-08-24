@@ -4,6 +4,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -41,18 +42,23 @@ public:
   XorResult *trySimplifyXor(uint64_t constantOffset,
                             std::unordered_map<uint64_t, uint64_t> &coeffToMask) const;
 
-  // Try to isolate a single variable conjunction.
-  // Returns the coefficient if the basis expression is just a variable,
-  // or 0 if not.
-  uint64_t tryIsolateVariable(uint64_t constantOffset,
-                              std::unordered_map<uint64_t, uint64_t> &coeffToMask) const;
+  // Try to isolate a single variable conjunction (C# TryIsolateSingleVariableConjunction).
+  // Returns the coefficient if successful, nullopt if not.
+  std::optional<uint64_t> tryIsolateVariable(
+      std::unordered_map<uint64_t, uint64_t> &coeffToMask) const;
 
   // Try to express m1*(a&c1) + m2*(a&c2) as (m1-m2)*(a&c1) + m2*a.
   uint64_t tryExpressAsSingleBitwiseSum(
+      const std::vector<uint64_t> &keys,
       std::unordered_map<uint64_t, uint64_t> &coeffToMask) const;
 
-  // Try to remove a negated double sum: m*(a&c) + 2m*(a&~c) → m*a + m*(a&c).
-  uint64_t tryRemoveNegatedDoubleSum(
+  // Check if we can rewrite two terms with new coefficients and masks.
+  bool canChangeSumMaskAndCoefficients(
+      uint64_t oldCoeffA, uint64_t oldCoeffB, uint64_t oldMaskA, uint64_t oldMaskB,
+      uint64_t newCoeffA, uint64_t newCoeffB, uint64_t newMaskA, uint64_t newMaskB) const;
+
+  // Try to remove a negated double sum: m*(a&c) + 2m*(a&~c) → m*a.
+  std::optional<uint64_t> tryRemoveNegatedDoubleSum(
       uint64_t coeff, std::unordered_map<uint64_t, uint64_t> &coeffToMask) const;
 
   // Try to express 3 terms as 2 (coefficient sum).
