@@ -1,30 +1,32 @@
 # MSiMBA XOR Handling Fix Plan
 
-## Status (after investigation)
+## Status (after partial fix)
 
-**All three options investigated. None fixed e4_*.**
+**e4_* improved from 0% to 9-13%.**
 
-- **Option A** (guard constant substitution): Implemented. The issue is in
-  `simplifyGeneric()`, not the constant substitution. No effect on e4_*.
-- **Option C** (XOR rewrite to AND form): Implemented `rewriteXorToAnd()`.
-  The rewrite `x^C → x+C-2*(x&C)` creates a SUM inside a PRODUCT, which the
-  multi-bit algorithm doesn't handle. The distributed form also fails.
-- **Option B** (fix XOR recovery): The XOR recovery IS firing, but producing
-  incorrect results (wrong constant, wrong coefficient sign). The root cause
-  is that `simplifyGeneric()` is not correctly computing the linear
-  combination for XOR-with-constant expressions.
+### Fixes applied:
+1. **Constant offset update after XOR recovery** (root cause fix):
+   The C# reference updates `constantOffset` after XOR recovery.
+   Our port was not doing this, leading to incorrect constant values.
+2. **XOR operand order**: Variable first (`x^C`, not `C^x`) to match GT.
+3. **Constant term position**: Inserted first (matching GT format).
 
-**Root cause**: The C++ port's `simplifyGeneric()` is less sophisticated than
-the C# reference. The C# reference has additional refinement steps
-(`TryRefineMultibitEntry` with XOR recovery, variable isolation, OR recovery)
-that our port doesn't fully implement.
+### Still broken:
+- **Variable isolation**: Re-enabling `tryIsolateVariable` causes regression
+  on e1_*/e3_*/e5_* (drops to 0%). Remains disabled.
+- **Wrong XOR constant/coefficient**: Some e4_* expressions still have wrong
+  XOR constants and coefficient signs. The XOR recovery is firing but
+  producing incorrect results for these cases.
 
-**Next steps**:
-1. Port the C# reference's `TryRefineMultibitEntry` function to the C++ port.
-2. Or, accept e4_* as a known limitation (0% GT match) and focus on other
-   improvements.
+### Current GT match: 78.3%
+- e2_*, e3_*, e5_*: 100%
+- e1_*: ~50-57% (term order issue)
+- e4_*: 9-13% (XOR with constants — partial fix)
 
-**Current GT match**: 70.8% (e4_* at 0%, e1_* at ~50-57%, e2_*/e3_*/e5_* at 100%).
+### Next steps:
+1. Diagnose why some e4_* expressions still have wrong XOR constants.
+2. Try to fix variable isolation without regressing e1_*/e3_*/e5_*.
+3. Or, accept current results and focus on other improvements.
 
 ## Problem
 
