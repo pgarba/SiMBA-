@@ -58,6 +58,9 @@ private:
   // Check if the result vector corresponds to a linear expression.
   bool isLinearResultVector() const;
 
+  // Check if the AST contains bitwise operations (AND, OR, XOR, NOT).
+  bool hasBitwiseOps() const;
+
   // Find an initial linear combination of conjunctions.
   std::string simplifyGeneric();
 
