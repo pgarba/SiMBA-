@@ -53,6 +53,23 @@ llvm::cl::opt<bool> AcceptUnknown(
 // Z3_del_context on the next context teardown.
 z3::solver *Solver = nullptr;
 
+// Global Z3 context for proveReplacement(). Creating a fresh z3::context per
+// call is expensive (it allocates the Z3 kernel, sorts, etc.); with the QF_BV
+// logic the solve itself is sub-millisecond, so context creation dominates.
+// Cache one context for the whole process, like LLVMParser's Z3CtxGlobal.
+//
+// prove() already handles context switching: if the cached Solver belongs to a
+// different context than the conjecture, it resets the solver. So a global
+// context here is safe even when prove() is also called from LLVMParser with
+// its own Z3CtxGlobal.
+static z3::context *ProverCtx = nullptr;
+
+static z3::context &getProverCtx() {
+  if (!ProverCtx)
+    ProverCtx = new z3::context;
+  return *ProverCtx;
+}
+
 void resetZ3Solver() {
   delete Solver;
   Solver = nullptr;
@@ -74,9 +91,19 @@ bool prove(z3::expr conjecture) {
     // Z3's "timeout" parameter is in milliseconds.
     Z3_global_param_set("timeout", std::to_string(timeout * 1000).c_str());
 
-    auto t = (z3::tactic(c, "simplify") & z3::tactic(c, "bit-blast") &
-              z3::tactic(c, "smt"));
-    Solver = new z3::solver(t.mk_solver());
+    // Use the QF_BV (quantifier-free bit-vector) logic instead of the old
+    // `simplify & bit-blast & smt` pipeline. The bit-blast tactic converts
+    // bit-vector ops to boolean circuits and solves with a SAT solver, which
+    // is exponential in the bit width for multiplication-heavy expressions
+    // (timeouts at 32/64-bit). QF_BV uses word-level reasoning and solves the
+    // same expressions in sub-millisecond time (see plans/Z3_SPEEDUP_PLAN.md
+    // for the measured 10,000-60,000x speedup).
+    //
+    // model=false: we only need sat/unsat, not a model. proof=false is the
+    // default but is set explicitly for clarity.
+    Solver = new z3::solver(c, "QF_BV");
+    Solver->set("model", false);
+    Solver->set("proof", false);
   }
 
   // reset and add
@@ -103,7 +130,10 @@ bool prove(z3::expr conjecture) {
 
 bool proveReplacement(std::string &expr0, std::string &expr1, int BitWidth,
                       std::vector<std::string> &Variables) {
-  z3::context Z3Ctx;
+  // Use the cached global context (see getProverCtx) instead of creating a
+  // fresh one per call - context creation is expensive and now dominates the
+  // sub-millisecond QF_BV solve.
+  z3::context &Z3Ctx = getProverCtx();
 
   // Get Expressions
   std::map<std::string, z3::expr *> VarMap;
@@ -117,15 +147,14 @@ bool proveReplacement(std::string &expr0, std::string &expr1, int BitWidth,
   // Prove
   auto Result = prove(((Z3Exp0 != Z3Exp1)));
 
-  // Clean up variables
+  // Clean up variables (the z3::expr handles belong to the global context,
+  // which outlives them; dropping the local references is enough).
   for (auto v : VarMap) {
     delete v.second;
   }
 
-  // prove() has now cached a solver built from the local Z3Ctx above,
-  // which is about to be destroyed - drop it while its context is still
-  // alive rather than leaving a stale handle behind for the next caller.
-  resetZ3Solver();
+  // The cached solver now belongs to the global context, which stays alive -
+  // no need to reset it (unlike the old per-call local context).
 
   return Result;
 }
