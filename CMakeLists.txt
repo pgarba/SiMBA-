@@ -3,11 +3,10 @@ cmake_minimum_required(VERSION 3.5.0 FATAL_ERROR)
 project(SiMBA++)
 set(CMAKE_CXX_STANDARD 17)
 
-# The CMake targets below link the Z3 backend; enable the Z3 proof path in
-# MBA/Verify.cpp (proveEquivalent) for them. The lightweight mba_cli
-# differential tool (MBA/build_general.bat) does not link Z3 and is built
-# without this define, so proveEquivalent degrades to a safe no-op there.
-add_compile_definitions(MBA_HAS_Z3)
+# MBA_HAS_Z3 is set per-target (see target_compile_definitions below) rather
+# than globally: SiMBA++/LSiMBA++/SiMBAPass link Z3 and get the full proof
+# path in MBA/Verify.cpp, while mba_cli does not link Z3 and gets a safe no-op
+# proveEquivalent.
 if(${CMAKE_SYSTEM_NAME} MATCHES "Windows")
     # Default location of a prebuilt LLVM+Z3 tree on Windows. Override with
     # -DBuildDir=... (or set LLVM_DIR/Z3_INCLUDE_DIRS/Z3_LIBRARIES directly)
@@ -128,15 +127,14 @@ else()
     find_package(Z3 REQUIRED CONFIG)
 endif()
 message(STATUS "Z3 version: ${Z3_VERSION}")
-if(TARGET z3::libz3)
-    link_libraries(z3::libz3)
-elseif(DEFINED Z3_INCLUDE_DIRS)
+# Z3 is linked per-target (SiMBA++ via SIMBA_LLVM_LIBS, SiMBAPass below).
+# mba_cli does not link Z3. The include directories are set globally so all
+# targets can #include <z3++.h> when MBA_HAS_Z3 is defined.
+if(DEFINED Z3_INCLUDE_DIRS)
     include_directories(${Z3_INCLUDE_DIRS})
-else()
-    if(${CMAKE_SYSTEM_NAME} MATCHES "Linux")
-        include_directories(${Z3_INCLUDE_DIRS})
-    endif()
-    #message(FATAL_ERROR "Unexpected Z3 package search outcome: neither target z3::libz3 not variable Z3_INCLUDE_DIRS exists.")
+endif()
+if(TARGET z3::libz3)
+    include_directories(${Z3_CXX_INCLUDE_DIRS})
 endif()
 
 message(STATUS "Z3 include directory: " ${Z3_CXX_INCLUDE_DIRS})
@@ -181,6 +179,7 @@ set(MBA_SOURCES
     "MBA/LinearSimplifier.cpp" "MBA/GeneralSimplifier.cpp" "MBA/Verify.cpp")
 
 add_executable(SiMBA++ "CSiMBA.cpp" "CSiMBA.h" "LLVMParser.cpp" "LLVMParser.h" "Simplifier.h" "MBAChecker.cpp" "MBAChecker.h" "Simplifier.cpp" "ShuttingYard.cpp" "Modulo.cpp" "Modulo.h" "Z3Prover.cpp" "Z3Prover.h" "SimplifierRouter.cpp" "SimplifierRouter.h" ${MBA_SOURCES})
+target_compile_definitions(SiMBA++ PRIVATE MBA_HAS_Z3)
 
 #set_target_properties(SiMBA++ PROPERTIES
 #    COMPILE_FLAGS " -fno-rtti"
@@ -230,6 +229,7 @@ endif()
 
 # SiMBA++ static
 add_library(LSiMBA++ STATIC  "Z3Prover.cpp" "Z3Prover.h" "LLVMParser.cpp" "LLVMParser.h" "Simplifier.h" "MBAChecker.cpp" "MBAChecker.h" "Simplifier.cpp" "ShuttingYard.cpp" "Modulo.cpp" "Modulo.h")
+target_compile_definitions(LSiMBA++ PRIVATE MBA_HAS_Z3)
 
 # No rtti
 #set_target_properties(LSiMBA++ PROPERTIES
@@ -267,11 +267,19 @@ set_target_properties(SiMBAPass PROPERTIES
 
 if(APPLE)
     set(PASS_LDFLAGS "-Wl,-undefined,dynamic_lookup -Wl,-no_pie")
-elseif(WIN32)
+    target_link_libraries(SiMBAPass ${PASS_LDFLAGS})
+else()
+    # Linux / WIN32: link the full LLVM + Z3 set.
     target_link_libraries(SiMBAPass ${SIMBA_LLVM_LIBS})
 endif()
+target_compile_definitions(SiMBAPass PRIVATE MBA_HAS_Z3)
 
-target_link_libraries(SiMBAPass ${PASS_LDFLAGS})
+# mba_cli — lightweight standalone MBA CLI (no Z3, no full LLVM).
+# Links only LLVMSupport (for llvm::APInt). proveEquivalent is a no-op
+# because MBA_HAS_Z3 is not defined for this target.
+add_executable(mba_cli ${MBA_SOURCES} "MBA/mba_cli.cpp")
+target_include_directories(mba_cli PRIVATE "MBA" "include" "${CMAKE_CURRENT_SOURCE_DIR}")
+target_link_libraries(mba_cli LLVMSupport)
 
 # Header
 set_target_properties(LSiMBA++ PROPERTIES PUBLIC_HEADER "LLVMParser.h;include/splitmix64.h")
