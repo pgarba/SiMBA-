@@ -82,15 +82,17 @@ std::string normalizeForNativeTokenizer(const std::string &expr) {
 } // namespace
 
 bool fastCheckEquivalent(const std::string &orig, const std::string &simp,
-                         int bitCount, int numSamples) {
+                         int bitCount, int numSamples, bool quiet) {
   auto a = parse(orig, bitCount, true, false, false);
   if (a == nullptr) {
-    printf("[!] fast-check: could not parse '%s'\n", orig.c_str());
+    if (!quiet)
+      printf("[!] fast-check: could not parse '%s'\n", orig.c_str());
     return false;
   }
   auto b = parse(simp, bitCount, true, false, false);
   if (b == nullptr) {
-    printf("[!] fast-check: could not parse '%s'\n", simp.c_str());
+    if (!quiet)
+      printf("[!] fast-check: could not parse '%s'\n", simp.c_str());
     return false;
   }
 
@@ -110,11 +112,13 @@ bool fastCheckEquivalent(const std::string &orig, const std::string &simp,
     uint64_t r0 = a->eval(par);
     uint64_t r1 = b->eval(par);
     if (r0 != r1) {
-      printf("[!] fast-check counterexample for '%s' vs '%s': ", orig.c_str(),
-             simp.c_str());
-      for (int j = 0; j < vnum; ++j)
-        printf("%s=%llu ", vars[j].c_str(), (unsigned long long)par[j]);
-      printf("=> %llu != %llu\n", (unsigned long long)r0, (unsigned long long)r1);
+      if (!quiet) {
+        printf("[!] fast-check counterexample for '%s' vs '%s': ", orig.c_str(),
+               simp.c_str());
+        for (int j = 0; j < vnum; ++j)
+          printf("%s=%llu ", vars[j].c_str(), (unsigned long long)par[j]);
+        printf("=> %llu != %llu\n", (unsigned long long)r0, (unsigned long long)r1);
+      }
       return false;
     }
   }
@@ -141,8 +145,13 @@ bool proveEquivalent(const std::string &orig, const std::string &simp,
   std::vector<std::string> vars;
   enumerateUnion(a, b, vars);
 
-  std::string e0 = normalizeForNativeTokenizer(orig);
-  std::string e1 = normalizeForNativeTokenizer(simp);
+  // Use the parsed (desugared) forms so both sides reference the same
+  // variables. The raw original string may reference a plain variable (e.g.
+  // `a`) that does not appear in the desugared form (which uses the bit-slice
+  // variables `a[i]` introduced by the >>, /, % desugaring); feeding the raw
+  // string to the native Z3 tokenizer would then see an unknown variable.
+  std::string e0 = normalizeForNativeTokenizer(a->toString());
+  std::string e1 = normalizeForNativeTokenizer(b->toString());
   return proveReplacement(e0, e1, bitCount, vars);
 #endif
 }
