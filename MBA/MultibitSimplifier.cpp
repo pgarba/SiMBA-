@@ -13,6 +13,7 @@
 #include "LinearSimplifier.h"
 #include "MultibitRefiner.h"
 #include "Parser.h"
+#include "Verify.h"
 
 namespace LSiMBA {
 namespace MBA {
@@ -274,6 +275,24 @@ bool MultibitSimplifier::isLinearResultVector() const {
     }
   }
   return true;
+}
+
+// ================================================================ has bitwise ops
+
+bool MultibitSimplifier::hasBitwiseOps() const {
+  std::function<bool(const std::shared_ptr<Node> &)> check =
+      [&](const std::shared_ptr<Node> &node) -> bool {
+    if (node->type == NodeType::CONJUNCTION ||
+        node->type == NodeType::INCL_DISJUNCTION ||
+        node->type == NodeType::EXCL_DISJUNCTION ||
+        node->type == NodeType::NEGATION)
+      return true;
+    for (auto &child : node->children)
+      if (check(child))
+        return true;
+    return false;
+  };
+  return check(ast);
 }
 
 // ================================================================ subtract coeff
@@ -539,8 +558,13 @@ std::string MultibitSimplifier::simplify(const std::string &expr, int bitCount,
 
   solver.buildResultVector();
 
-  // Check if the expression is actually linear.
-  if (solver.isLinearResultVector()) {
+  // Check if the expression is actually linear (uniform result vector).
+  // Only delegate to the 1-bit SiMBA path if the expression has no bitwise
+  // operations (AND, OR, XOR, NOT). Bitwise ops with constants make the
+  // expression semi-linear, which the 1-bit path cannot handle correctly.
+  bool isLinear = solver.isLinearResultVector();
+  bool hasBitwise = solver.hasBitwiseOps();
+  if (isLinear && !hasBitwise) {
     // Delegate to the 1-bit SiMBA path.
     std::string result = simplifyLinearMba(expr, bitCount, false, false,
                                             modRed, true, -1,
@@ -553,12 +577,24 @@ std::string MultibitSimplifier::simplify(const std::string &expr, int bitCount,
   // Multi-bit path: find the initial linear combination.
   std::string result = solver.simplifyGeneric();
 
-  // Try the constant substitution + 1-bit SiMBA shortcut as a fallback.
-  std::string csResult = solver.simplifyViaConstantSubstitution(solver.ast);
-  if (!csResult.empty()) {
-    // Pick the shorter result.
-    if (csResult.size() < result.size())
-      result = csResult;
+  // Try the constant substitution + 1-bit SiMBA shortcut on the SOLUTION.
+  // Parse the solution back to an AST, substitute constants, run 1-bit SiMBA,
+  // then back-substitute.
+  if (!result.empty()) {
+    Parser solParser(result, bitCount, modRed);
+    auto solAst = solParser.parseExpression();
+    if (solAst) {
+      std::string csResult = solver.simplifyViaConstantSubstitution(solAst);
+      if (!csResult.empty() && csResult.size() < result.size())
+        result = csResult;
+    }
+  }
+
+  // Verification gate: fast-check the result against the input.
+  // If the result is not equivalent, reject it (return empty = failure).
+  if (!result.empty() && result != expr) {
+    if (!fastCheckEquivalent(expr, result, bitCount))
+      return "";
   }
 
   return result;
