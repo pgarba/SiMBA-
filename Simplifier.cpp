@@ -344,6 +344,46 @@ bool Simplifier::probably_equivalent(std::string &expr0, std::string &expr1) {
   }
 
   llvm::SmallVector<APInt, 16> par;
+
+  // Structured corner samples first (deterministic, no RNG): these hit the
+  // edges of the input space that random sampling often misses (overflow /
+  // sign-bit boundaries), at negligible cost. A mismatch here is a definite
+  // counterexample, so we can bail immediately.
+  auto checkSample = [&](llvm::SmallVector<APInt, 16> &s) -> bool {
+    return f(expr0, s) == f(expr1_replVar, s);
+  };
+  auto makeSample = [&](uint64_t fill, int hot, uint64_t hotVal) {
+    llvm::SmallVector<APInt, 16> s;
+    s.reserve(this->vnumber);
+    for (int j = 0; j < this->vnumber; j++) {
+      uint64_t v = (j == hot) ? hotVal : fill;
+      s.push_back(APInt(this->modulus.getBitWidth(), v)
+                      .urem(this->modulus)
+                      .zextOrTrunc(bitCount));
+    }
+    return s;
+  };
+  const uint64_t allOnes = (this->modulus - 1).getZExtValue();
+  // all-zeros, all-ones
+  {
+    auto s = makeSample(0, -1, 0);
+    if (!checkSample(s))
+      return false;
+    s = makeSample(allOnes, -1, allOnes);
+    if (!checkSample(s))
+      return false;
+  }
+  // unit vectors: one variable = 1 (or all-ones), rest 0
+  for (int j = 0; j < this->vnumber; j++) {
+    auto s = makeSample(0, j, 1);
+    if (!checkSample(s))
+      return false;
+    s = makeSample(0, j, allOnes);
+    if (!checkSample(s))
+      return false;
+  }
+
+  // Then the random samples.
   for (int i = 0; i < NUM_TEST_CASES; i++) {
     par.clear();
     for (int j = 0; j < this->vnumber; j++) {
@@ -409,6 +449,43 @@ bool Simplifier::probably_equivalent_parallel(std::string &expr0,
   std::string expr1_replVar = expr1;
   for (int i = 0; i < this->vnumber; i++) {
     replace_all(expr1_replVar, this->originalVariables[i], this->get_vname(i));
+  }
+
+  // Structured corner samples first (deterministic, serial): same edges as the
+  // serial path. A mismatch is a definite counterexample, so bail before
+  // spawning any threads.
+  {
+    auto checkSample = [&](llvm::SmallVector<APInt, 16> &s) -> bool {
+      return f(expr0, s) == f(expr1_replVar, s);
+    };
+    auto makeSample = [&](uint64_t fill, int hot, uint64_t hotVal) {
+      llvm::SmallVector<APInt, 16> s;
+      s.reserve(this->vnumber);
+      for (int j = 0; j < this->vnumber; j++) {
+        uint64_t v = (j == hot) ? hotVal : fill;
+        s.push_back(APInt(this->modulus.getBitWidth(), v)
+                        .urem(this->modulus)
+                        .zextOrTrunc(bitCount));
+      }
+      return s;
+    };
+    const uint64_t allOnes = (this->modulus - 1).getZExtValue();
+    {
+      auto s = makeSample(0, -1, 0);
+      if (!checkSample(s))
+        return false;
+      s = makeSample(allOnes, -1, allOnes);
+      if (!checkSample(s))
+        return false;
+    }
+    for (int j = 0; j < this->vnumber; j++) {
+      auto s = makeSample(0, j, 1);
+      if (!checkSample(s))
+        return false;
+      s = makeSample(0, j, allOnes);
+      if (!checkSample(s))
+        return false;
+    }
   }
 
   int CurThreadCount = 0;
