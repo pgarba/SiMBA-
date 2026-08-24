@@ -669,13 +669,6 @@ std::string MultibitSimplifier::simplifyGeneric() {
         break;
       }
     }
-    if (getenv("MSIMBA_DEBUG")) {
-      fprintf(stderr, "  [dbg] hasProduct=%d vars=", hasProduct);
-      for (auto &v : variables) fprintf(stderr, "%s ", v.c_str());
-      fprintf(stderr, " terms(%zu)=", terms.size());
-      for (auto &t : terms) fprintf(stderr, "%s(%d) ", t->toString().c_str(), (int)t->type);
-      fprintf(stderr, "\n");
-    }
     if (hasProduct) {
       terms.insert(terms.begin(), constNode); // constant first
     } else {
