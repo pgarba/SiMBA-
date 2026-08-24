@@ -1,6 +1,6 @@
 # MSiMBA 100% Ground-Truth Match Plan
 
-## ✅ FINAL RESULT: 99.99% (18,998/19,000)
+## ✅ FINAL RESULT: 100% (19,000/19,000)
 
 | File | Match | Status |
 |------|-------|--------|
@@ -12,8 +12,8 @@
 | e2_2vars | 1000/1000 | ✅ |
 | e2_3vars | 1000/1000 | ✅ |
 | e2_4vars | 1000/1000 | ✅ |
-| e3_2vars | 999/1000 | ⚠️ 1 unsimplified (1-bit int overflow) |
-| e3_3vars | 999/1000 | ⚠️ 1 unsimplified (1-bit int overflow) |
+| e3_2vars | 1000/1000 | ✅ |
+| e3_3vars | 1000/1000 | ✅ |
 | e3_4vars | 1000/1000 | ✅ |
 | e4_2vars | 1000/1000 | ✅ |
 | e4_3vars | 1000/1000 | ✅ |
@@ -22,37 +22,35 @@
 | e5_3vars | 1000/1000 | ✅ |
 | e5_4vars | 1000/1000 | ✅ |
 
-**Total**: 18,998/19,000 = **99.99%** (0 wrong, 2 unsimplified)
+**Total**: 19,000/19,000 = **100%** (0 wrong, 0 unsimplified)
 
 ## Completed (all phases)
 
 - [x] Phase 1: Formatting — GT term ordering rule (products → const-first, x/v0 present → var-first) + alphabetical term sort
 - [x] Phase 2: Normalization (`-c + (-c*x)` → `c*~x`) — e5_* now 100%
 - [x] Phase 3: XOR handling — top-bit normalization, constant offset update, 3-term XOR pattern matcher, alphabetical XOR operand order
-- [x] Phase 4: Verification gate on linear (1-bit) path — catches 2 wrong 1-bit results
+- [x] Phase 4: Verification gate on linear (1-bit) path
 - [x] Phase 5: Integration into SimplifierRouter (--simplifier=msimba + auto-detect)
+- [x] Phase 6: int64_t fix for 1-bit LinearSimplifier + BitwiseFactory — e3_* now 100%
 
-## The 2 Remaining Mismatches (e3_2/3vars)
+## The e3_* int32 Overflow (FIXED)
 
 **Root cause**: int32 overflow in the native 1-bit `LinearSimplifier`.
 
-The `resultVector` is a `std::vector<int>` (32-bit). For 64-bit expressions,
+The `resultVector` was a `std::vector<int>` (32-bit). For 64-bit expressions,
 `tree->eval(par)` can return values up to 2^64-1, which overflow `int` when
 cast via `static_cast<int>` at `LinearSimplifier.cpp:110`.
 
 Example: coefficient `0xFFFFFFFF` (4294967295) + constant 49374 = 4295016669,
-which wraps to 49373 as int32. The solver then produces a wrong coefficient.
+which wrapped to 49373 as int32. The solver then produced a wrong coefficient.
 
-**Why it only affects 2 expressions**: the overflow only occurs when the
+**Why it only affected 2 expressions**: the overflow only occurs when the
 coefficient + constant exceeds INT_MAX (2147483647). Most MSiMBA coefficients
 are small enough to avoid this.
 
-**Fix (deferred)**: change `resultVector` and `BitwiseFactory` from `int` to
-`int64_t` throughout. This is a deep refactor of the native 1-bit solver.
-
-**Current behavior**: the verification gate (fast-check) correctly rejects the
-wrong results, so the 2 expressions are left unsimplified. This is the correct
-behavior — better to not simplify than to produce a wrong result.
+**Fix**: changed `resultVector`, `BitwiseFactory`, and related local variables
+from `int` to `int64_t` throughout. The `Dnf` class only sees binary values
+(0/1) via `getBitwiseVector`, so it stays with `int`.
 
 ## Remaining Work
 

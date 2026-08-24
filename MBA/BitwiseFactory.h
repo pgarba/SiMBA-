@@ -15,8 +15,9 @@ class BitwiseFactory {
                  bool noTable = false);
 
   // Creates the bitwise expression for the given truth value vector.
-  std::string createBitwise(std::vector<int> vector, bool negated = false,
-                            int offset = 0);
+  // Values are int64_t: 64-bit expression values overflow int32.
+  std::string createBitwise(std::vector<int64_t> vector, bool negated = false,
+                            int64_t offset = 0);
 
  private:
   int vnumber;
@@ -32,11 +33,15 @@ class BitwiseFactory {
   void initTable2vars();
   void initTable3vars();
   std::string createBitwiseImpl(const std::vector<int> &vector);
-  std::vector<int> getBitwiseVector(const std::vector<int> &vector, int offset) const;
-  int getBitwiseIndexForVector(const std::vector<int> &vector, int offset) const;
-  std::string getBitwiseFromTable(const std::vector<int> &vector, int offset);
-  std::string createBitwiseWithOffset(const std::vector<int> &vector, int offset);
-  std::string createBitwiseUnnegated(const std::vector<int> &vector, int offset = 0);
+  std::vector<int> getBitwiseVector(const std::vector<int64_t> &vector,
+                                    int64_t offset) const;
+  int getBitwiseIndexForVector(const std::vector<int64_t> &vector,
+                               int64_t offset) const;
+  std::string getBitwiseFromTable(const std::vector<int64_t> &vector, int64_t offset);
+  std::string createBitwiseWithOffset(const std::vector<int64_t> &vector,
+                                      int64_t offset);
+  std::string createBitwiseUnnegated(const std::vector<int64_t> &vector,
+                                     int64_t offset = 0);
 };
 
 } // namespace MBA

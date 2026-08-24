@@ -57,16 +57,16 @@ std::string BitwiseFactory::createBitwiseImpl(const std::vector<int> &vector) {
   return s;
 }
 
-std::vector<int> BitwiseFactory::getBitwiseVector(const std::vector<int> &vector,
-                                                 int offset) const {
+std::vector<int> BitwiseFactory::getBitwiseVector(const std::vector<int64_t> &vector,
+                                                 int64_t offset) const {
   std::vector<int> out;
-  for (int v : vector)
+  for (int64_t v : vector)
     out.push_back(v == offset ? 0 : 1);
   return out;
 }
 
-int BitwiseFactory::getBitwiseIndexForVector(const std::vector<int> &vector,
-                                            int offset) const {
+int BitwiseFactory::getBitwiseIndexForVector(const std::vector<int64_t> &vector,
+                                            int64_t offset) const {
   int index = 0;
   int add = 1;
   for (size_t i = 0; i + 1 < vector.size(); ++i) {
@@ -77,8 +77,8 @@ int BitwiseFactory::getBitwiseIndexForVector(const std::vector<int> &vector,
   return index;
 }
 
-std::string BitwiseFactory::getBitwiseFromTable(const std::vector<int> &vector,
-                                               int offset) {
+std::string BitwiseFactory::getBitwiseFromTable(const std::vector<int64_t> &vector,
+                                               int64_t offset) {
   if (!tableInit) {
     initTable();
     tableInit = true;
@@ -101,21 +101,21 @@ std::string BitwiseFactory::getBitwiseFromTable(const std::vector<int> &vector,
   return bitwise;
 }
 
-std::string BitwiseFactory::createBitwiseWithOffset(const std::vector<int> &vector,
-                                                  int offset) {
+std::string BitwiseFactory::createBitwiseWithOffset(const std::vector<int64_t> &vector,
+                                                  int64_t offset) {
   auto v = getBitwiseVector(vector, offset);
   return createBitwiseImpl(v);
 }
 
-std::string BitwiseFactory::createBitwiseUnnegated(const std::vector<int> &vector,
-                                                  int offset) {
+std::string BitwiseFactory::createBitwiseUnnegated(const std::vector<int64_t> &vector,
+                                                  int64_t offset) {
   if (!noTable && vnumber <= 3)
     return getBitwiseFromTable(vector, offset);
   return createBitwiseWithOffset(vector, offset);
 }
 
-std::string BitwiseFactory::createBitwise(std::vector<int> vector, bool negated,
-                                         int offset) {
+std::string BitwiseFactory::createBitwise(std::vector<int64_t> vector, bool negated,
+                                         int64_t offset) {
   if (!noTable && vnumber <= 3 && vector[0] != offset) {
     for (size_t i = 0; i < vector.size(); ++i)
       vector[i] = offset + (vector[i] - offset + 1) % 2;

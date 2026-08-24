@@ -63,7 +63,7 @@ class LinearSimplifier {
   std::shared_ptr<Node> tree;
   int vnumber = 0;
   std::shared_ptr<BitwiseFactory> bitwiseFactory;
-  std::vector<int> resultVector;
+  std::vector<int64_t> resultVector; // int64_t: 64-bit values overflow int32
   std::string res;
   std::vector<int> compl;
   int lincombTerms = -1;
@@ -85,8 +85,8 @@ class LinearSimplifier {
   void checkSolutionComplexity(const std::string &e, int t = -1, int64_t constant = -1);
   int getTermCountOfCurrentSolution() const;
   std::string getBitwiseExpression(int offset = 0);
-  std::string getBitwiseForVector(const std::vector<int> &vector, int offset = 0);
-  std::string getNegatedBitwiseForVector(const std::vector<int> &vector);
+  std::string getBitwiseForVector(const std::vector<int64_t> &vector, int64_t offset = 0);
+  std::string getNegatedBitwiseForVector(const std::vector<int64_t> &vector);
   bool isSumModulo(int64_t s1, int64_t s2, int64_t a) const;
   bool isDoubleModulo(int64_t a, int64_t b) const;
   std::string term(const std::string &bitwise, int64_t coeff, bool first);
@@ -100,7 +100,7 @@ class LinearSimplifier {
   int64_t reduceByConstant();
   void findTwoExpressionsByTwoValues();
   std::vector<std::vector<Decision>> getDecisionVector(int64_t coeff1, int64_t coeff2,
-                                                      const std::vector<int> *vec = nullptr) const;
+                                                      const std::vector<int64_t> *vec = nullptr) const;
   bool mustSplit(const std::vector<std::vector<Decision>> &d) const;
   std::vector<std::vector<std::vector<Decision>>> split(
       std::vector<std::vector<Decision>> d);
@@ -108,7 +108,7 @@ class LinearSimplifier {
                                  const std::vector<std::vector<Decision>> &caseVec,
                                  bool secNegated);
   void determineCombOfTwo(int64_t coeff1, int64_t coeff2,
-                          const std::vector<int> *vec = nullptr, bool secNegated = false);
+                          const std::vector<int64_t> *vec = nullptr, bool secNegated = false);
   void tryFindNegatedAndUnnegatedExpression();
   void tryFindTwoNegatedExpressions();
   std::string addConstant(const std::string &expr, int64_t constant);
