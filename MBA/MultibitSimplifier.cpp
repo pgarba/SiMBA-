@@ -486,10 +486,11 @@ std::string MultibitSimplifier::simplifyGeneric() {
       continue;
     }
 
-    // Try to isolate a single variable (disabled — produces incorrect
-    // results for e1_*/e3_*/e5_* expressions).
+    // Try to isolate a single variable (disabled — the C++ port's
+    // tryIsolateVariable produces incorrect results for e1_*/e3_*/e5_*).
+    // The C# reference's TryIsolateSingleVariableConjunction is more
+    // sophisticated and requires a full port to enable safely.
     // uint64_t varCoeff = refiner.tryIsolateVariable(constantOffset, coeffToMask);
-    // if (varCoeff != 0) { ... }
 
     // Build terms for each (coeff, mask) pair.
     auto conj = conjunctionFromVarMask(variableCombinations[i]);
