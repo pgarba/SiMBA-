@@ -643,9 +643,40 @@ std::string MultibitSimplifier::simplifyGeneric() {
     }
   }
 
-  // Add the (possibly updated) constant offset FIRST (matching GT format).
+  // Add the (possibly updated) constant offset.
+  // GT rule: if any term is a PRODUCT (coeff != 1), constant comes first.
+  // If all terms are simple variables (coeff == 1), variable comes first
+  // when 'x' is present, constant first when only 'y'.
   if (constantOffset != 0) {
-    terms.insert(terms.begin(), ast->newConstantNode(static_cast<int64_t>(constantOffset)));
+    auto constNode = ast->newConstantNode(static_cast<int64_t>(constantOffset));
+    bool hasProduct = false;
+    for (auto &t : terms) {
+      if (t->type == NodeType::PRODUCT) {
+        hasProduct = true;
+        break;
+      }
+    }
+    if (getenv("MSIMBA_DEBUG")) {
+      fprintf(stderr, "  [dbg] hasProduct=%d vars=", hasProduct);
+      for (auto &v : variables) fprintf(stderr, "%s ", v.c_str());
+      fprintf(stderr, " terms(%zu)=", terms.size());
+      for (auto &t : terms) fprintf(stderr, "%s(%d) ", t->toString().c_str(), (int)t->type);
+      fprintf(stderr, "\n");
+    }
+    if (hasProduct) {
+      terms.insert(terms.begin(), constNode); // constant first
+    } else {
+      // Check if the expression contains the "primary" variable.
+      // Primary = 'x' for single-letter vars, 'v0' for vN vars.
+      bool hasPrimary =
+          std::find(variables.begin(), variables.end(), "x") != variables.end() ||
+          std::find(variables.begin(), variables.end(), "v0") != variables.end();
+      if (hasPrimary) {
+        terms.push_back(constNode); // variable first
+      } else {
+        terms.insert(terms.begin(), constNode); // constant first
+      }
+    }
   }
 
   if (terms.empty())
