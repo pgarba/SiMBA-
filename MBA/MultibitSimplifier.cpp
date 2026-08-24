@@ -438,11 +438,10 @@ std::string MultibitSimplifier::simplifyGeneric() {
   }
 
   // Build the expression from the linear combinations, using the refiner.
+  // The constant offset is updated by XOR recovery (matching the C# reference).
   MultibitRefiner refiner(bitCount, moduloMask);
   std::vector<std::shared_ptr<Node>> terms;
-  if (constant != 0) {
-    terms.push_back(ast->newConstantNode(static_cast<int64_t>(constant)));
-  }
+  uint64_t constantOffset = constant;
 
   for (size_t i = 0; i < linearCombinations.size(); i++) {
     auto &entries = linearCombinations[i];
@@ -452,16 +451,18 @@ std::string MultibitSimplifier::simplifyGeneric() {
     // Use the refiner to simplify the linear combination.
     auto coeffToMask = refiner.simplifyEntry(entries);
 
-    // Try to recover an XOR.
-    auto *xorResult = refiner.trySimplifyXor(constant, coeffToMask);
+    // Try to recover an XOR (updates constantOffset).
+    auto *xorResult = refiner.trySimplifyXor(constantOffset, coeffToMask);
     if (xorResult) {
+      constantOffset = xorResult->adjustedConstant;
       // XOR term: coeff * (xorMask ^ conj)
       auto conj = conjunctionFromVarMask(variableCombinations[i]);
       if (conj) {
         auto xorNode = ast->newNode(NodeType::EXCL_DISJUNCTION);
         auto maskNode = ast->newConstantNode(static_cast<int64_t>(xorResult->xorMask));
-        xorNode->children.push_back(maskNode);
+        // Variable first, constant second (matching GT format: x^C).
         xorNode->children.push_back(conj);
+        xorNode->children.push_back(maskNode);
         if (xorResult->coeff != 1) {
           auto mulNode = ast->newNode(NodeType::PRODUCT);
           auto constNode = ast->newConstantNode(static_cast<int64_t>(xorResult->coeff));
@@ -475,24 +476,10 @@ std::string MultibitSimplifier::simplifyGeneric() {
       continue;
     }
 
-    // Try to isolate a single variable (disabled for now — produces
-    // incorrect results in the multi-bit case).
-    // uint64_t varCoeff = refiner.tryIsolateVariable(constant, coeffToMask);
-    // if (varCoeff != 0) {
-    //   auto conj = conjunctionFromVarMask(variableCombinations[i]);
-    //   if (conj) {
-    //     if (varCoeff == 1) {
-    //       terms.push_back(conj);
-    //     } else {
-    //       auto mulNode = ast->newNode(NodeType::PRODUCT);
-    //       auto constNode = ast->newConstantNode(static_cast<int64_t>(varCoeff));
-    //       mulNode->children.push_back(constNode);
-    //       mulNode->children.push_back(conj);
-    //       terms.push_back(mulNode);
-    //     }
-    //   }
-    //   continue;
-    // }
+    // Try to isolate a single variable (disabled — produces incorrect
+    // results for e1_*/e3_*/e5_* expressions).
+    // uint64_t varCoeff = refiner.tryIsolateVariable(constantOffset, coeffToMask);
+    // if (varCoeff != 0) { ... }
 
     // Build terms for each (coeff, mask) pair.
     auto conj = conjunctionFromVarMask(variableCombinations[i]);
@@ -504,6 +491,11 @@ std::string MultibitSimplifier::simplifyGeneric() {
         continue;
       terms.push_back(term(conj, coeff, mask));
     }
+  }
+
+  // Add the (possibly updated) constant offset FIRST (matching GT format).
+  if (constantOffset != 0) {
+    terms.insert(terms.begin(), ast->newConstantNode(static_cast<int64_t>(constantOffset)));
   }
 
   if (terms.empty())
