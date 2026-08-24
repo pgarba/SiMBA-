@@ -140,35 +140,55 @@ MultibitRefiner::trySimplifyXor(uint64_t constantOffset,
       keys.push_back(c);
   std::sort(keys.begin(), keys.end(), std::greater<uint64_t>());
 
+  // Try two types of inverse pairs:
+  // 1. Negation: coeffA and -coeffA (for x^C, XOR with constant)
+  // 2. XOR-with-1: coeffA and coeffA^1 (for x^y, XOR of two variables)
   for (auto coeffA : keys) {
     uint64_t maskA = coeffToMask[coeffA];
-    uint64_t inverse = moduloMask & (moduloMask * coeffA); // -coeffA (matches our coeffToMask)
-    if (inverse == coeffA)
-      continue;
-    auto it = coeffToMask.find(inverse);
-    if (it == coeffToMask.end())
-      continue;
-    uint64_t maskB = it->second;
-
-    // Check if maskB can be changed to ~maskA.
-    uint64_t negatedMask = moduloMask & ~maskA;
-    if (!canChangeMaskTo(inverse, maskB, negatedMask))
+    if (maskA == 0)
       continue;
 
-    // Found an XOR.
-    uint64_t multiplied = moduloMask & (inverse * maskA);
-    uint64_t adjustedConstant = moduloMask & (constantOffset - multiplied);
+    // Try negation pair first (x^C case).
+    uint64_t inverse = moduloMask & (moduloMask * coeffA); // -coeffA
+    if (inverse != coeffA) {
+      auto it = coeffToMask.find(inverse);
+      if (it != coeffToMask.end()) {
+        uint64_t maskB = it->second;
+        uint64_t negatedMask = moduloMask & ~maskA;
+        if (canChangeMaskTo(inverse, maskB, negatedMask)) {
+          uint64_t multiplied = moduloMask & (inverse * maskA);
+          uint64_t adjustedConstant = moduloMask & (constantOffset - multiplied);
+          coeffToMask.erase(coeffA);
+          coeffToMask.erase(inverse);
+          static XorResult result;
+          result.adjustedConstant = adjustedConstant;
+          result.coeff = inverse;
+          result.xorMask = maskA;
+          return &result;
+        }
+      }
+    }
 
-    // Remove both terms.
-    coeffToMask.erase(coeffA);
-    coeffToMask.erase(inverse);
-
-    // Return the XOR result.
-    static XorResult result;
-    result.adjustedConstant = adjustedConstant;
-    result.coeff = inverse;
-    result.xorMask = maskA;
-    return &result;
+    // Try XOR-with-1 pair (x^y case).
+    uint64_t xorInv = moduloMask & (coeffA ^ 1);
+    if (xorInv != coeffA) {
+      auto it = coeffToMask.find(xorInv);
+      if (it != coeffToMask.end()) {
+        uint64_t maskB = it->second;
+        uint64_t negatedMask = moduloMask & ~maskA;
+        if (canChangeMaskTo(xorInv, maskB, negatedMask)) {
+          uint64_t multiplied = moduloMask & (xorInv * maskA);
+          uint64_t adjustedConstant = moduloMask & (constantOffset - multiplied);
+          coeffToMask.erase(coeffA);
+          coeffToMask.erase(xorInv);
+          static XorResult result;
+          result.adjustedConstant = adjustedConstant;
+          result.coeff = xorInv;
+          result.xorMask = maskA;
+          return &result;
+        }
+      }
+    }
   }
   return nullptr;
 }
