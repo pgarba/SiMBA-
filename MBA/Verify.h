@@ -22,7 +22,7 @@ namespace MBA {
 // false on the first mismatch; returns false if either expression fails
 // to parse.
 bool fastCheckEquivalent(const std::string &orig, const std::string &simp,
-                         int bitCount, int numSamples = 100);
+                         int bitCount, int numSamples = 100, bool quiet = false);
 
 // Prove orig == simp with Z3 (bitCount-bit modular semantics). Returns
 // true if proved, false otherwise (unknown, parse failure, or the Z3

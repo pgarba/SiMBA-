@@ -61,6 +61,9 @@ private:
   // Check if the AST contains bitwise operations (AND, OR, XOR, NOT).
   bool hasBitwiseOps() const;
 
+  // Check if the AST contains XOR with a constant (not handled by multi-bit).
+  bool hasXorWithConstant() const;
+
   // Find an initial linear combination of conjunctions.
   std::string simplifyGeneric();
 
@@ -92,6 +95,10 @@ private:
 
   // Cost metric: string length.
   static int cost(const std::string &expr);
+
+  // Normalize: convert a + b*x (where a == -b mod 2^N) to b*~x.
+  static std::shared_ptr<Node> normalizeNegatedSum(const std::shared_ptr<Node> &node,
+                                                    uint64_t moduloMask);
 };
 
 } // namespace MBA

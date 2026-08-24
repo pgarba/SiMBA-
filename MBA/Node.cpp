@@ -122,6 +122,19 @@ string Node::toString(bool withParentheses, int end,
     return ret;
   }
 
+  // Tier 2 first-class operator nodes (exact unsigned semantics).
+  if (type == NodeType::RSHIFT || type == NodeType::UDIV || type == NodeType::UREM) {
+    const char *op = (type == NodeType::RSHIFT) ? ">>" : (type == NodeType::UDIV ? "/" : "%");
+    auto child1 = children[0];
+    string ret =
+        child1->toString(ChildNeedsParens(child1->type, type), -1, varNames) +
+        op +
+        children[1]->toString(ChildNeedsParens(children[1]->type, type), -1, varNames);
+    if (withParentheses)
+      ret = "(" + ret + ")";
+    return ret;
+  }
+
   return "<invalid>";
 }
 
@@ -215,6 +228,13 @@ uint64_t Node::applyBinop(uint64_t x, uint64_t y) {
     return x ^ y;
   if (type == NodeType::INCL_DISJUNCTION)
     return x | y;
+  // Tier 2 first-class operator nodes (exact unsigned semantics, mod 2^B).
+  if (type == NodeType::RSHIFT)
+    return y >= static_cast<std::uint64_t>(bitCount) ? 0 : x >> y;
+  if (type == NodeType::UDIV)
+    return y == 0 ? 0 : x / y;
+  if (type == NodeType::UREM)
+    return y == 0 ? 0 : x % y;
   return 0;
 }
 
@@ -238,7 +258,8 @@ bool Node::isBitwiseBinop() const {
 }
 
 bool Node::isArithmOp() const {
-  return type == NodeType::SUM || type == NodeType::PRODUCT || type == NodeType::POWER;
+  return type == NodeType::SUM || type == NodeType::PRODUCT || type == NodeType::POWER ||
+         type == NodeType::RSHIFT || type == NodeType::UDIV || type == NodeType::UREM;
 }
 
 // Mirrors node.py Node.__lt__.
@@ -402,6 +423,8 @@ void Node::markLinear(bool restrictedScope) {
     markLinearProduct();
   else if (type == NodeType::POWER)
     markLinearPower();
+  else if (type == NodeType::RSHIFT || type == NodeType::UDIV || type == NodeType::UREM)
+    state = NodeState::NONLINEAR; // opaque leaf for the general simplifier
   else if (type == NodeType::VARIABLE)
     markLinearVariable();
   else if (type == NodeType::CONSTANT)
@@ -595,6 +618,10 @@ void Node::sort() {
 
 void Node::reorderVariables() {
   if (typeRank(type) < typeRank(NodeType::PRODUCT))
+    return;
+  // The Tier 2 first-class operator nodes (>> / / %) are not commutative:
+  // never reorder their children (a / b != b / a).
+  if (type == NodeType::RSHIFT || type == NodeType::UDIV || type == NodeType::UREM)
     return;
   if (children.size() <= 1)
     return;

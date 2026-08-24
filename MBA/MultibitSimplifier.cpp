@@ -10,6 +10,7 @@
 #include <unordered_set>
 
 #include "ConstantSubstituter.h"
+#include "GeneralSimplifier.h"
 #include "LinearSimplifier.h"
 #include "MultibitRefiner.h"
 #include "Parser.h"
@@ -295,6 +296,23 @@ bool MultibitSimplifier::hasBitwiseOps() const {
   return check(ast);
 }
 
+bool MultibitSimplifier::hasXorWithConstant() const {
+  std::function<bool(const std::shared_ptr<Node> &)> check =
+      [&](const std::shared_ptr<Node> &node) -> bool {
+    if (node->type == NodeType::EXCL_DISJUNCTION) {
+      // Check if any child is a constant.
+      for (auto &child : node->children)
+        if (child->type == NodeType::CONSTANT)
+          return true;
+    }
+    for (auto &child : node->children)
+      if (check(child))
+        return true;
+    return false;
+  };
+  return check(ast);
+}
+
 // ================================================================ subtract coeff
 
 void MultibitSimplifier::subtractCoeff(uint64_t coeff, int firstStart, int width,
@@ -548,6 +566,58 @@ std::string MultibitSimplifier::simplifyViaConstantSubstitution(
   return result->toString();
 }
 
+// ================================================================ normalization
+
+std::shared_ptr<Node> MultibitSimplifier::normalizeNegatedSum(
+    const std::shared_ptr<Node> &node, uint64_t moduloMask) {
+  // Pattern: a + b*x where a == -b (mod 2^N)  =>  b*~x
+  // The SUM must have exactly 2 children: one constant, one product (const * var).
+  if (node->type != NodeType::SUM || node->children.size() != 2)
+    return node;
+
+  // Identify which child is the constant and which is the product.
+  std::shared_ptr<Node> constChild, prodChild;
+  for (auto &child : node->children) {
+    if (child->type == NodeType::CONSTANT)
+      constChild = child;
+    else if (child->type == NodeType::PRODUCT && child->children.size() == 2)
+      prodChild = child;
+  }
+  if (!constChild || !prodChild)
+    return node;
+
+  // The product must be: constant * variable (or variable * constant).
+  std::shared_ptr<Node> prodConst, prodVar;
+  for (auto &child : prodChild->children) {
+    if (child->type == NodeType::CONSTANT)
+      prodConst = child;
+    else if (child->type == NodeType::VARIABLE)
+      prodVar = child;
+  }
+  if (!prodConst || !prodVar)
+    return node;
+
+  // Check: constChild == prodConst (mod 2^N), i.e. -c + (-c*x) pattern.
+  // In this case, -c + (-c*x) = c*~x.
+  uint64_t a = constChild->constant.getZExtValue() & moduloMask;
+  uint64_t b = prodConst->constant.getZExtValue() & moduloMask;
+  if (a != b)
+    return node;
+  // The result coefficient is -b (mod 2^N), since -c + (-c*x) = c*~x
+  // where c = -b.
+  uint64_t c = (moduloMask + 1 - b) & moduloMask; // c = -b mod 2^N
+
+  // Build: c * ~x  (where c = -b mod 2^N)
+  auto negNode = std::make_shared<Node>(NodeType::NEGATION, node->bitCount);
+  negNode->children.push_back(prodVar);
+  auto cNode = std::make_shared<Node>(NodeType::CONSTANT, node->bitCount);
+  cNode->constant = MBAOps::fromSigned(static_cast<int64_t>(c));
+  auto result = std::make_shared<Node>(NodeType::PRODUCT, node->bitCount);
+  result->children.push_back(cNode);
+  result->children.push_back(negNode);
+  return result;
+}
+
 // ================================================================ main entry
 
 std::string MultibitSimplifier::simplify(const std::string &expr, int bitCount,
@@ -591,10 +661,25 @@ std::string MultibitSimplifier::simplify(const std::string &expr, int bitCount,
   }
 
   // Verification gate: fast-check the result against the input.
-  // If the result is not equivalent, reject it (return empty = failure).
+  // If the result is not equivalent, reject it.
   if (!result.empty() && result != expr) {
-    if (!fastCheckEquivalent(expr, result, bitCount))
+    if (!fastCheckEquivalent(expr, result, bitCount, 100, true))
       return "";
+  }
+
+  // Normalization: convert a + b*x (where a == -b) to b*~x.
+  if (!result.empty()) {
+    Parser normParser(result, bitCount, modRed);
+    auto normAst = normParser.parseExpression();
+    if (normAst) {
+      uint64_t mask = (bitCount >= 64) ? ~0ULL : ((1ULL << bitCount) - 1);
+      auto normalized = normalizeNegatedSum(normAst, mask);
+      if (normalized != normAst) {
+        std::string normStr = normalized->toString();
+        if (fastCheckEquivalent(expr, normStr, bitCount, 100, true))
+          result = normStr;
+      }
+    }
   }
 
   return result;
