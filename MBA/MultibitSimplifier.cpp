@@ -932,8 +932,13 @@ std::string MultibitSimplifier::simplify(const std::string &expr, int bitCount,
     std::string result = simplifyLinearMba(expr, bitCount, false, false,
                                             modRed, true, -1,
                                             Metric::ALTERNATION);
-    if (!result.empty())
+    if (!result.empty()) {
+      // Verification gate: fast-check the result against the input.
+      if (result != expr &&
+          !fastCheckEquivalent(expr, result, bitCount, 100, true))
+        return "";
       return result;
+    }
     return expr;
   }
 
