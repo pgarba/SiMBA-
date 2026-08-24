@@ -37,27 +37,38 @@
 - **All results are equivalent** (verified by fast-check) — purely a
   formatting/normalization issue.
 
-### Next steps (to reach 100%):
-1. **Port `TryIsolateSingleVariableConjunction`** from C# reference
-   (658 lines in MultibitRefiner.cs). This is the key function that
-   produces the exact form the GT uses. Requires porting:
-   - `TryRemoveNegatedDoubleSum`
-   - `TryExpressAsSingleBitwiseSum`
-   - `CanChangeSumMaskAndCoefficients`
-   Estimated: 4-8 hours.
+### Debugging findings (this session):
 
-2. **Re-enable variable isolation** with the correct C# implementation.
-   The current `tryIsolateVariable` is too simple and causes regression.
-   The C# version is more sophisticated and should not cause regression.
+1. **Dangling reference bug** (FIXED): `tryIsolateVariable` used a
+   structured binding reference to the map entry, then cleared the map,
+   then returned the dangling reference. This was undefined behavior
+   producing random coefficients — the root cause of the 0% regression.
 
-3. **Verify all file groups reach 100%** after the port.
+2. **XOR inverse calculation**: Our `coeffToMask` has negation pairs
+   (`c` and `-c`), not XOR-with-1 pairs (`c` and `c^1`). The C# reference
+   uses `c^1` because its native `SimplifyDisjointSumMultiply` produces
+   a different dictionary. We must use `-c` to match our dictionary.
 
-### Blocked on:
-- The C# reference's `TryIsolateSingleVariableConjunction` function is
-  the key to matching the GT. Without it, the XOR recovery produces a
-  different (but equivalent) form than the GT.
-- The function is 658 lines in the C# reference and requires porting
-  several helper functions.
+3. **Isolation gating**: Isolation is now gated on `!hasBitwiseOps_`.
+   XOR expressions have negation pairs in `coeffToMask`, and isolation
+   produces incorrect results for these expressions.
+
+### Remaining gap (81.6% → 100%):
+
+**e4_* (75-83% unmatched)**: The C# reference's native
+`SimplifyDisjointSumMultiply` produces a `coeffToMask` with XOR-with-1
+pairs. Our C++ port produces negation pairs. The XOR recovery works
+with negation pairs, but the resulting form doesn't match the GT.
+To fix: either port the native function exactly, or add a post-
+processing step that converts the negation-pair form to the GT form.
+
+**e1_* (43-50% unmatched)**: The GT has inconsistent term ordering
+(50% variable-first, 50% constant-first). Unfixable without access
+to the GT generation algorithm.
+
+### Realistic ceiling:
+- **With e4_* fix**: ~90-95% (e1_* term order remains)
+- **With e1_* fix**: ~100% (if GT ordering rule is discovered)
 
 ## Problem
 
