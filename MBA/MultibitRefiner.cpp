@@ -174,27 +174,26 @@ MultibitRefiner::trySimplifyXor(uint64_t constantOffset,
 }
 
 // ================================================================ isolate variable
+// Port of C# TryIsolateSingleVariableConjunction.
 
-uint64_t MultibitRefiner::tryIsolateVariable(
-    uint64_t constantOffset,
+std::optional<uint64_t> MultibitRefiner::tryIsolateVariable(
     std::unordered_map<uint64_t, uint64_t> &coeffToMask) const {
-  // If there's only one entry with mask == all-ones, it's just a variable.
+  // If there is only one entry, and its mask is all-ones, isolate immediately.
   if (coeffToMask.size() == 1) {
     auto &[coeff, mask] = *coeffToMask.begin();
     if (mask == moduloMask || canRemoveMask(coeff, mask)) {
       coeffToMask.clear();
       return coeff;
     }
-    return 0;
+    return std::nullopt;
   }
 
   uint64_t variableCoefficient = 0;
+  bool hasVariableCoefficient = false;
 
-  // Try to remove negated double sums.
   std::vector<uint64_t> keys;
   for (auto &[c, m] : coeffToMask)
-    if (c != 0 && m != 0)
-      keys.push_back(c);
+    keys.push_back(c);
 
   for (auto coeff : keys) {
     auto it = coeffToMask.find(coeff);
@@ -205,91 +204,110 @@ uint64_t MultibitRefiner::tryIsolateVariable(
       continue;
 
     // Try to remove a negated double sum.
-    uint64_t sumCoeff = tryRemoveNegatedDoubleSum(coeff, coeffToMask);
-    if (sumCoeff != 0) {
-      variableCoefficient = moduloMask & (variableCoefficient + sumCoeff);
+    auto sumCoeff = tryRemoveNegatedDoubleSum(coeff, coeffToMask);
+    if (sumCoeff.has_value()) {
+      if (!hasVariableCoefficient)
+        variableCoefficient = *sumCoeff;
+      else
+        variableCoefficient = moduloMask & (variableCoefficient + *sumCoeff);
       continue;
     }
 
-    // Check if we can remove the bitmask.
+    // Check if we can just remove the bit mask.
     if (canRemoveMask(coeff, mask)) {
       coeffToMask[coeff] = 0;
-      variableCoefficient = moduloMask & (variableCoefficient + coeff);
+      if (!hasVariableCoefficient)
+        variableCoefficient = coeff;
+      else
+        variableCoefficient = moduloMask & (variableCoefficient + coeff);
+      hasVariableCoefficient = true;
     }
   }
 
-  // Try to express as single bitwise sum.
-  uint64_t result = tryExpressAsSingleBitwiseSum(coeffToMask);
+  // Try to express a linear combination as a single bitwise sum.
+  uint64_t result = tryExpressAsSingleBitwiseSum(keys, coeffToMask);
+  if (!hasVariableCoefficient) {
+    if (result == 0)
+      return std::nullopt;
+    return result;
+  }
   variableCoefficient = moduloMask & (variableCoefficient + result);
-
   return variableCoefficient;
 }
 
 // ================================================================ single bitwise sum
+// Port of C# TryExpressAsSingleBitwiseSum.
 
 uint64_t MultibitRefiner::tryExpressAsSingleBitwiseSum(
+    const std::vector<uint64_t> &keys,
     std::unordered_map<uint64_t, uint64_t> &coeffToMask) const {
   uint64_t result = 0;
-  std::vector<uint64_t> keys;
-  for (auto &[c, m] : coeffToMask)
-    if (c != 0 && m != 0)
-      keys.push_back(c);
-
   for (size_t a = 0; a < keys.size(); a++) {
     for (size_t b = 0; b < keys.size(); b++) {
       if (a == b)
         continue;
-      uint64_t coeffA = keys[a], coeffB = keys[b];
+      uint64_t coeffA = keys[a];
       auto itA = coeffToMask.find(coeffA);
-      auto itB = coeffToMask.find(coeffB);
-      if (itA == coeffToMask.end() || itB == coeffToMask.end())
+      if (itA == coeffToMask.end())
         continue;
-      uint64_t maskA = itA->second, maskB = itB->second;
-      if (maskA == 0 || maskB == 0)
+      uint64_t maskA = itA->second;
+      if (coeffA == 0 || maskA == 0)
+        continue;
+      uint64_t coeffB = keys[b];
+      auto itB = coeffToMask.find(coeffB);
+      if (itB == coeffToMask.end())
+        continue;
+      uint64_t maskB = itB->second;
+      if (coeffB == 0 || maskB == 0)
         continue;
 
-      // Try: m1*(a&c1) + m2*(a&c2) → (m1-m2)*(a&c1) + m2*a
       uint64_t sum1 = moduloMask & (coeffA - coeffB);
-      // Check if we can rewrite.
-      bool canRewrite = true;
-      for (int i = 0; i < bitSize; i++) {
-        uint64_t value = 1ull << i;
-        uint64_t op1 = moduloMask & (coeffA * (value & maskA) + coeffB * (value & maskB));
-        uint64_t op2 = moduloMask & (sum1 * (value & maskA) + coeffB * value);
-        if (op1 != op2) {
-          canRewrite = false;
-          break;
-        }
-      }
+
+      bool canRewrite = canChangeSumMaskAndCoefficients(
+          coeffA, coeffB, maskA, maskB,
+          sum1, coeffB, maskA, ~0ULL);
       if (!canRewrite)
         continue;
 
-      // Remove both old terms.
       coeffToMask[coeffA] = 0;
       coeffToMask[coeffB] = 0;
-      // Add new term.
       coeffToMask[sum1] = maskA;
       result = moduloMask & (result + coeffB);
-      // No break — C# reference continues to find more matches.
     }
   }
   return result;
 }
 
-// ================================================================ negated double sum
+// ================================================================ can change sum mask and coefficients
+// Port of C# CanChangeSumMaskAndCoefficients.
 
-uint64_t MultibitRefiner::tryRemoveNegatedDoubleSum(
+bool MultibitRefiner::canChangeSumMaskAndCoefficients(
+    uint64_t oldCoeffA, uint64_t oldCoeffB, uint64_t oldMaskA, uint64_t oldMaskB,
+    uint64_t newCoeffA, uint64_t newCoeffB, uint64_t newMaskA, uint64_t newMaskB) const {
+  for (int i = 0; i < 64; i++) {
+    uint64_t value = 1ull << i;
+    uint64_t op1 = moduloMask & (oldCoeffA * (value & oldMaskA) + oldCoeffB * (value & oldMaskB));
+    uint64_t op2 = moduloMask & (newCoeffA * (value & newMaskA) + newCoeffB * (value & newMaskB));
+    if (op1 != op2)
+      return false;
+  }
+  return true;
+}
+
+// ================================================================ negated double sum
+// Port of C# TryRemoveNegatedDoubleSum.
+
+std::optional<uint64_t> MultibitRefiner::tryRemoveNegatedDoubleSum(
     uint64_t coeff, std::unordered_map<uint64_t, uint64_t> &coeffToMask) const {
   uint64_t doubleCoeff = moduloMask & (2 * coeff);
   auto it = coeffToMask.find(doubleCoeff);
   if (it == coeffToMask.end())
-    return 0;
+    return std::nullopt;
   uint64_t otherMask = it->second;
   uint64_t thisMask = coeffToMask[coeff];
   if ((moduloMask & ~thisMask) != otherMask)
-    return 0;
+    return std::nullopt;
 
-  // Found a match.
   coeffToMask[doubleCoeff] = 0;
   coeffToMask[coeff] = otherMask;
   return coeff;
