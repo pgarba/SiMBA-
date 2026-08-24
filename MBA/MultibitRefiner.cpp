@@ -270,7 +270,7 @@ uint64_t MultibitRefiner::tryExpressAsSingleBitwiseSum(
       // Add new term.
       coeffToMask[sum1] = maskA;
       result = moduloMask & (result + coeffB);
-      break;
+      // No break — C# reference continues to find more matches.
     }
   }
   return result;
