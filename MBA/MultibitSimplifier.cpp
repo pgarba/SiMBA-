@@ -9,8 +9,10 @@
 #include <functional>
 #include <unordered_set>
 
+#include "ConstantSubstituter.h"
 #include "LinearSimplifier.h"
 #include "MultibitRefiner.h"
+#include "Parser.h"
 
 namespace LSiMBA {
 namespace MBA {
@@ -137,7 +139,7 @@ bool MultibitSimplifier::isSemiLinear(const std::string &expr) {
 
 MultibitSimplifier::MultibitSimplifier(const std::string &expr, int bitCount,
                                        bool modRed)
-    : bitCount(bitCount),
+    : bitCount(bitCount), modRed(modRed),
       moduloMask(bitCount >= 64 ? ~0ull : ((1ull << bitCount) - 1)),
       ast(nullptr), variables(), varCount(0), numCombinations(0) {
   ast = parse(expr, bitCount, modRed, false, false);
@@ -482,6 +484,51 @@ std::string MultibitSimplifier::simplifyGeneric() {
   return result->toString();
 }
 
+// ================================================================ constant substitution
+
+std::string MultibitSimplifier::simplifyViaConstantSubstitution(
+    const std::shared_ptr<Node> &ast) const {
+  // Collect existing variable names.
+  std::unordered_set<std::string> existingVars;
+  std::function<void(const std::shared_ptr<Node> &)> collectVars =
+      [&](const std::shared_ptr<Node> &node) {
+        if (node->type == NodeType::VARIABLE)
+          existingVars.insert(node->vname);
+        for (auto &child : node->children)
+          collectVars(child);
+      };
+  collectVars(ast);
+
+  // Apply constant substitution.
+  auto [substituted, substMapping] =
+      ConstantSubstituter::apply(ast, existingVars);
+  if (!substituted || substMapping.empty())
+    return ""; // No constants to substitute.
+
+  // Convert the substituted AST to a string.
+  std::string substExpr = substituted->toString();
+
+  // Run the 1-bit SiMBA solver on the substituted expression.
+  std::string simplifiedStr = simplifyLinearMba(substExpr, bitCount, false, false,
+                                                 modRed, true, -1,
+                                                 Metric::ALTERNATION);
+  if (simplifiedStr.empty())
+    return "";
+
+  // Parse the simplified expression back to an AST.
+  Parser parser(simplifiedStr, bitCount, modRed);
+  auto simplified = parser.parseExpression();
+  if (!simplified)
+    return simplifiedStr; // Return the string if parsing fails.
+
+  // Back-substitute the constants.
+  auto result = ConstantSubstituter::applyBackSubstitution(simplified, substMapping);
+  if (!result)
+    return simplifiedStr;
+
+  return result->toString();
+}
+
 // ================================================================ main entry
 
 std::string MultibitSimplifier::simplify(const std::string &expr, int bitCount,
@@ -504,7 +551,17 @@ std::string MultibitSimplifier::simplify(const std::string &expr, int bitCount,
   }
 
   // Multi-bit path: find the initial linear combination.
-  return solver.simplifyGeneric();
+  std::string result = solver.simplifyGeneric();
+
+  // Try the constant substitution + 1-bit SiMBA shortcut as a fallback.
+  std::string csResult = solver.simplifyViaConstantSubstitution(solver.ast);
+  if (!csResult.empty()) {
+    // Pick the shorter result.
+    if (csResult.size() < result.size())
+      result = csResult;
+  }
+
+  return result;
 }
 
 } // namespace MBA

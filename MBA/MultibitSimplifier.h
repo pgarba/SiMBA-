@@ -61,6 +61,9 @@ private:
   // Find an initial linear combination of conjunctions.
   std::string simplifyGeneric();
 
+  // Try the constant substitution + 1-bit SiMBA shortcut.
+  std::string simplifyViaConstantSubstitution(const std::shared_ptr<Node> &ast) const;
+
   // Get group sizes for variable combinations.
   static std::vector<int> getGroupSizes(int varCount);
 
@@ -70,6 +73,8 @@ private:
   // Get the group size index for a variable mask.
   static uint32_t getGroupSizeIndex(const std::vector<int> &groupSizes,
                                     uint64_t varMask);
+
+  bool modRed;
 
   // Subtract a coefficient from the result vector.
   void subtractCoeff(uint64_t coeff, int firstStart, int width,
