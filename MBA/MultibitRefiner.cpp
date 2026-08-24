@@ -142,7 +142,7 @@ MultibitRefiner::trySimplifyXor(uint64_t constantOffset,
 
   for (auto coeffA : keys) {
     uint64_t maskA = coeffToMask[coeffA];
-    uint64_t inverse = moduloMask & (moduloMask * coeffA); // -coeffA
+    uint64_t inverse = moduloMask & (moduloMask * coeffA); // -coeffA (matches our coeffToMask)
     if (inverse == coeffA)
       continue;
     auto it = coeffToMask.find(inverse);
@@ -180,7 +180,9 @@ std::optional<uint64_t> MultibitRefiner::tryIsolateVariable(
     std::unordered_map<uint64_t, uint64_t> &coeffToMask) const {
   // If there is only one entry, and its mask is all-ones, isolate immediately.
   if (coeffToMask.size() == 1) {
-    auto &[coeff, mask] = *coeffToMask.begin();
+    auto it = coeffToMask.begin();
+    uint64_t coeff = it->first;
+    uint64_t mask = it->second;
     if (mask == moduloMask || canRemoveMask(coeff, mask)) {
       coeffToMask.clear();
       return coeff;

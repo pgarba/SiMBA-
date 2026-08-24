@@ -89,6 +89,7 @@ private:
                                     uint64_t varMask);
 
   bool modRed;
+  bool hasBitwiseOps_ = false;
 
   // Subtract a coefficient from the result vector.
   void subtractCoeff(uint64_t coeff, int firstStart, int width,

@@ -148,6 +148,8 @@ MultibitSimplifier::MultibitSimplifier(const std::string &expr, int bitCount,
   if (!ast)
     return;
 
+  hasBitwiseOps_ = hasBitwiseOps();
+
   ast->collectVariables(variables);
   ast->enumerateVariables(variables);
   varCount = static_cast<int>(variables.size());
@@ -487,13 +489,58 @@ std::string MultibitSimplifier::simplifyGeneric() {
     }
 
     // Try to isolate a single variable.
-    // DISABLED: The C# reference's TryIsolateSingleVariableConjunction
-    // depends on the exact coeffToMask produced by its native
-    // SimplifyDisjointSumMultiply function. Our C++ port's simplifyEntry
-    // produces a slightly different dictionary, causing incorrect
-    // isolation for e1_*/e3_*/e5_* expressions (0% regression).
-    // To enable: port the native SimplifyDisjointSumMultiply exactly.
-    // auto varCoeffOpt = refiner.tryIsolateVariable(coeffToMask);
+    // Skip isolation if the expression contains XOR (the isolation
+    // produces incorrect results for XOR expressions because the
+    // coeffToMask doesn't have the XOR-with-1 pair).
+    std::optional<uint64_t> varCoeffOpt;
+    if (!hasBitwiseOps_) {
+      varCoeffOpt = refiner.tryIsolateVariable(coeffToMask);
+    }
+    if (varCoeffOpt.has_value()) {
+      uint64_t varCoeff = *varCoeffOpt;
+      if (varCoeff != 0) {
+        auto conj = conjunctionFromVarMask(variableCombinations[i]);
+        if (conj) {
+          if (varCoeff == 1) {
+            terms.push_back(conj);
+          } else {
+            auto mulNode = ast->newNode(NodeType::PRODUCT);
+            auto constNode = ast->newConstantNode(static_cast<int64_t>(varCoeff));
+            mulNode->children.push_back(constNode);
+            mulNode->children.push_back(conj);
+            terms.push_back(mulNode);
+          }
+        }
+      }
+      auto *xorResult2 = refiner.trySimplifyXor(constantOffset, coeffToMask);
+      if (xorResult2) {
+        constantOffset = xorResult2->adjustedConstant;
+        int64_t sc2 = static_cast<int64_t>(xorResult2->coeff);
+        if (sc2 < 0) {
+          uint64_t pc2 = static_cast<uint64_t>(-sc2);
+          xorResult2->coeff = pc2;
+          xorResult2->xorMask = moduloMask & ~xorResult2->xorMask;
+          constantOffset = (constantOffset + pc2) & moduloMask;
+        }
+        auto conj2 = conjunctionFromVarMask(variableCombinations[i]);
+        if (conj2) {
+          auto xorNode = ast->newNode(NodeType::EXCL_DISJUNCTION);
+          auto maskNode = ast->newConstantNode(static_cast<int64_t>(xorResult2->xorMask));
+          xorNode->children.push_back(conj2);
+          xorNode->children.push_back(maskNode);
+          if (xorResult2->coeff != 1) {
+            auto mulNode = ast->newNode(NodeType::PRODUCT);
+            auto constNode = ast->newConstantNode(static_cast<int64_t>(xorResult2->coeff));
+            mulNode->children.push_back(constNode);
+            mulNode->children.push_back(xorNode);
+            terms.push_back(mulNode);
+          } else {
+            terms.push_back(xorNode);
+          }
+        }
+      }
+      continue;
+    }
 
     // Build terms for each (coeff, mask) pair.
     auto conj = conjunctionFromVarMask(variableCombinations[i]);
