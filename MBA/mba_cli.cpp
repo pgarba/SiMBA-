@@ -17,6 +17,7 @@
 #include "BitwiseFactory.h"
 #include "GeneralSimplifier.h"
 #include "LinearSimplifier.h"
+#include "MultibitSimplifier.h"
 #include "Node.h"
 #include "Parser.h"
 #include "Verify.h"
@@ -143,6 +144,24 @@ int main(int argc, char **argv) {
     // Raw parse with modRed=false (matches the simplify() path).
     auto r2 = parse(expr, bitCount, false, false, false);
     printf("%s\n", r2->toString().c_str());
+  } else if (mode == "eval") {
+    // mba_cli eval <bitCount> <expr> <v1,v2,...>
+    // Prints the variable names (in enumeration order) then "RESULT <value>".
+    std::vector<std::string> vars;
+    root->collectAndEnumerateVariables(vars);
+    for (size_t i = 0; i < vars.size(); ++i)
+      printf("%s%s", vars[i].c_str(), i + 1 < vars.size() ? "," : "\n");
+    std::vector<std::uint64_t> X;
+    if (argc >= 5) {
+      std::stringstream ss(argv[4]);
+      std::string tok;
+      while (std::getline(ss, tok, ','))
+        if (!tok.empty())
+          X.push_back(std::stoull(tok));
+    }
+    while (X.size() < vars.size())
+      X.push_back(0);
+    printf("RESULT %llu\n", (unsigned long long)root->eval(X));
   } else if (mode == "dump") {
     dumpNode(*root, 0);
   } else if (mode == "state") {
@@ -182,6 +201,42 @@ int main(int argc, char **argv) {
     // mba_cli general <bitCount> <expr> -> prints simplifyMba(expr, bitCount).
     std::string res = simplifyMba(expr, bitCount, false, false, -1);
     printf("%s\n", res.c_str());
+  } else if (mode == "msimba") {
+    // mba_cli msimba <bitCount> <expr> -> prints MultibitSimplifier::simplify.
+    std::string res = MultibitSimplifier::simplify(expr, bitCount, false);
+    printf("%s\n", res.c_str());
+  } else if (mode == "msimbacheck") {
+    // mba_cli msimbacheck <bitCount> <expr> -> prints "semi-linear" or "linear".
+    bool semi = MultibitSimplifier::isSemiLinear(expr);
+    printf("%s\n", semi ? "semi-linear" : "linear");
+  } else if (mode == "msimbavector") {
+    // mba_cli msimbavector <bitCount> <expr> -> prints the multi-bit result vector.
+    // Debug: prints the vector for the first 2 bits.
+    auto ast = parse(expr, bitCount, false, false, false);
+    if (!ast) { printf("parse error\n"); return 1; }
+    std::vector<std::string> vars;
+    ast->collectVariables(vars);
+    ast->enumerateVariables(vars);
+    int vc = vars.size();
+    uint64_t nc = 1ull << vc;
+    uint64_t mask = (bitCount >= 64) ? ~0ull : ((1ull << bitCount) - 1);
+    printf("vars=%d numCombinations=%llu\n", vc, (unsigned long long)nc);
+    for (uint32_t bi = 0; bi < 2 && bi < (uint32_t)bitCount; bi++) {
+      printf("bit %u: ", bi);
+      for (uint64_t c = 0; c < nc; c++) {
+        std::vector<uint64_t> vals(vc, 0);
+        for (int v = 0; v < vc; v++) {
+          uint64_t vm = 1ull << v;
+          uint64_t vv = (c & vm) >> v;
+          vals[v] = vv << bi;
+        }
+        uint64_t ev = ast->eval(vals);
+        ev = mask & ev;
+        ev >>= bi;
+        printf("%llu ", (unsigned long long)ev);
+      }
+      printf("\n");
+    }
   } else {
     fprintf(stderr, "unknown mode %s\n", mode.c_str());
     return 2;
