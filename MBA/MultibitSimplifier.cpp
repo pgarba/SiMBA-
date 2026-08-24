@@ -682,6 +682,41 @@ std::string MultibitSimplifier::simplifyGeneric() {
   if (terms.empty())
     return "0";
 
+  // Sort terms: variables alphabetically, then products, constants stay
+  // in their inserted position (first or last).
+  // Simple approach: sort non-constant terms by string representation.
+  auto isConst = [](const std::shared_ptr<Node> &n) {
+    return n->type == NodeType::CONSTANT;
+  };
+  // Separate constants from non-constants.
+  std::vector<std::shared_ptr<Node>> nonConst;
+  std::shared_ptr<Node> constTerm;
+  bool constWasFirst = false;
+  for (auto &t : terms) {
+    if (isConst(t)) {
+      if (!constTerm) {
+        constTerm = t;
+        constWasFirst = (t == terms.front());
+      }
+    } else {
+      nonConst.push_back(t);
+    }
+  }
+  // Sort non-constant terms by string (alphabetical for single vars).
+  std::sort(nonConst.begin(), nonConst.end(),
+            [](const std::shared_ptr<Node> &a,
+               const std::shared_ptr<Node> &b) {
+              return a->toString() < b->toString();
+            });
+  // Reassemble: constant first or last, non-constants in sorted order.
+  terms.clear();
+  if (constTerm && constWasFirst)
+    terms.push_back(constTerm);
+  for (auto &t : nonConst)
+    terms.push_back(t);
+  if (constTerm && !constWasFirst)
+    terms.push_back(constTerm);
+
   // Combine all terms with SUM.
   std::shared_ptr<Node> result = terms[0];
   for (size_t i = 1; i < terms.size(); i++) {
