@@ -360,14 +360,14 @@ user's repro) runs clean; `--mba … --simplifier general` still correct.
    `MBA_TRACE` debug traces, and the temp batch/output files.
 
 6. **[FIXED] Correctness bug on 6 `qsynth_ea` expressions (found by the benchmark).**
-   The benchmark (`MBA/BENCHMARK_PLAN.md`, 8-bit, first 100 per file) fast-checks every
+   The benchmark (`plans/BENCHMARK_PLAN.md`, 8-bit, first 100 per file) fast-checks every
    result against the dataset ground truth: 100/100 valid on 6 of 7 datasets, but 6
    `qsynth_ea` results are refuted (indices 3, 52, 88, 91, 93, 98; e.g. index 3, a
    non-constant expression, is returned as the constant `-1`). The dataset is consistent
    (original = ground truth in all 6); the port's results are not. All 6 expressions
    contain `<<` (desugared to `x * 2**n`) and 3-4 variables. The C++ port is also slower
    on this file (17/100 hit the 25 s deadline; 0.8x speedup vs Python). Reproduce with
-   `python MBA\bench_compare.py 100 8`; per-case counterexamples: `MBA/_dbg_qsynth.py`. **Detailed fix plan: `MBA/QSYNTH_EA_FIX_PLAN.md`** (stage bisect, ranked hypotheses, step-by-step, acceptance criteria, env notes).
+   `python MBA\bench_compare.py 100 8`; per-case counterexamples: `MBA/_dbg_qsynth.py`. **Detailed fix plan: `plans/QSYNTH_EA_FIX_PLAN.md`** (stage bisect, ranked hypotheses, step-by-step, acceptance criteria, env notes).
 
     **Root cause.** The failing expressions reduce to bitwise-linear sub-expressions (e.g.
     `a^b|c^d`) that the general path routes to the **linear** simplifier. In
