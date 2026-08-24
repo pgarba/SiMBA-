@@ -12,7 +12,7 @@ import sys
 
 EXE = r"C:\github\SiMBA-\MBA\build\mba_cli.exe"
 PY_HELPER = r"C:\github\SiMBA-\MBA\_py_general.py"
-DATASET = r"C:\github\SiMBA-\external\GAMBA\experiments\datasets\mba_obf_nonlinear.txt"
+DATASET = r"C:\github\SiMBA-\data\GAMBA\mba_obf_nonlinear.txt"
 BITCOUNT = 8
 
 
