@@ -10,6 +10,7 @@
 #include <unordered_set>
 
 #include "LinearSimplifier.h"
+#include "MultibitRefiner.h"
 
 namespace LSiMBA {
 namespace MBA {
@@ -397,7 +398,8 @@ std::string MultibitSimplifier::simplifyGeneric() {
     }
   }
 
-  // Build the expression from the linear combinations.
+  // Build the expression from the linear combinations, using the refiner.
+  MultibitRefiner refiner(bitCount, moduloMask);
   std::vector<std::shared_ptr<Node>> terms;
   if (constant != 0) {
     terms.push_back(ast->newConstantNode(static_cast<int64_t>(constant)));
@@ -408,13 +410,50 @@ std::string MultibitSimplifier::simplifyGeneric() {
     if (entries.empty())
       continue;
 
-    // Merge entries with the same coefficient (OR their masks).
-    std::unordered_map<uint64_t, uint64_t> coeffToMask;
-    for (auto &[coeff, mask] : entries) {
-      if (coeff == 0)
-        continue;
-      coeffToMask[coeff] |= mask;
+    // Use the refiner to simplify the linear combination.
+    auto coeffToMask = refiner.simplifyEntry(entries);
+
+    // Try to recover an XOR.
+    auto *xorResult = refiner.trySimplifyXor(constant, coeffToMask);
+    if (xorResult) {
+      // XOR term: coeff * (xorMask ^ conj)
+      auto conj = conjunctionFromVarMask(variableCombinations[i]);
+      if (conj) {
+        auto xorNode = ast->newNode(NodeType::EXCL_DISJUNCTION);
+        auto maskNode = ast->newConstantNode(static_cast<int64_t>(xorResult->xorMask));
+        xorNode->children.push_back(maskNode);
+        xorNode->children.push_back(conj);
+        if (xorResult->coeff != 1) {
+          auto mulNode = ast->newNode(NodeType::PRODUCT);
+          auto constNode = ast->newConstantNode(static_cast<int64_t>(xorResult->coeff));
+          mulNode->children.push_back(constNode);
+          mulNode->children.push_back(xorNode);
+          terms.push_back(mulNode);
+        } else {
+          terms.push_back(xorNode);
+        }
+      }
+      continue;
     }
+
+    // Try to isolate a single variable (disabled for now — produces
+    // incorrect results in the multi-bit case).
+    // uint64_t varCoeff = refiner.tryIsolateVariable(constant, coeffToMask);
+    // if (varCoeff != 0) {
+    //   auto conj = conjunctionFromVarMask(variableCombinations[i]);
+    //   if (conj) {
+    //     if (varCoeff == 1) {
+    //       terms.push_back(conj);
+    //     } else {
+    //       auto mulNode = ast->newNode(NodeType::PRODUCT);
+    //       auto constNode = ast->newConstantNode(static_cast<int64_t>(varCoeff));
+    //       mulNode->children.push_back(constNode);
+    //       mulNode->children.push_back(conj);
+    //       terms.push_back(mulNode);
+    //     }
+    //   }
+    //   continue;
+    // }
 
     // Build terms for each (coeff, mask) pair.
     auto conj = conjunctionFromVarMask(variableCombinations[i]);
