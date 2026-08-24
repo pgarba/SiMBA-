@@ -620,10 +620,17 @@ std::string MultibitSimplifier::simplifyGeneric() {
         if (!isAnd)
           continue;
 
-        // Build b*(x^y).
+        // Build b*(x^y) with alphabetical operand order.
         auto xorNode = ast->newNode(NodeType::EXCL_DISJUNCTION);
-        xorNode->children.push_back(varI->getCopy());
-        xorNode->children.push_back(varJ->getCopy());
+        auto sI = varI->toString();
+        auto sJ = varJ->toString();
+        if (sI <= sJ) {
+          xorNode->children.push_back(varI->getCopy());
+          xorNode->children.push_back(varJ->getCopy());
+        } else {
+          xorNode->children.push_back(varJ->getCopy());
+          xorNode->children.push_back(varI->getCopy());
+        }
         std::shared_ptr<Node> xorTerm;
         if (coeffI == 1) {
           xorTerm = xorNode;
