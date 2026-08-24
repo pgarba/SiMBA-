@@ -481,9 +481,15 @@ std::string MultibitSimplifier::simplifyGeneric() {
       if (conj) {
         auto xorNode = ast->newNode(NodeType::EXCL_DISJUNCTION);
         auto maskNode = ast->newConstantNode(static_cast<int64_t>(xorResult->xorMask));
-        // Constant first, variable second (matching GT format: C^x).
-        xorNode->children.push_back(maskNode);
-        xorNode->children.push_back(conj);
+        // GT rule: if 'x' present → x^C (var first), else C^y (const first).
+        bool hasX = std::find(variables.begin(), variables.end(), "x") != variables.end();
+        if (hasX) {
+          xorNode->children.push_back(conj);
+          xorNode->children.push_back(maskNode);
+        } else {
+          xorNode->children.push_back(maskNode);
+          xorNode->children.push_back(conj);
+        }
         if (xorResult->coeff != 1) {
           auto mulNode = ast->newNode(NodeType::PRODUCT);
           auto constNode = ast->newConstantNode(static_cast<int64_t>(xorResult->coeff));
