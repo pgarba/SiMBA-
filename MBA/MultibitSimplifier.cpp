@@ -467,14 +467,23 @@ std::string MultibitSimplifier::simplifyGeneric() {
         xorResult->xorMask = moduloMask & ~xorResult->xorMask;
         constantOffset = (constantOffset + posCoeff) & moduloMask;
       }
+      // Normalize: clear the top bit of the XOR constant.
+      // For odd b: b*(x^(C^2^63)) + (k+2^63) == b*(x^C) + k (mod 2^64)
+      // For even b: b*(x^(C^2^63)) + k == b*(x^C) + k (mod 2^64)
+      uint64_t topBit = 1ull << (bitCount - 1);
+      if (xorResult->xorMask & topBit) {
+        xorResult->xorMask &= ~topBit;
+        if (xorResult->coeff & 1) // odd coefficient
+          constantOffset = (constantOffset + topBit) & moduloMask;
+      }
       // XOR term: coeff * (xorMask ^ conj)
       auto conj = conjunctionFromVarMask(variableCombinations[i]);
       if (conj) {
         auto xorNode = ast->newNode(NodeType::EXCL_DISJUNCTION);
         auto maskNode = ast->newConstantNode(static_cast<int64_t>(xorResult->xorMask));
-        // Variable first, constant second (matching GT format: x^C).
-        xorNode->children.push_back(conj);
+        // Constant first, variable second (matching GT format: C^x).
         xorNode->children.push_back(maskNode);
+        xorNode->children.push_back(conj);
         if (xorResult->coeff != 1) {
           auto mulNode = ast->newNode(NodeType::PRODUCT);
           auto constNode = ast->newConstantNode(static_cast<int64_t>(xorResult->coeff));
