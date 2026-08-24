@@ -454,6 +454,15 @@ std::string MultibitSimplifier::simplifyGeneric() {
     auto coeffToMask = refiner.simplifyEntry(entries);
 
     // Try to recover an XOR (updates constantOffset).
+    if (getenv("MSIMBA_DEBUG")) {
+      fprintf(stderr, "  [dbg] varComb=%llu coeffToMask (size=%zu):\n",
+              (unsigned long long)variableCombinations[i], coeffToMask.size());
+      for (auto &[c, m] : coeffToMask) {
+        fprintf(stderr, "    coeff=%llu (0x%llx) mask=0x%llx\n",
+                (unsigned long long)c, (unsigned long long)c,
+                (unsigned long long)m);
+      }
+    }
     auto *xorResult = refiner.trySimplifyXor(constantOffset, coeffToMask);
     if (xorResult) {
       constantOffset = xorResult->adjustedConstant;
@@ -560,6 +569,86 @@ std::string MultibitSimplifier::simplifyGeneric() {
       if (coeff == 0 || mask == 0)
         continue;
       terms.push_back(term(conj, coeff, mask));
+    }
+  }
+
+  // Try to collapse b*x + b*y - 2*b*(x&y) into b*(x^y).
+  bool xor3Found = false;
+  for (size_t i = 0; i < terms.size() && !xor3Found; i++) {
+    auto &ti = terms[i];
+    if (ti->type != NodeType::PRODUCT || ti->children.size() != 2)
+      continue;
+    if (ti->children[0]->type != NodeType::CONSTANT)
+      continue;
+    uint64_t coeffI = static_cast<uint64_t>(ti->children[0]->constant.getSExtValue());
+    if (coeffI == 0)
+      continue;
+    for (size_t j = i + 1; j < terms.size() && !xor3Found; j++) {
+      auto &tj = terms[j];
+      if (tj->type != NodeType::PRODUCT || tj->children.size() != 2)
+        continue;
+      if (tj->children[0]->type != NodeType::CONSTANT)
+        continue;
+      uint64_t coeffJ = static_cast<uint64_t>(tj->children[0]->constant.getSExtValue());
+      if (coeffJ != coeffI)
+        continue;
+      uint64_t neg2Coeff = moduloMask & (moduloMask * (2 * coeffI));
+      for (size_t k = 0; k < terms.size() && !xor3Found; k++) {
+        if (k == i || k == j)
+          continue;
+        auto &tk = terms[k];
+        if (tk->type != NodeType::PRODUCT || tk->children.size() != 2)
+          continue;
+        if (tk->children[0]->type != NodeType::CONSTANT)
+          continue;
+        uint64_t coeffK = static_cast<uint64_t>(tk->children[0]->constant.getSExtValue());
+        if (coeffK != neg2Coeff)
+          continue;
+        // Check varK == varI & varJ.
+        auto &varI = ti->children[1];
+        auto &varJ = tj->children[1];
+        auto &varK = tk->children[1];
+        bool isAnd = false;
+        if (varK->type == NodeType::CONJUNCTION && varK->children.size() == 2) {
+          auto &kc0 = varK->children[0];
+          auto &kc1 = varK->children[1];
+          auto match = [](const std::shared_ptr<Node> &a,
+                          const std::shared_ptr<Node> &b) {
+            return a->type == b->type && a->constant == b->constant;
+          };
+          if ((match(kc0, varI) && match(kc1, varJ)) ||
+              (match(kc0, varJ) && match(kc1, varI)))
+            isAnd = true;
+        }
+        if (!isAnd)
+          continue;
+
+        // Build b*(x^y).
+        auto xorNode = ast->newNode(NodeType::EXCL_DISJUNCTION);
+        xorNode->children.push_back(varI->getCopy());
+        xorNode->children.push_back(varJ->getCopy());
+        std::shared_ptr<Node> xorTerm;
+        if (coeffI == 1) {
+          xorTerm = xorNode;
+        } else {
+          auto mulNode = ast->newNode(NodeType::PRODUCT);
+          mulNode->children.push_back(
+              ast->newConstantNode(static_cast<int64_t>(coeffI)));
+          mulNode->children.push_back(xorNode);
+          xorTerm = mulNode;
+        }
+
+        // Collect indices to remove, sorted descending.
+        std::vector<size_t> removeIdx = {i, j, k};
+        std::sort(removeIdx.begin(), removeIdx.end(), std::greater<size_t>());
+        for (auto idx : removeIdx)
+          terms.erase(terms.begin() + idx);
+        size_t insertPos = std::min({i, j, k});
+        if (insertPos > terms.size())
+          insertPos = terms.size();
+        terms.insert(terms.begin() + insertPos, xorTerm);
+        xor3Found = true;
+      }
     }
   }
 
