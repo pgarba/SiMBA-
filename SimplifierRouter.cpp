@@ -15,6 +15,7 @@
 #include "CSiMBA.h"
 #include "MBA/GeneralSimplifier.h"
 #include "MBA/LinearSimplifier.h"
+#include "MBA/MultibitSimplifier.h"
 #include "MBA/Parser.h"
 #include "MBA/Verify.h"
 #include "Simplifier.h"
@@ -31,8 +32,8 @@ extern llvm::cl::opt<bool> EnableMod;      // Simplifier.cpp
 // The --simplifier selection (Phase 9).
 llvm::cl::opt<std::string> SimplifierChoice(
     "simplifier", llvm::cl::Optional,
-    llvm::cl::desc("MBA simplifier to use: native | general | external | auto "
-                  "(Default native)"),
+    llvm::cl::desc("MBA simplifier to use: native | general | external | "
+                  "msimba | auto (Default native)"),
     llvm::cl::value_desc("simplifier"), llvm::cl::init("native"),
     llvm::cl::cat(SiMBAOpt));
 
@@ -361,12 +362,14 @@ std::string effectiveChoice(const std::string &expr, int bitCount) {
   if (choice == "auto") {
     if (LSiMBA::MBA::checkLinear(expr, bitCount))
       return ""; // linear: keep the existing native path
-    choice = "general";
+    if (LSiMBA::MBA::MultibitSimplifier::isSemiLinear(expr))
+      return "msimba"; // semi-linear: MSiMBA path (polynomial, 64-bit)
+    choice = "general"; // nonlinear: general path
   }
 
   if (choice == "native" || choice.empty())
     return "";
-  if (choice != "general" && choice != "external") {
+  if (choice != "general" && choice != "external" && choice != "msimba") {
     printf("[!] Unknown --simplifier value '%s' - falling back to native\n",
            SimplifierChoice.getValue().c_str());
     return "";
@@ -431,6 +434,17 @@ RouteResult RouteSimplify(const std::string &MBA, std::string &SimpMBA,
   if (choice == "general" && !generalFeasibleAt(bitCount))
     return RouteResult::NATIVE; // infeasible at this width: use the native path
 
+  if (choice == "msimba") {
+    std::string res =
+        LSiMBA::MBA::MultibitSimplifier::simplify(MBA, bitCount, false);
+    if (res.empty())
+      return RouteResult::FAILED;
+    SimpMBA = res;
+    if (!verifyNonNativeResult(MBA, res, bitCount, fastCheck))
+      return RouteResult::INVALID;
+    return RouteResult::SUCCESS;
+  }
+
   if (choice == "general") {
     int tsec = timeout > 0 ? timeout : 25;
     std::string res =
@@ -478,6 +492,15 @@ bool TrySelectedSimplifier(const std::string &Expr, std::string &SimpMBA,
 
   if (choice == "general" && !generalFeasibleAt(bitWidth))
     return false; // infeasible at this width: fall back to the native path
+
+  if (choice == "msimba") {
+    std::string res =
+        LSiMBA::MBA::MultibitSimplifier::simplify(Expr, bitWidth, false);
+    if (res.empty())
+      return false;
+    SimpMBA = res;
+    return true;
+  }
 
   if (choice == "general") {
     int tsec = timeout > 0 ? timeout : 25;
