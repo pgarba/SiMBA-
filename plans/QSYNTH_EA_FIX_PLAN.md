@@ -20,7 +20,7 @@ wired into `MBA/run_all_tests.py`. All temporary instrumentation removed.
 
 ## 1. Symptoms (established facts)
 
-- The benchmark (`MBA/BENCHMARK_PLAN.md`, 8-bit, first 100 lines of
+- The benchmark (`plans/BENCHMARK_PLAN.md`, 8-bit, first 100 lines of
   `external/GAMBA/experiments/datasets/qsynth_ea.txt`) fast-checks every result
   against the dataset ground truth. 6 results are **refuted** (indices
   3, 52, 88, 91, 93, 98). All other 7 datasets: 100/100 valid.

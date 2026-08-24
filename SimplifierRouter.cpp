@@ -396,6 +396,11 @@ bool isGatedOut(const std::string &expr, int bitCount) {
   return false;
 }
 
+// The general (LSiMBA::MBA) simplifier is exponential in the number of
+// bit-sliced variables, so it is only feasible at small widths (<=16-bit).
+// Above that it is skipped and the caller falls back to the native path.
+bool generalFeasibleAt(int bitCount) { return bitCount <= 16; }
+
 } // namespace
 
 // Verify a non-native result before it is reported as a valid replacement
@@ -422,6 +427,9 @@ RouteResult RouteSimplify(const std::string &MBA, std::string &SimpMBA,
 
   if (isGatedOut(MBA, bitCount))
     return RouteResult::SKIPPED;
+
+  if (choice == "general" && !generalFeasibleAt(bitCount))
+    return RouteResult::NATIVE; // infeasible at this width: use the native path
 
   if (choice == "general") {
     int tsec = timeout > 0 ? timeout : 25;
@@ -467,6 +475,9 @@ bool TrySelectedSimplifier(const std::string &Expr, std::string &SimpMBA,
 
   if (isGatedOut(Expr, bitWidth))
     return false;
+
+  if (choice == "general" && !generalFeasibleAt(bitWidth))
+    return false; // infeasible at this width: fall back to the native path
 
   if (choice == "general") {
     int tsec = timeout > 0 ? timeout : 25;
