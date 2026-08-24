@@ -37,10 +37,27 @@
 - **All results are equivalent** (verified by fast-check) — purely a
   formatting/normalization issue.
 
-### Next steps:
-1. Investigate Pattern A normalization (2^63-1 subtraction form).
-2. Try to fix variable isolation without regressing e1_*/e3_*/e5_*.
-3. Or, accept current results (81.6%) and focus on other improvements.
+### Next steps (to reach 100%):
+1. **Port `TryIsolateSingleVariableConjunction`** from C# reference
+   (658 lines in MultibitRefiner.cs). This is the key function that
+   produces the exact form the GT uses. Requires porting:
+   - `TryRemoveNegatedDoubleSum`
+   - `TryExpressAsSingleBitwiseSum`
+   - `CanChangeSumMaskAndCoefficients`
+   Estimated: 4-8 hours.
+
+2. **Re-enable variable isolation** with the correct C# implementation.
+   The current `tryIsolateVariable` is too simple and causes regression.
+   The C# version is more sophisticated and should not cause regression.
+
+3. **Verify all file groups reach 100%** after the port.
+
+### Blocked on:
+- The C# reference's `TryIsolateSingleVariableConjunction` function is
+  the key to matching the GT. Without it, the XOR recovery produces a
+  different (but equivalent) form than the GT.
+- The function is 658 lines in the C# reference and requires porting
+  several helper functions.
 
 ## Problem
 
