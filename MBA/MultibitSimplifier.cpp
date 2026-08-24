@@ -455,6 +455,16 @@ std::string MultibitSimplifier::simplifyGeneric() {
     auto *xorResult = refiner.trySimplifyXor(constantOffset, coeffToMask);
     if (xorResult) {
       constantOffset = xorResult->adjustedConstant;
+      // Normalize: if coefficient is negative, flip sign, complement XOR
+      // constant, and adjust constant offset.
+      // -b*(x^~C) + k  =>  b*(x^C) + (k+b)
+      int64_t signedCoeff = static_cast<int64_t>(xorResult->coeff);
+      if (signedCoeff < 0) {
+        uint64_t posCoeff = static_cast<uint64_t>(-signedCoeff);
+        xorResult->coeff = posCoeff;
+        xorResult->xorMask = moduloMask & ~xorResult->xorMask;
+        constantOffset = (constantOffset + posCoeff) & moduloMask;
+      }
       // XOR term: coeff * (xorMask ^ conj)
       auto conj = conjunctionFromVarMask(variableCombinations[i]);
       if (conj) {
