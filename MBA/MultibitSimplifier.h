@@ -64,6 +64,14 @@ private:
   // Check if the AST contains XOR with a constant (not handled by multi-bit).
   bool hasXorWithConstant() const;
 
+  // Check if the AST contains any XOR (EXCL_DISJUNCTION) node.
+  static bool containsXor(const std::shared_ptr<Node> &node);
+
+  // Rewrite XOR-with-constant into AND form: x^C => x + C - 2*(x&C).
+  // Returns the rewritten AST, or the original if no XOR-with-constant found.
+  static std::shared_ptr<Node> rewriteXorToAnd(const std::shared_ptr<Node> &node,
+                                                uint64_t moduloMask);
+
   // Find an initial linear combination of conjunctions.
   std::string simplifyGeneric();
 

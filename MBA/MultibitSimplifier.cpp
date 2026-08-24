@@ -523,8 +523,80 @@ std::string MultibitSimplifier::simplifyGeneric() {
 
 // ================================================================ constant substitution
 
+bool MultibitSimplifier::containsXor(const std::shared_ptr<Node> &node) {
+  if (node->type == NodeType::EXCL_DISJUNCTION)
+    return true;
+  for (auto &child : node->children)
+    if (containsXor(child))
+      return true;
+  return false;
+}
+
+std::shared_ptr<Node> MultibitSimplifier::rewriteXorToAnd(
+    const std::shared_ptr<Node> &node, uint64_t moduloMask) {
+  // Recursively rewrite children first.
+  bool changed = false;
+  for (auto &child : node->children) {
+    auto rewritten = rewriteXorToAnd(child, moduloMask);
+    if (rewritten != child) {
+      child = rewritten;
+      changed = true;
+    }
+  }
+
+  // If this node is XOR with a constant, rewrite it.
+  // x^C = x + C - 2*(x&C)
+  if (node->type == NodeType::EXCL_DISJUNCTION && node->children.size() == 2) {
+    std::shared_ptr<Node> varChild, constChild;
+    for (auto &child : node->children) {
+      if (child->type == NodeType::CONSTANT)
+        constChild = child;
+      else
+        varChild = child;
+    }
+    if (constChild && varChild) {
+      uint64_t C = constChild->constant.getZExtValue() & moduloMask;
+      int bw = node->bitCount;
+
+      // Build: x + C + (-2) * (x&C)
+      // Term 1: x
+      auto term1 = varChild->getCopy();
+
+      // Term 2: C (constant)
+      auto term2 = std::make_shared<Node>(NodeType::CONSTANT, bw);
+      term2->constant = MBAOps::fromSigned(static_cast<int64_t>(C));
+
+      // Term 3: -2 * (x&C)
+      auto andNode = std::make_shared<Node>(NodeType::CONJUNCTION, bw);
+      andNode->children.push_back(varChild->getCopy());
+      andNode->children.push_back(constChild->getCopy());
+      auto neg2 = std::make_shared<Node>(NodeType::CONSTANT, bw);
+      uint64_t neg2val = (moduloMask + 1 - 2) & moduloMask; // -2 mod 2^N
+      neg2->constant = MBAOps::fromSigned(static_cast<int64_t>(neg2val));
+      auto term3 = std::make_shared<Node>(NodeType::PRODUCT, bw);
+      term3->children.push_back(neg2);
+      term3->children.push_back(andNode);
+
+      // Sum: x + C + (-2)*(x&C)
+      auto sum = std::make_shared<Node>(NodeType::SUM, bw);
+      sum->children.push_back(term1);
+      sum->children.push_back(term2);
+      sum->children.push_back(term3);
+      return sum;
+    }
+  }
+
+  return node;
+}
+
 std::string MultibitSimplifier::simplifyViaConstantSubstitution(
     const std::shared_ptr<Node> &ast) const {
+  // If the solution contains XOR, skip the 1-bit shortcut.
+  // The 1-bit SiMBA cannot handle XOR of variables (created by substituting
+  // constants in XOR terms).
+  if (containsXor(ast))
+    return "";
+
   // Collect existing variable names.
   std::unordered_set<std::string> existingVars;
   std::function<void(const std::shared_ptr<Node> &)> collectVars =
