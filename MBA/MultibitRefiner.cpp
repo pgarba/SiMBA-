@@ -11,11 +11,23 @@ namespace MBA {
 
 bool MultibitRefiner::canChangeCoefficientTo(uint64_t oldCoeff, uint64_t newCoeff,
                                              uint64_t mask) const {
-  for (int i = 0; i < bitSize; i++) {
-    uint64_t value = 1ull << i;
-    uint64_t op1 = moduloMask & (oldCoeff * (value & mask));
-    uint64_t op2 = moduloMask & (newCoeff * (value & mask));
-    if (op1 != op2)
+  // Port of C# reference's CanChangeCoeff: check 4-bit patterns.
+  uint64_t iter = mask;
+  while (iter) {
+    int pos = __builtin_ctzll(iter);
+    iter &= ~(0xFull << pos);
+    uint64_t value = (0xFull << pos) & mask; // 4-bit window at pos
+    uint64_t diff = (oldCoeff - newCoeff) * value;
+    // ReduceOr: check if any bit of diff is set in moduloMask.
+    uint64_t nope = diff & moduloMask;
+    // ReduceOr: OR all bits together.
+    nope |= nope >> 1;
+    nope |= nope >> 2;
+    nope |= nope >> 4;
+    nope |= nope >> 8;
+    nope |= nope >> 16;
+    nope |= nope >> 32;
+    if (nope & 1)
       return false;
   }
   return true;
@@ -50,42 +62,41 @@ MultibitRefiner::simplifyEntry(const std::vector<std::pair<uint64_t, uint64_t>> 
   }
 
   // (2) Try to merge terms with different coefficients by changing one.
-  bool changed = true;
-  while (changed) {
-    changed = false;
-    auto keys = std::vector<uint64_t>(coeffToMask.size());
-    int idx = 0;
-    for (auto &[c, m] : coeffToMask)
-      keys[idx++] = c;
-
-    for (size_t a = 0; a < keys.size(); a++) {
-      for (size_t b = a + 1; b < keys.size(); b++) {
-        uint64_t ca = keys[a], cb = keys[b];
-        if (ca == 0 || cb == 0)
-          continue;
-        uint64_t ma = coeffToMask[ca], mb = coeffToMask[cb];
-        if ((ma & mb) != 0)
-          continue; // masks must be disjoint
-
-        // Try to change cb to ca.
-        if (canChangeCoefficientTo(cb, ca, mb)) {
-          coeffToMask[ca] |= mb;
-          coeffToMask.erase(cb);
-          changed = true;
+  // Port of C# reference's SimplifyDisjointSumMultiply.
+  auto reduceTermCount = [this](std::unordered_map<uint64_t, uint64_t> &c2m) {
+    std::vector<std::pair<uint64_t, uint64_t>> arr;
+    for (auto &[c, m] : c2m)
+      if (m != 0)
+        arr.push_back({c, m});
+    std::sort(arr.begin(), arr.end(),
+              [](auto &a, auto &b) { return a.first > b.first; });
+    for (size_t a = 0; a < arr.size(); a++) {
+      if (arr[a].second == 0)
+        continue;
+      for (size_t b = a + 1; b < arr.size(); b++) {
+        if (arr[a].second == 0)
           break;
-        }
-        // Try to change ca to cb.
-        if (canChangeCoefficientTo(ca, cb, ma)) {
-          coeffToMask[cb] |= ma;
-          coeffToMask.erase(ca);
-          changed = true;
+        if (arr[b].second == 0)
+          continue;
+        if ((arr[a].second & arr[b].second) != 0)
+          continue;
+        if (canChangeCoefficientTo(arr[b].first, arr[a].first, arr[b].second)) {
+          arr[a].second |= arr[b].second;
+          arr[b].second = 0;
+        } else if (canChangeCoefficientTo(arr[a].first, arr[b].first, arr[a].second)) {
+          arr[b].second |= arr[a].second;
+          arr[a].second = 0;
           break;
         }
       }
-      if (changed)
-        break;
     }
-  }
+    c2m.clear();
+    for (auto &[c, m] : arr)
+      if (m != 0)
+        c2m[c] |= m;
+  };
+
+  reduceTermCount(coeffToMask);
 
   // (3) Discard terms with coefficient → 0.
   for (auto it = coeffToMask.begin(); it != coeffToMask.end();) {
@@ -94,6 +105,9 @@ MultibitRefiner::simplifyEntry(const std::vector<std::pair<uint64_t, uint64_t>> 
     else
       ++it;
   }
+
+  // (3b) Try to reduce the number of terms again (matching C# reference).
+  reduceTermCount(coeffToMask);
 
   // (4) Reduce coefficients to -1 where possible.
   uint64_t negOne = moduloMask; // -1 mod 2^N
@@ -119,10 +133,12 @@ MultibitRefiner::XorResult *
 MultibitRefiner::trySimplifyXor(uint64_t constantOffset,
                                 std::unordered_map<uint64_t, uint64_t> &coeffToMask) const {
   // Look for a pair (coeffA, coeffB) where coeffB == -coeffA.
+  // Iterate in descending order (matching C# reference heuristic).
   std::vector<uint64_t> keys;
   for (auto &[c, m] : coeffToMask)
     if (c != 0)
       keys.push_back(c);
+  std::sort(keys.begin(), keys.end(), std::greater<uint64_t>());
 
   for (auto coeffA : keys) {
     uint64_t maskA = coeffToMask[coeffA];
