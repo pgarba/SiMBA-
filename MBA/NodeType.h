@@ -19,7 +19,47 @@ enum class NodeType : std::uint8_t {
   CONJUNCTION = 6,
   EXCL_DISJUNCTION = 7,
   INCL_DISJUNCTION = 8,
+  // Tier 2 first-class operator nodes (exact unsigned semantics, mod 2^B).
+  RSHIFT = 9,   // a >> b  (logical shift right)
+  UDIV = 10,    // a / b   (unsigned integer divide)
+  UREM = 11,    // a % b   (unsigned integer remainder)
 };
+
+// Precedence level (higher = binds tighter). Used by Node::toString to decide
+// when a child needs parentheses. Mirrors the parser grammar:
+//   leaves > ** > unary ~ > * / % > + - > >> << > & > ^ > |
+inline int PrecLevel(NodeType t) {
+  switch (t) {
+  case NodeType::CONSTANT:
+  case NodeType::VARIABLE:
+    return 10;
+  case NodeType::POWER:
+    return 9;
+  case NodeType::NEGATION:
+    return 8;
+  case NodeType::PRODUCT:
+  case NodeType::UDIV:
+  case NodeType::UREM:
+    return 7;
+  case NodeType::SUM:
+    return 6;
+  case NodeType::RSHIFT:
+    return 5;
+  case NodeType::CONJUNCTION:
+    return 4;
+  case NodeType::EXCL_DISJUNCTION:
+    return 3;
+  case NodeType::INCL_DISJUNCTION:
+    return 2;
+  default:
+    return 0;
+  }
+}
+
+// A child needs parentheses if it binds less tightly than the parent.
+inline bool ChildNeedsParens(NodeType child, NodeType parent) {
+  return PrecLevel(child) < PrecLevel(parent);
+}
 
 // Additional information on a node.
 enum class NodeState : std::uint8_t {
@@ -47,6 +87,12 @@ inline char OpChar(NodeType t) {
     return '^';
   case NodeType::INCL_DISJUNCTION:
     return '|';
+  case NodeType::RSHIFT:
+    return '>';   // rendered as ">>"
+  case NodeType::UDIV:
+    return '/';
+  case NodeType::UREM:
+    return '%';
   default:
     return 0;
   }

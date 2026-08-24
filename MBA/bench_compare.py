@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Benchmark: vendored Python GAMBA vs. native C++ port, over all GAMBA
-datasets. See BENCHMARK_PLAN.md for the methodology.
+datasets. See plans/BENCHMARK_PLAN.md for the methodology.
 
 For each dataset file (first N expressions, `expr,groundtruth` lines):
   - C++ port:    mba_cli.exe general <bc> <expr>          (wall-timed)

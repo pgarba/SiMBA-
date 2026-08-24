@@ -70,6 +70,12 @@ bool Parser::hasPower() const { return peek() == '*' && peekNext() == '*'; }
 
 bool Parser::hasLshift() const { return peek() == '<' && peekNext() == '<'; }
 
+bool Parser::hasRshift() const { return peek() == '>' && peekNext() == '>'; }
+
+bool Parser::hasDiv() const { return peek() == '/'; }
+
+bool Parser::hasRem() const { return peek() == '%'; }
+
 bool Parser::hasBinaryConstant() const {
   return peek() == '0' && peekNext() == 'b';
 }
@@ -277,24 +283,43 @@ shared_ptr<Node> Parser::parseTerminal() {
 }
 
 // -------------------------------------------------------- product / sum / shift
+// Handles the multiplicative-level operators '*', '/' and '%'
+// left-associatively. '/' and '%' desugar to bit terms (the LHS must be a full
+// variable and the RHS a constant power of two).
 shared_ptr<Node> Parser::parseProduct() {
-  auto child = parseFactor();
-  if (child == nullptr)
+  auto acc = parseFactor();
+  if (acc == nullptr)
     return nullptr;
-  if (!hasMultiplicator())
-    return child;
 
-  auto node = newNode(NodeType::PRODUCT);
-  node->children.push_back(child);
+  if (!hasMultiplicator() && !hasDiv() && !hasRem())
+    return acc;
 
-  while (hasMultiplicator()) {
-    get();
-    child = parseFactor();
-    if (child == nullptr)
-      return nullptr;
-    node->children.push_back(child);
+  while (hasMultiplicator() || hasDiv() || hasRem()) {
+    if (hasMultiplicator()) {
+      get();
+      auto child = parseFactor();
+      if (child == nullptr)
+        return nullptr;
+      if (acc->type == NodeType::PRODUCT) {
+        acc->children.push_back(child);
+      } else {
+        auto node = newNode(NodeType::PRODUCT);
+        node->children.push_back(acc);
+        node->children.push_back(child);
+        acc = node;
+      }
+    } else {
+      std::string kind = hasDiv() ? "/" : "%";
+      get();
+      auto child = parseFactor();
+      if (child == nullptr)
+        return nullptr;
+      acc = desugarDivRem(acc, child, kind);
+      if (acc == nullptr)
+        return nullptr;
+    }
   }
-  return node;
+  return acc;
 }
 
 shared_ptr<Node> Parser::parseSum() {
@@ -326,33 +351,164 @@ shared_ptr<Node> Parser::parseShift() {
   if (base == nullptr)
     return nullptr;
 
-  if (!hasLshift())
+  if (!hasLshift() && !hasRshift())
     return base;
 
-  // We write "a << b" as "a * 2**b".
+  std::shared_ptr<Node> result;
+  if (hasLshift()) {
+    // We write "a << b" as "a * 2**b".
+    auto prod = newNode(NodeType::PRODUCT);
+    prod->children.push_back(base);
+
+    get(); // skip '<'
+    get(); // skip '<'
+
+    auto op = parseSum();
+    if (op == nullptr)
+      return nullptr;
+
+    auto power = newNode(NodeType::POWER);
+    auto two = newNode(NodeType::CONSTANT);
+    two->constant = MBAOps::fromSigned(2);
+    power->children.push_back(two);
+    power->children.push_back(op);
+
+    prod->children.push_back(power);
+    result = prod;
+  } else {
+    // "a >> b" (b a non-negative constant shift amount).
+    get(); // skip '>'
+    get(); // skip '>'
+
+    auto op = parseSum();
+    if (op == nullptr)
+      return nullptr;
+
+    result = desugarDivRem(base, op, ">>");
+    if (result == nullptr)
+      return nullptr;
+  }
+
+  // Nested shift operations require parentheses.
+  if (hasLshift() || hasRshift()) {
+    error_ = "Disallowed nested shift operator near " + string(1, peek());
+    return nullptr;
+  }
+  return result;
+}
+
+// ---------------------------------------------------------------- desugar
+bool Parser::isFullVariable(const Node &n) const {
+  return n.type == NodeType::VARIABLE && n.vname.find('[') == std::string::npos;
+}
+
+int Parser::pow2Exponent(const MBAValue &v) const {
+  // Truncate to 64 bits first: getZExtValue() asserts on values with more
+  // than 64 active bits (e.g. a sign-extended negative constant).
+  std::uint64_t low = v.zextOrTrunc(64).getZExtValue();
+  std::uint64_t high = v.lshr(64).zextOrTrunc(64).getZExtValue();
+  if (high != 0)
+    return -1; // negative or larger than 2^63
+  if (low == 0)
+    return -1; // 0 is not a power of two
+  if ((low & (low - 1)) != 0)
+    return -1; // not a power of two
+  return MBAOps::trailingZeros(low);
+}
+
+std::shared_ptr<Node> Parser::bitTerm(const std::string &name, int i,
+                                     int shift) {
+  auto var = newNode(NodeType::VARIABLE);
+  var->vname = name + "[" + std::to_string(i) + "]";
+  if (shift == 0)
+    return var;
+  // Coefficient 2**shift as a single constant so the term a[i] * const is
+  // recognized as linear by the simplifier. A 2**shift POWER node would make
+  // the whole desugared expression nonlinear and push the general simplifier
+  // into its slow 2**vnumber enumeration path (hang/OOM for wide values).
+  auto coeff = newNode(NodeType::CONSTANT);
+  coeff->constant = MBAOps::pow2(shift);
   auto prod = newNode(NodeType::PRODUCT);
-  prod->children.push_back(base);
+  prod->children.push_back(var);
+  prod->children.push_back(coeff);
+  return prod;
+}
 
-  get(); // skip '<'
-  get(); // skip '<'
-
-  auto op = parseSum();
+std::shared_ptr<Node>
+Parser::desugarDivRem(std::shared_ptr<Node> base, std::shared_ptr<Node> op,
+                      const std::string &kind) {
+  int B = bitCount;
   if (op == nullptr)
     return nullptr;
 
-  auto power = newNode(NodeType::POWER);
-  auto two = newNode(NodeType::CONSTANT);
-  two->constant = MBAOps::fromSigned(2);
-  power->children.push_back(two);
-  power->children.push_back(op);
+  // --- Tier 1: bit desugar when the LHS is a full variable and the RHS is a
+  // constant (power-of-two for / and %). ---
+  if (isFullVariable(*base) && op->type == NodeType::CONSTANT) {
+    // Truncate to 64 bits first: getZExtValue() asserts on values with more
+    // than 64 active bits (e.g. a sign-extended negative constant).
+    std::uint64_t low = op->constant.zextOrTrunc(64).getZExtValue();
+    std::uint64_t high = op->constant.lshr(64).zextOrTrunc(64).getZExtValue();
+    if (high == 0) {
+      std::uint64_t k;
+      bool pow2ok = true;
+      if (kind == ">>") {
+        k = low; // shift amount, any non-negative integer
+      } else {
+        // "/" or "%": the divisor must be a power of two.
+        int e = pow2Exponent(op->constant);
+        if (e < 0)
+          pow2ok = false;
+        k = static_cast<std::uint64_t>(e);
+      }
+      if (pow2ok) {
+        std::string name = base->vname;
+        std::vector<std::shared_ptr<Node>> terms;
+        if (kind == "%") {
+          if (k == 0) {
+            auto zero = newNode(NodeType::CONSTANT);
+            zero->constant = MBAOps::fromSigned(0);
+            return zero;
+          }
+          if (k >= static_cast<std::uint64_t>(B))
+            return base; // base % 2**B == base
+          for (std::uint64_t i = 0; i < k; ++i)
+            terms.push_back(bitTerm(name, static_cast<int>(i), static_cast<int>(i)));
+        } else { // ">>" or "/"
+          if (k == 0)
+            return base; // base >> 0 == base
+          if (k >= static_cast<std::uint64_t>(B)) {
+            auto zero = newNode(NodeType::CONSTANT);
+            zero->constant = MBAOps::fromSigned(0);
+            return zero;
+          }
+          for (std::uint64_t i = k; i < static_cast<std::uint64_t>(B); ++i)
+            terms.push_back(
+                bitTerm(name, static_cast<int>(i), static_cast<int>(i - k)));
+        }
 
-  prod->children.push_back(power);
+        if (terms.size() == 1)
+          return terms[0];
+        auto sum = newNode(NodeType::SUM);
+        sum->children = std::move(terms);
+        return sum;
+      }
+    }
+  }
 
-  if (hasLshift()) {
-    error_ = "Disallowed nested lshift operator near " + string(1, peek());
+  // --- Tier 2: first-class operator node (exact unsigned semantics, mod 2^B).
+  // Used when the Tier 1 desugar does not apply (non-variable LHS, non-constant
+  // or non-power-of-two RHS, etc.). ---
+  if ((kind == "/" || kind == "%") && op->type == NodeType::CONSTANT &&
+      op->constant == MBAOps::fromSigned(0)) {
+    error_ = "Division/remainder by zero is not supported";
     return nullptr;
   }
-  return prod;
+  NodeType opType =
+      (kind == ">>") ? NodeType::RSHIFT : (kind == "/" ? NodeType::UDIV : NodeType::UREM);
+  auto node = newNode(opType);
+  node->children.push_back(base);
+  node->children.push_back(op);
+  return node;
 }
 
 // ------------------------------------------------- bitwise (low precedence)

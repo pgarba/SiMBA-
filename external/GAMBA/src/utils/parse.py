@@ -12,6 +12,8 @@ class Parser():
         self.__expr = expr
         self.__modulus = modulus
         self.__modRed = modRed
+        # modulus is 2**bitCount, so the bit count is its bit length minus one.
+        self.__bit_count = modulus.bit_length() - 1
         self.__idx = 0
         self.__error = ""
 
@@ -109,37 +111,144 @@ class Parser():
         if base == None:
             return None
 
-        # We have a trivial shift only consisting of a base, no need for a
-        # dedicated node.
-        if not self.__has_lshift():
+        # We have a trivial shift only consisting of a base, no dedicated node.
+        if not (self.__has_lshift() or self.__has_rshift()):
             return base
 
-        # We write "a << b" as "a * 2**b".
+        if self.__has_lshift():
+            # We write "a << b" as "a * 2**b".
+            prod = self.__new_node(NodeType.PRODUCT)
+            prod.children.append(base)
 
-        prod = self.__new_node(NodeType.PRODUCT)
-        prod.children.append(base)
+            self.__get()
+            self.__get()
 
-        self.__get()
-        self.__get()
+            op = self.__parse_sum()
+            if op == None:
+                return None
 
-        op = self.__parse_sum()
-        if op == None:
-            return None
+            power = self.__new_node(NodeType.POWER)
+            two = self.__new_node(NodeType.CONSTANT)
+            two.constant = 2
+            power.children.append(two)
+            power.children.append(op)
 
-        power = self.__new_node(NodeType.POWER)
-        two = self.__new_node(NodeType.CONSTANT)
-        two.constant = 2
-        power.children.append(two)
-        power.children.append(op)
+            prod.children.append(power)
+            result = prod
+        else:
+            # "a >> b" (b a non-negative constant shift amount).
+            self.__get()
+            self.__get()
 
-        prod.children.append(power)
+            op = self.__parse_sum()
+            if op == None:
+                return None
+
+            result = self.__desugar_divrem(base, op, ">>")
+            if result == None:
+                return None
 
         # Nested shift operations require parentheses.
-        if self.__has_lshift():
-            self.__error = "Disallowed nested lshift operator near " + self.__peek()
+        if self.__has_lshift() or self.__has_rshift():
+            self.__error = "Disallowed nested shift operator near " + self.__peek()
             return None
 
+        return result
+
+    # True iff the node is a plain (non bit-sliced) variable, i.e. a full
+    # modulus-width value whose bits can be addressed as name[i].
+    def __is_full_variable(self, node):
+        return (node is not None and node.type == NodeType.VARIABLE
+                and '[' not in node.vname)
+
+    # Returns k iff the node is a non-negative constant equal to 2**k, else
+    # None.
+    def __pow2_exponent(self, node):
+        if node is None or node.type != NodeType.CONSTANT:
+            return None
+        c = node.constant
+        if c < 1:
+            return None
+        if c & (c - 1) != 0:
+            return None
+        return c.bit_length() - 1
+
+    # Build the node for "name[i] * 2**shift" (shift >= 0). For shift == 0
+    # this is just the bit variable name[i].
+    def __bit_term(self, name, i, shift):
+        var = self.__new_node(NodeType.VARIABLE)
+        var.vname = name + "[" + str(i) + "]"
+        if shift == 0:
+            return var
+        # Coefficient 2**shift as a single constant so the term a[i] * const is
+        # recognized as linear by the simplifier. A 2**shift POWER node would
+        # make the whole desugared expression nonlinear and push the general
+        # simplifier into its slow 2**vnumber enumeration path (hang/OOM for
+        # wide values).
+        coeff = self.__new_node(NodeType.CONSTANT)
+        coeff.constant = 2 ** shift
+        prod = self.__new_node(NodeType.PRODUCT)
+        prod.children.append(var)
+        prod.children.append(coeff)
         return prod
+
+    # Desugar "base >> k", "base / 2**k" or "base % 2**k" into a sum of bit
+    # terms using the bit-slice variables base[i]:
+    #   base >> k   ==  sum_{i=k}^{B-1} base[i] * 2**(i-k)   (k any int >= 0)
+    #   base / 2**k ==  base >> k                            (divisor a pow of 2)
+    #   base % 2**k ==  sum_{i=0}^{k-1} base[i] * 2**i       (divisor a pow of 2)
+    # kind is ">>", "/" or "%". For ">>" the RHS is the shift amount (any
+    # non-negative constant); for "/" and "%" the RHS is a divisor that must be
+    # a power of two. Sets self.__error and returns None when the operands do
+    # not fit the supported form (D1 of plans/GAMBA_MISSING_OPERATORS_PLAN.md).
+    def __desugar_divrem(self, base, op, kind):
+        B = self.__bit_count
+        if not self.__is_full_variable(base):
+            self.__error = ("Only `var >> const`, `var / const` and "
+                            "`var % const` with a constant (power-of-two for "
+                            "/ and %) RHS are supported")
+            return None
+        if op is None or op.type != NodeType.CONSTANT:
+            self.__error = ("Shift/division/remainder by a non-constant is not "
+                            "supported")
+            return None
+        c = op.constant
+        if c < 0:
+            self.__error = "Negative shift amount/divisor is not supported"
+            return None
+
+        if kind == ">>":
+            k = c  # shift amount, any non-negative integer
+        else:  # "/" or "%": divisor must be a power of two
+            k = self.__pow2_exponent(op)
+            if k is None:
+                self.__error = ("Division/remainder by a non-power-of-two "
+                                "constant is not supported")
+                return None
+        name = base.vname
+
+        if kind == "%":
+            if k == 0:
+                zero = self.__new_node(NodeType.CONSTANT)
+                zero.constant = 0
+                return zero
+            if k >= B:
+                return base  # base % 2**B == base
+            terms = [self.__bit_term(name, i, i) for i in range(0, k)]
+        else:  # ">>" or "/"
+            if k == 0:
+                return base  # base >> 0 == base
+            if k >= B:
+                zero = self.__new_node(NodeType.CONSTANT)
+                zero.constant = 0
+                return zero
+            terms = [self.__bit_term(name, i, i - k) for i in range(k, B)]
+
+        if len(terms) == 1:
+            return terms[0]
+        node = self.__new_node(NodeType.SUM)
+        node.children.extend(terms)
+        return node
 
     # Parse the sum starting at current idx and in this course merge or
     # rearrange constants. Sets self.__error if an error occurs.
@@ -169,27 +278,44 @@ class Parser():
         return node
 
     # Parse the product starting at current idx and in this course merge or
-    # rearrange constants. Sets self.__error if an error occurs.
+    # rearrange constants. Handles the multiplicative-level operators '*', '/'
+    # and '%' left-associatively. '/' and '%' desugar to bit terms (the LHS must
+    # be a full variable and the RHS a constant power of two). Sets
+    # self.__error if an error occurs.
     def __parse_product(self):
-        child = self.__parse_factor()
-        if child == None:
+        acc = self.__parse_factor()
+        if acc == None:
             return None
-        # We have a trivial product, no need for a dedicated node.
-        if not self.__has_multiplicator():
-            return child
 
-        node = self.__new_node(NodeType.PRODUCT)
-        node.children.append(child)
+        # Trivial: no multiplicative-level operator.
+        if not (self.__has_multiplicator() or self.__has_div()
+                or self.__has_rem()):
+            return acc
 
-        while self.__has_multiplicator():
-            self.__get()
-            child = self.__parse_factor()
-            if child == None:
-                return None
+        while self.__has_multiplicator() or self.__has_div() or self.__has_rem():
+            if self.__has_multiplicator():
+                self.__get()
+                child = self.__parse_factor()
+                if child == None:
+                    return None
+                if acc.type == NodeType.PRODUCT:
+                    acc.children.append(child)
+                else:
+                    node = self.__new_node(NodeType.PRODUCT)
+                    node.children.append(acc)
+                    node.children.append(child)
+                    acc = node
+            else:
+                kind = "/" if self.__has_div() else "%"
+                self.__get()
+                child = self.__parse_factor()
+                if child == None:
+                    return None
+                acc = self.__desugar_divrem(acc, child, kind)
+                if acc == None:
+                    return None
 
-            node.children.append(child)
-
-        return node
+        return acc
 
     # Parse the factor of a (trivial or nontrivial) product starting at current
     # idx and in this course merge or rearrange constants. Sets self.__error if
@@ -454,6 +580,19 @@ class Parser():
     # operator '<<'.
     def __has_lshift(self):
         return self.__peek() == '<' and self.__peek_next() == '<'
+
+    # Returns true iff the character at position idx initiates a right shift
+    # operator '>>'.
+    def __has_rshift(self):
+        return self.__peek() == '>' and self.__peek_next() == '>'
+
+    # Returns true iff the character at position idx is a division operator '/'.
+    def __has_div(self):
+        return self.__peek() == '/'
+
+    # Returns true iff the character at position idx is a remainder operator '%'.
+    def __has_rem(self):
+        return self.__peek() == '%'
 
     # Returns true iff the character at position idx of expr and its succeeding
     # character indicate a binary number, i.e., are '0b'.

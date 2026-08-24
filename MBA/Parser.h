@@ -53,6 +53,20 @@ private:
   std::shared_ptr<Node> parseDecimalConstant();
   MBAValue getConstant(size_t start, int base);
 
+  // ------------------------------------------------- div/rem desugaring
+  // True iff the node is a plain (non bit-sliced) variable.
+  bool isFullVariable(const Node &n) const;
+  // Returns k iff the constant equals 2**k for some 0 <= k <= 63, else -1.
+  int pow2Exponent(const MBAValue &v) const;
+  // Build the node for "name[i] * 2**shift" (shift >= 0); shift == 0 is just
+  // the bit variable name[i].
+  std::shared_ptr<Node> bitTerm(const std::string &name, int i, int shift);
+  // Desugar "base >> k" / "base / 2**k" / "base % 2**k" into a sum of bit
+  // terms; sets error() and returns nullptr when unsupported.
+  std::shared_ptr<Node>
+  desugarDivRem(std::shared_ptr<Node> base, std::shared_ptr<Node> op,
+                const std::string &kind);
+
   // -------------------------------------------------------- lexing helpers
   char peek() const;
   char peekNext() const;
@@ -64,6 +78,9 @@ private:
   bool hasMultiplicator() const;
   bool hasPower() const;
   bool hasLshift() const;
+  bool hasRshift() const;
+  bool hasDiv() const;
+  bool hasRem() const;
   bool hasBinaryConstant() const;
   bool hasHexConstant() const;
   bool hasHexDigit() const;
