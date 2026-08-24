@@ -44,5 +44,9 @@ __pycache__/
 # pip temp junk
 _pytemp/
 
-# but keep the MBA build scripts
-!MBA/build*
+# but keep the MBA build scripts (not the build/ output dir)
+!MBA/build.sh
+!MBA/build.ps1
+
+# pi web build artifacts
+.pi-web/
