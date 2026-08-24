@@ -454,15 +454,6 @@ std::string MultibitSimplifier::simplifyGeneric() {
     auto coeffToMask = refiner.simplifyEntry(entries);
 
     // Try to recover an XOR (updates constantOffset).
-    if (getenv("MSIMBA_DEBUG")) {
-      fprintf(stderr, "  [dbg] varComb=%llu coeffToMask (size=%zu):\n",
-              (unsigned long long)variableCombinations[i], coeffToMask.size());
-      for (auto &[c, m] : coeffToMask) {
-        fprintf(stderr, "    coeff=%llu (0x%llx) mask=0x%llx\n",
-                (unsigned long long)c, (unsigned long long)c,
-                (unsigned long long)m);
-      }
-    }
     auto *xorResult = refiner.trySimplifyXor(constantOffset, coeffToMask);
     if (xorResult) {
       constantOffset = xorResult->adjustedConstant;
