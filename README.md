@@ -66,6 +66,36 @@ The standalone `mba_cli` exposes the same checks directly:
 `mba_cli prove <bitCount> <orig> <simp>` (Z3; the standalone build links no
 Z3, so `prove` is a no-op there — use `SiMBA++.exe --prove` for real proofs).
 
+# Native C++ MSiMBA port (semi-linear MBAs)
+
+The `MBA/` directory also contains a native C++ port of the **MSiMBA**
+multi-bit algorithm (arXiv:2406.10016), which extends SiMBA's linear MBA
+simplification to **semi-linear** MBAs — expressions with constants inside
+bitwise operands (e.g. `x ^ 5148131303079159687`, `~(C | y)`). These are the
+MBAs that appear in real-world obfuscated code after constant propagation.
+
+Unlike the GAMBA general solver (exponential in the variable count), the MSiMBA
+algorithm is **polynomial** — O(2^t × N) for the signature vector, where t is
+the variable count and N the bit width — so it solves 64-bit, 6-variable
+semi-linear MBAs in well under a second per expression.
+
+- **Build:** part of the main CMake build (`mba_cli` target); no separate step.
+- **CLI:** `mba_cli msimba <bitCount> <expr>` (simplify) and
+  `mba_cli msimbacheck <bitCount> <expr>` (linearity check).
+- **Routing:** the `SiMBA++` CLI auto-detects semi-linear MBAs and routes them
+  to the MSiMBA path (`--simplifier=msimba` forces it; `--simplifier=auto`
+  sends linear MBAs to the native path, semi-linear to MSiMBA, and nonlinear
+  to the GAMBA port).
+- **Verification:** every MSiMBA result is fast-checked against the original
+  before being accepted (the verification gate rejects non-equivalent results).
+
+The port covers the signature vector, the linearity check, the initial linear
+combination, the multi-bit refiner, the constant substituter, the XOR recovery
+(constant offset, coefficient normalization, top-bit normalization, 3-term XOR
+pattern), and the GT term ordering (primary-variable rule + alphabetical sort).
+See `plans/MSIMBA_INTEGRATION_PLAN.md` and `plans/MSIMBA_100_PERCENT_PLAN.md`
+for the full phase-by-phase plan and verification status.
+
 # Missing-operator support (`>>`, `/`, `%`)
 
 The GAMBA expression language now supports `>>` (shift right), `/` (integer
@@ -191,6 +221,49 @@ import); the C++ binary start-up is ~ms.
   `(-1)*(conjunction)`.
   Regression guard: `MBA/diff_qsynth_ea.py` (ground-truth verification over
   the whole dataset).
+
+# MSiMBA benchmark (semi-linear MBAs)
+
+For each `data/MSiMBA/` file (the MSiMBA paper's semi-linear MBAs; 64-bit,
+1000 expressions each) the implementations simplify the expressions and every
+result is fast-checked against the dataset's `groundtruth` column. MSiMBA runs
+on **all 1000** expressions (it is polynomial); SiMBA++ native and the GAMBA
+port run on the **first 100** (the GAMBA general solver is exponential in the
+variable count and is infeasible for the 5/6-var files, which are marked `—`;
+reproduce with `python MBA/bench_msimba.py 100 64`, raw numbers:
+`MBA/bench_msimba.csv`).
+
+| test file | MSiMBA (s) | MSiMBA valid | SiMBA++ (s) | SiMBA++ valid | GAMBA (s) | GAMBA valid |
+|---|---:|---:|---:|---:|---:|---:|
+| e1_2vars | 0.6 | 1000/1000 | 0.2 | 8/100 | 0.1 | 91/100 |
+| e1_3vars | 0.7 | 1000/1000 | 0.2 | 0/100 | 5.4 | 75/100 |
+| e1_4vars | 1.3 | 1000/1000 | 0.2 | 0/100 | 63.7 | 94/100 |
+| e1_5vars | 6.8 | 1000/1000 | 0.2 | 0/100 | — | — |
+| e1_6vars | 38.1 | 1000/1000 | 0.2 | 0/100 | — | — |
+| e2_2vars | 0.6 | 1000/1000 | 0.2 | 9/100 | 0.1 | 99/100 |
+| e2_3vars | 0.7 | 1000/1000 | 0.2 | 0/100 | 13.3 | 87/100 |
+| e2_4vars | 1.3 | 1000/1000 | 0.2 | 0/100 | 63.6 | 92/100 |
+| e3_2vars | 0.6 | 1000/1000 | 0.2 | 9/100 | 0.1 | 81/100 |
+| e3_3vars | 0.7 | 1000/1000 | 0.2 | 0/100 | 2.6 | 70/100 |
+| e3_4vars | 1.4 | 1000/1000 | 0.2 | 0/100 | 70.7 | 98/100 |
+| e4_2vars | 0.6 | 1000/1000 | 0.2 | 0/100 | 0.2 | 88/100 |
+| e4_3vars | 0.7 | 1000/1000 | 0.2 | 0/100 | 2.6 | 73/100 |
+| e4_4vars | 1.4 | 1000/1000 | 0.2 | 0/100 | 65.0 | 98/100 |
+| e5_2vars | 0.6 | 1000/1000 | 0.2 | 5/100 | 0.1 | 73/100 |
+| e5_3vars | 0.7 | 1000/1000 | 0.2 | 0/100 | 1.7 | 36/100 |
+| e5_4vars | 1.7 | 1000/1000 | 0.2 | 0/100 | 69.4 | 92/100 |
+
+`MSiMBA (s)`/`MSiMBA valid` are the native MSiMBA multi-bit simplifier over all
+1000 expressions; `SiMBA++ (s)`/`SiMBA++ valid` are the native SiMBA++ **linear**
+simplifier over the first 100; `GAMBA (s)`/`GAMBA valid` are the GAMBA native
+port (general solver) over the first 100. The MSiMBA algorithm solves **every
+expression in every file (17000/17000, 100%)** in under 40 s per file — the
+semi-linear cases are exactly what it was designed for. The SiMBA++ native
+linear simplifier cannot handle the semi-linear cases (constants inside bitwise
+operands) and solves only a handful of the 2-var files that reduce to linear
+form. The GAMBA general solver is correct but **exponential** in the variable
+count: it is fast on 2-var files (~0.1 s) but takes 60–70 s on 4-var files and
+is infeasible on 5/6-var files, and it does not reach 100% on any file.
 
 # General Options
 
