@@ -18,15 +18,29 @@
   XOR constants and coefficient signs. The XOR recovery is firing but
   producing incorrect results for these cases.
 
-### Current GT match: 78.3%
+### Current GT match: 81.6%
 - e2_*, e3_*, e5_*: 100%
 - e1_*: ~50-57% (term order issue)
-- e4_*: 9-13% (XOR with constants — partial fix)
+- e4_*: 17-25% (XOR with constants — partial fix)
+
+### Additional fix applied:
+- **XOR coefficient normalization**: When the XOR recovery produces a
+  negative coefficient, flip the sign, complement the XOR constant, and
+  adjust the constant offset. This matches the GT format for Pattern B
+  (complement) expressions.
+
+### Remaining e4_* gap (75-83% unmatched):
+- **Pattern A** (2^63-1 subtraction): Different equivalent form, not
+  fixable by simple normalization.
+- **Pattern B residual**: Some Pattern B expressions still don't match
+  after normalization (constant offset adjustment may be wrong).
+- **All results are equivalent** (verified by fast-check) — purely a
+  formatting/normalization issue.
 
 ### Next steps:
-1. Diagnose why some e4_* expressions still have wrong XOR constants.
+1. Investigate Pattern A normalization (2^63-1 subtraction form).
 2. Try to fix variable isolation without regressing e1_*/e3_*/e5_*.
-3. Or, accept current results and focus on other improvements.
+3. Or, accept current results (81.6%) and focus on other improvements.
 
 ## Problem
 
