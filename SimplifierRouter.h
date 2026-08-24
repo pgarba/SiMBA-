@@ -9,7 +9,10 @@
 //   external - vendored Python GAMBA as a subprocess (simplify.py for linear,
 //              simplify_general.py for nonlinear); falls back to native with a
 //              warning if Python is unavailable
-//   auto     - LSiMBA::MBA::checkLinear: linear -> native, nonlinear -> general
+//   msimba   - LSiMBA::MBA::MultibitSimplifier (semi-linear MBAs: constants
+//              inside bitwise operands); polynomial, works at 64-bit
+//   auto     - LSiMBA::MBA::checkLinear: linear -> native; semi-linear
+//              (MultibitSimplifier::isSemiLinear) -> msimba; nonlinear -> general
 //
 // The --max-var-count / --min-ast-size gates and the --walk-sub-ast fallback
 // apply to the general/external routes only; the native route (and the linear
