@@ -20,7 +20,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 EXE = os.path.join(HERE, "build", "mba_cli.exe")
 DATASET = os.path.join(
-    ROOT, r"external\GAMBA\experiments\datasets\qsynth_ea.txt")
+    ROOT, r"data\GAMBA\qsynth_ea.txt")
 BITCOUNT = 8
 
 

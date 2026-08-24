@@ -9,7 +9,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from bench_compare import ROOT, EXE, load_pairs, cpp_general, is_valid
 
 bc = 8
-pairs = load_pairs(os.path.join(ROOT, r"external\GAMBA\experiments\datasets\qsynth_ea.txt"), 100)
+pairs = load_pairs(os.path.join(ROOT, r"data\GAMBA\qsynth_ea.txt"), 100)
 bad = [3, 52, 88, 91, 93, 98]
 
 with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "qsynth_ea_failing.txt"), "w", encoding="utf-8") as f:

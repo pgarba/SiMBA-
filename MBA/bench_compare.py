@@ -25,13 +25,13 @@ ORACLE = os.path.join(ROOT, "external", "GAMBA", "src", "simplify_general.py")
 
 # (name, relative path) - all seven vendored datasets.
 DATASETS = [
-    ("mba_obf_nonlinear", r"external\GAMBA\experiments\datasets\mba_obf_nonlinear.txt"),
-    ("mba_flatten", r"external\GAMBA\experiments\datasets\mba_flatten.txt"),
-    ("syntia", r"external\GAMBA\experiments\datasets\syntia.txt"),
-    ("mba_obf_linear", r"external\GAMBA\experiments\datasets\mba_obf_linear.txt"),
-    ("qsynth_ea", r"external\GAMBA\experiments\datasets\qsynth_ea.txt"),
-    ("neureduce", r"external\GAMBA\experiments\datasets\neureduce.txt"),
-    ("loki_tiny", r"external\GAMBA\experiments\datasets\bonus\loki_tiny.txt"),
+    ("mba_obf_nonlinear", r"data\GAMBA\mba_obf_nonlinear.txt"),
+    ("mba_flatten", r"data\GAMBA\mba_flatten.txt"),
+    ("syntia", r"data\GAMBA\syntia.txt"),
+    ("mba_obf_linear", r"data\GAMBA\mba_obf_linear.txt"),
+    ("qsynth_ea", r"data\GAMBA\qsynth_ea.txt"),
+    ("neureduce", r"data\GAMBA\neureduce.txt"),
+    ("loki_tiny", r"data\GAMBA\loki_tiny.txt"),
 ]
 
 MARKER = "*** ... simplified to "

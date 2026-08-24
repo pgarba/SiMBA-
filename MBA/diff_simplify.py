@@ -12,9 +12,9 @@ from simplify import simplify_linear_mba, Metric
 
 EXE = r"C:\github\SiMBA-\MBA\build\mba_cli.exe"
 DATASETS = [
-    r"C:\github\SiMBA-\external\GAMBA\experiments\datasets\mba_obf_linear.txt",
-    r"C:\github\SiMBA-\external\GAMBA\experiments\datasets\mba_obf_nonlinear.txt",
-    r"C:\github\SiMBA-\external\GAMBA\experiments\datasets\syntia.txt",
+    r"C:\github\SiMBA-\data\GAMBA\mba_obf_linear.txt",
+    r"C:\github\SiMBA-\data\GAMBA\mba_obf_nonlinear.txt",
+    r"C:\github\SiMBA-\data\GAMBA\syntia.txt",
 ]
 
 

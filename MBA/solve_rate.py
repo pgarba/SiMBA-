@@ -19,9 +19,9 @@ import sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 EXE = os.path.join(HERE, "build", "mba_cli.exe")
 DATASETS = [
-    r"external\GAMBA\experiments\datasets\mba_obf_nonlinear.txt",
-    r"external\GAMBA\experiments\datasets\mba_flatten.txt",
-    r"external\GAMBA\experiments\datasets\syntia.txt",
+    r"data\GAMBA\mba_obf_nonlinear.txt",
+    r"data\GAMBA\mba_flatten.txt",
+    r"data\GAMBA\syntia.txt",
 ]
 ROOT = os.path.dirname(HERE)
 

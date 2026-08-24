@@ -8,7 +8,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from bench_compare import ROOT, EXE, load_pairs, cpp_general, is_valid
 
 bc = 8
-pairs = load_pairs(os.path.join(ROOT, r"external\GAMBA\experiments\datasets\qsynth_ea.txt"), 100)
+pairs = load_pairs(os.path.join(ROOT, r"data\GAMBA\qsynth_ea.txt"), 100)
 for k, (expr, gt) in enumerate(pairs):
     res, _ = cpp_general(expr, bc)
     if not res:
