@@ -107,7 +107,7 @@ void LinearSimplifier::initResultVector() {
       par.push_back(n & 1);
       n >>= 1;
     }
-    resultVector.push_back(static_cast<int>(tree->eval(par)));
+    resultVector.push_back(static_cast<int64_t>(tree->eval(par)));
   }
 }
 
@@ -179,11 +179,11 @@ std::string LinearSimplifier::getBitwiseExpression(int offset) {
   return bitwiseFactory->createBitwise(resultVector, false, offset);
 }
 
-std::string LinearSimplifier::getBitwiseForVector(const std::vector<int> &vector, int offset) {
+std::string LinearSimplifier::getBitwiseForVector(const std::vector<int64_t> &vector, int64_t offset) {
   return bitwiseFactory->createBitwise(vector, false, offset);
 }
 
-std::string LinearSimplifier::getNegatedBitwiseForVector(const std::vector<int> &vector) {
+std::string LinearSimplifier::getNegatedBitwiseForVector(const std::vector<int64_t> &vector) {
   return bitwiseFactory->createBitwise(vector, true);
 }
 
@@ -225,8 +225,8 @@ std::string LinearSimplifier::compose(const std::vector<std::string> &bitwises,
 }
 
 std::string LinearSimplifier::termRefinement(int64_t r1, bool first, int64_t rAlt) {
-  std::vector<int> t;
-  for (int r2 : resultVector)
+  std::vector<int64_t> t;
+  for (int64_t r2 : resultVector)
     t.push_back(r2 == r1 || (rAlt != -1 && r2 == rAlt) ? 1 : 0);
 
   std::string bitwise = getBitwiseForVector(t);
@@ -270,8 +270,8 @@ void LinearSimplifier::tryFindNegatedSingleExpression(
   if (resultVector[0] == b)
     return;
 
-  std::vector<int> t;
-  for (int r : resultVector)
+  std::vector<int64_t> t;
+  for (int64_t r : resultVector)
     t.push_back(r == b ? 1 : 0);
   std::string e = getNegatedBitwiseForVector(t);
 
@@ -348,7 +348,7 @@ int64_t LinearSimplifier::reduceByConstant() {
   if (constant != 0) {
     for (size_t i = 0; i < resultVector.size(); ++i) {
       resultVector[i] -= constant;
-      resultVector[i] = static_cast<int>(modRedInt(resultVector[i]));
+      resultVector[i] = static_cast<int64_t>(modRedInt(resultVector[i]));
     }
   }
   return constant;
@@ -368,8 +368,8 @@ void LinearSimplifier::findTwoExpressionsByTwoValues() {
 }
 
 std::vector<std::vector<Decision>> LinearSimplifier::getDecisionVector(
-    int64_t coeff1, int64_t coeff2, const std::vector<int> *vec) const {
-  const std::vector<int> &v = (vec != nullptr) ? *vec : resultVector;
+    int64_t coeff1, int64_t coeff2, const std::vector<int64_t> *vec) const {
+  const std::vector<int64_t> &v = (vec != nullptr) ? *vec : resultVector;
   std::vector<std::vector<Decision>> d;
 
   for (int r : v) {
@@ -429,7 +429,7 @@ std::vector<std::vector<std::vector<Decision>>> LinearSimplifier::split(
 void LinearSimplifier::determineCombOfTwoForCase(
     int64_t coeff1, int64_t coeff2, const std::vector<std::vector<Decision>> &caseVec,
     bool secNegated) {
-  std::vector<int> l1;
+  std::vector<int64_t> l1;
   for (const auto &c : caseVec)
     l1.push_back(c == std::vector<Decision>{Decision::FIRST} ||
                        c == std::vector<Decision>{Decision::BOTH}
@@ -437,7 +437,7 @@ void LinearSimplifier::determineCombOfTwoForCase(
                      : 0);
   std::string first = getBitwiseForVector(l1);
 
-  std::vector<int> l2;
+  std::vector<int64_t> l2;
   for (const auto &c : caseVec)
     l2.push_back(c == std::vector<Decision>{Decision::SECOND} ||
                        c == std::vector<Decision>{Decision::BOTH}
@@ -452,7 +452,7 @@ void LinearSimplifier::determineCombOfTwoForCase(
 }
 
 void LinearSimplifier::determineCombOfTwo(int64_t coeff1, int64_t coeff2,
-                                          const std::vector<int> *vec, bool secNegated) {
+                                          const std::vector<int64_t> *vec, bool secNegated) {
   auto d = getDecisionVector(coeff1, coeff2, vec);
   std::vector<std::vector<std::vector<Decision>>> cases = {d};
 
@@ -476,9 +476,9 @@ void LinearSimplifier::tryFindNegatedAndUnnegatedExpression() {
     return;
 
   int64_t negCoeff = resultVector[0];
-  std::vector<int> vec;
-  for (int a : resultVector)
-    vec.push_back(static_cast<int>(modRedInt(a - negCoeff)));
+  std::vector<int64_t> vec;
+  for (int64_t a : resultVector)
+    vec.push_back(static_cast<int64_t>(modRedInt(a - negCoeff)));
 
   std::vector<int64_t> uniqueValues;
   for (int64_t r : std::set<int64_t>(vec.begin(), vec.end()))
@@ -514,9 +514,9 @@ void LinearSimplifier::tryFindTwoNegatedExpressions() {
     return;
 
   int64_t coeffSum = resultVector[0];
-  std::vector<int> vec;
-  for (int a : resultVector)
-    vec.push_back(static_cast<int>(modRedInt(a - coeffSum)));
+  std::vector<int64_t> vec;
+  for (int64_t a : resultVector)
+    vec.push_back(static_cast<int64_t>(modRedInt(a - coeffSum)));
 
   std::vector<int64_t> uniqueValues;
   for (int64_t r : std::set<int64_t>(vec.begin(), vec.end()))
@@ -535,16 +535,16 @@ void LinearSimplifier::tryFindTwoNegatedExpressions() {
     return;
 
   int64_t coeff1 = a;
-  std::vector<int> l;
-  for (int r : vec)
+  std::vector<int64_t> l;
+  for (int64_t r : vec)
     l.push_back(r == coeff1 || r == coeffSum ? 1 : 0);
   std::string bitwise1 = getNegatedBitwiseForVector(l);
 
   int64_t coeff2 = b;
   for (size_t i = 0; i < vec.size(); ++i)
-    vec[i] = static_cast<int>(modRedInt(vec[i] - coeff1 * l[i]));
-  std::vector<int> vec2;
-  for (int r : vec)
+    vec[i] = static_cast<int64_t>(modRedInt(vec[i] - coeff1 * l[i]));
+  std::vector<int64_t> vec2;
+  for (int64_t r : vec)
     vec2.push_back(r == coeff2 ? 1 : 0);
   std::string bitwise2 = getNegatedBitwiseForVector(vec2);
 
@@ -601,7 +601,7 @@ void LinearSimplifier::tryRefineTwoTermsFirstNonZero(
     const std::vector<int64_t> &resultSet) {
   int l = static_cast<int>(resultSet.size());
 
-  std::vector<int> resultVectorCopy = resultVector;
+  std::vector<int64_t> resultVectorCopy = resultVector;
 
   if (l == 2) {
     int64_t constant = reduceByConstant();

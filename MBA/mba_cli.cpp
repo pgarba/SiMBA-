@@ -72,12 +72,12 @@ int main(int argc, char **argv) {
       return 2;
     }
     int vnumber = bitCount;
-    std::vector<int> vec;
+    std::vector<int64_t> vec;
     std::stringstream ss(expr);
     std::string tok;
     while (std::getline(ss, tok, ',')) {
       if (!tok.empty())
-        vec.push_back(atoi(tok.c_str()));
+        vec.push_back(static_cast<int64_t>(atoll(tok.c_str())));
     }
     BitwiseFactory f(vnumber);
     printf("%s\n", f.createBitwise(vec).c_str());
