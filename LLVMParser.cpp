@@ -740,7 +740,8 @@ int LLVMParser::simplifyMBAModule() {
 
         std::string RoutedRepl;
         Routed = LSiMBA::TrySelectedSimplifier(Expr, RoutedRepl, BitWidth,
-                                               this->Prove);
+                                               this->Prove,
+                                               LSiMBA::autoFallbackEnabled());
         if (Routed) {
           SimpExpr = RoutedRepl;
 
@@ -2275,7 +2276,8 @@ bool LLVMParser::findReplacements(llvm::DominatorTree *DT,
       }
 
       Routed = LSiMBA::TrySelectedSimplifier(Expr, Cand.Replacement, BitWidth,
-                                             this->Prove);
+                                             this->Prove,
+                                             LSiMBA::autoFallbackEnabled());
       if (Routed && this->Debug) {
         outs() << "[*] Selected simplifier produced: '" << Cand.Replacement
                << "'\n";
@@ -2314,6 +2316,20 @@ bool LLVMParser::findReplacements(llvm::DominatorTree *DT,
       S.simplify(Cand.Replacement, false, false);
       if (this->Debug) {
         outs() << "[*] [NATIVE] '" << Cand.Replacement << "'\n";
+      }
+      // Auto-fallback: native produced nothing (e.g. checkLinear classified
+      // the expression as linear but the native simplifier cannot reduce it,
+      // while msimba/general could). Try the other routes before giving up.
+      if (Cand.Replacement.empty() && LSiMBA::autoFallbackActive()) {
+        auto Expr = getASTAsString(Cand.AST, Cand.Variables);
+        std::string fb;
+        if (LSiMBA::TryAutoFallback(Expr, fb, BitWidth, this->Prove, false,
+                                    "")) {
+          Cand.Replacement = fb;
+          if (this->Debug) {
+            outs() << "[*] [AUTO-FALLBACK] '" << Cand.Replacement << "'\n";
+          }
+        }
       }
     }
 
@@ -2452,7 +2468,8 @@ bool LLVMParser::walkSubAST(llvm::DominatorTree *DT,
       if (!Unrenderable) {
         auto Expr = getASTAsString(C.AST, C.Variables);
         Routed = LSiMBA::TrySelectedSimplifier(Expr, C.Replacement, BitWidth,
-                                               this->Prove);
+                                               this->Prove,
+                                               LSiMBA::autoFallbackEnabled());
       }
 
       if (!Routed && !Unrenderable && !UseExternalSimplifier.empty()) {

@@ -48,8 +48,18 @@ substitution, the bitwise factory, the linear simplifier, and the general
 plan and verification status.
 
 The `SiMBA++` CLI routes simplification through
-`--simplifier {native|general|external|auto}` (default `native`; `auto` sends
-linear MBAs to the native path and nonlinear ones to the native GAMBA port).
+`--simplifier {native|general|external|msimba|auto}` (default `auto`: linear
+MBAs go to the native path, semi-linear ones to the MSiMBA port, and
+nonlinear ones to the native GAMBA port).
+
+**Auto-fallback (default on, `--auto-fallback`; disable with
+`--auto-fallback=false`):** in `auto` mode, if the chosen route produces no
+result, the remaining routes are tried in order (msimba → general → external)
+before giving up. This covers the case where `checkLinear` classifies an
+expression as linear but the native simplifier cannot reduce it, while
+MSiMBA/general can. Explicit `--simplifier=X` stays single-route (no
+fallback).
+
 **Verification is enforced on every non-native result** ("never trust an
 unverified result"):
 
@@ -283,7 +293,8 @@ is infeasible on 5/6-var files, and it does not reach 100% on any file.
   --parallel                     - Evaluate/Check MBA expressions in parallel
   --optimize                     - Optimize LLVM IR before simplification (Default: true)
   --external-simplifier          - Use SiMBA/GAMBA or m as simplifier instead of internal (Path to simplify.py/simplify_general.py)
-  --simplifier                 - MBA simplifier to use: native | general | external | auto (Default: native)
+  --simplifier                 - MBA simplifier to use: native | general | external | msimba | auto (Default: auto)
+  --auto-fallback                - In auto mode, try the other routes if the chosen one yields no result (Default: true)
   --max-var-count                - Max variable count for simplification (Default: 6)
   --min-ast-size                 - Minimum AST size for simplification (Default: 4)
   --walk-sub-ast                 - Walk sub AST if full AST does not match (Default: false)
