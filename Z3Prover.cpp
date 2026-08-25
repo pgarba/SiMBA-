@@ -1,5 +1,6 @@
 #include "Z3Prover.h"
 
+#include <cstdlib>
 #include <iostream>
 #include <map>
 
@@ -110,7 +111,7 @@ bool prove(z3::expr conjecture) {
   Solver->reset();
   Solver->add(conjecture);
 
-  if (PrintSMT) {
+  if (PrintSMT || (getenv("SIMBA_PRINT_SMT") != nullptr)) {
     llvm::outs() << "[SMT2 Start]\n" << Solver->to_smt2() << "[SMT2 End]\n";
   }
 
