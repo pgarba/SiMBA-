@@ -177,10 +177,11 @@ void SimplifySingleMBA() {
   std::string SimpMBA = "";
   auto start = high_resolution_clock::now();
 
-  // Phase 9: route to the selected simplifier (--simplifier). The native
-  // selection (default) keeps the original code path below untouched.
+  // Phase 9: route to the selected simplifier (--simplifier, default auto).
+  // The native route keeps the original code path below untouched.
   auto R = LSiMBA::RouteSimplify(StrMBA, SimpMBA, BitCount, ProveZ3,
-                                 UseFastCheck, RunParallel, CheckLinear);
+                                 UseFastCheck, RunParallel, CheckLinear,
+                                 LSiMBA::autoFallbackEnabled());
 
   if (R == LSiMBA::RouteResult::SUCCESS) {
     auto stop = high_resolution_clock::now();
@@ -220,6 +221,19 @@ void SimplifySingleMBA() {
   // NATIVE: original path (baseline behavior unchanged)
   auto Result = LSiMBA::Simplifier::simplify_linear_mba(
       StrMBA, SimpMBA, BitCount, ProveZ3, CheckLinear);
+
+  // Auto-fallback: native produced nothing (e.g. checkLinear classified the
+  // expression as linear but the native simplifier cannot reduce it, while
+  // msimba/general could). Try the other routes before reporting a failure.
+  if (SimpMBA.empty() && LSiMBA::autoFallbackActive()) {
+    std::string fb;
+    if (LSiMBA::TryAutoFallback(StrMBA, fb, BitCount, ProveZ3, UseFastCheck,
+                                "")) {
+      SimpMBA = fb;
+      Result = true;
+    }
+  }
+
   auto stop = high_resolution_clock::now();
   auto duration = duration_cast<milliseconds>(stop - start);
 
@@ -366,10 +380,11 @@ void SimplifyLLVMModule() {
 
 void RunSimplifier(std::string &MBA, std::string &SimpMBA, std::string &ExpMBA,
                    int &Counter, int &Valid) {
-  // Phase 9: route to the selected simplifier (--simplifier). The native
-  // selection (default) keeps the original path below untouched.
+  // Phase 9: route to the selected simplifier (--simplifier, default auto).
+  // The native route keeps the original path below untouched.
   auto R = LSiMBA::RouteSimplify(MBA, SimpMBA, BitCount, ProveZ3, UseFastCheck,
-                                 RunParallel, CheckLinear);
+                                 RunParallel, CheckLinear,
+                                 LSiMBA::autoFallbackEnabled());
 
   if (R == LSiMBA::RouteResult::SKIPPED) {
     printf("[%d] Skipped (see gate message above)\n", Counter);
@@ -398,6 +413,18 @@ void RunSimplifier(std::string &MBA, std::string &SimpMBA, std::string &ExpMBA,
     if (IgnoreExpected == false && SimplifyExpected == true) {
       LSiMBA::Simplifier::simplify_linear_mba(MBA, ExpMBA, BitCount, false,
                                               false, false, RunParallel);
+    }
+
+    // Auto-fallback: native produced nothing (e.g. checkLinear classified the
+    // expression as linear but the native simplifier cannot reduce it, while
+    // msimba/general could). Try the other routes before reporting a failure.
+    if (SimpMBA.empty() && LSiMBA::autoFallbackActive()) {
+      std::string fb;
+      if (LSiMBA::TryAutoFallback(MBA, fb, BitCount, ProveZ3, UseFastCheck,
+                                  "")) {
+        SimpMBA = fb;
+        Result = true;
+      }
     }
   }
 

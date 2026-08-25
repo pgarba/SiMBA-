@@ -33,8 +33,22 @@ extern llvm::cl::opt<bool> EnableMod;      // Simplifier.cpp
 llvm::cl::opt<std::string> SimplifierChoice(
     "simplifier", llvm::cl::Optional,
     llvm::cl::desc("MBA simplifier to use: native | general | external | "
-                  "msimba | auto (Default native)"),
-    llvm::cl::value_desc("simplifier"), llvm::cl::init("native"),
+                  "msimba | auto (Default auto)"),
+    llvm::cl::value_desc("simplifier"), llvm::cl::init("auto"),
+    llvm::cl::cat(SiMBAOpt));
+
+// Auto-fallback: when --simplifier=auto and the classified route produces no
+// result, try the remaining non-native routes before giving up. This covers
+// the case where checkLinear classifies an expression as linear (so auto
+// routes it to native) but the native simplifier cannot actually reduce it,
+// while msimba/general could. Also exposed to library callers via the
+// autoFallback parameter of RouteSimplify / TrySelectedSimplifier and the
+// public TryAutoFallback().
+llvm::cl::opt<bool> AutoFallback(
+    "auto-fallback", llvm::cl::Optional,
+    llvm::cl::desc("With --simplifier=auto, fall back to the other routes if "
+                  "the classified one produces no result (Default true)"),
+    llvm::cl::value_desc("auto-fallback"), llvm::cl::init(true),
     llvm::cl::cat(SiMBAOpt));
 
 namespace LSiMBA {
@@ -49,6 +63,10 @@ std::string normalizeChoice(const std::string &in) {
     out.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(c))));
   return out;
 }
+
+// True when the effective selection is `auto` (the fallback only applies in
+// auto mode; an explicit --simplifier=X is a single route, no fallback).
+bool isAutoMode() { return normalizeChoice(SimplifierChoice.getValue()) == "auto"; }
 
 // Quote a single argument for CreateProcess (Windows does not use a shell).
 std::string shellQuote(const std::string &s) {
@@ -404,6 +422,34 @@ bool isGatedOut(const std::string &expr, int bitCount) {
 // Above that it is skipped and the caller falls back to the native path.
 bool generalFeasibleAt(int bitCount) { return bitCount <= 16; }
 
+// Run a single named non-native route and return its result string (empty if
+// the route produced nothing). Does NOT verify the result. Mirrors the
+// per-route logic in RouteSimplify / TrySelectedSimplifier so the
+// auto-fallback tries exactly the same routes the primary selection would.
+std::string runNamedRoute(const std::string &MBA, int bitCount, bool useZ3,
+                          const std::string &route) {
+  if (route == "msimba")
+    return LSiMBA::MBA::MultibitSimplifier::simplify(MBA, bitCount, false);
+  if (route == "general") {
+    int tsec = timeout > 0 ? timeout : 25;
+    std::string res =
+        LSiMBA::MBA::simplifyMba(MBA, bitCount, useZ3, false, -1, tsec);
+    if (res.empty() && ShouldWalkSubAST)
+      res = walkTopLevelTerms(MBA, bitCount, useZ3, "general");
+    return res;
+  }
+  if (route == "external") {
+    bool fb = false;
+    std::string res;
+    if (runExternalGamba(MBA, bitCount, useZ3, res, fb))
+      return res;
+    if (ShouldWalkSubAST)
+      return walkTopLevelTerms(MBA, bitCount, useZ3, "external");
+    return "";
+  }
+  return "";
+}
+
 } // namespace
 
 // Verify a non-native result before it is reported as a valid replacement
@@ -418,9 +464,37 @@ bool verifyNonNativeResult(const std::string &orig, const std::string &res,
   return true;
 }
 
+bool autoFallbackActive() {
+  return isAutoMode() && AutoFallback.getValue();
+}
+
+bool autoFallbackEnabled() { return AutoFallback.getValue(); }
+
+bool TryAutoFallback(const std::string &MBA, std::string &SimpMBA,
+                     int bitCount, bool useZ3, bool fastCheck,
+                     const std::string &skip) {
+  const char *order[] = {"msimba", "general", "external"};
+  for (const char *r : order) {
+    if (std::string(r) == skip)
+      continue;
+    if (std::string(r) == "general" && !generalFeasibleAt(bitCount))
+      continue;
+    std::string res = runNamedRoute(MBA, bitCount, useZ3, r);
+    if (res.empty())
+      continue;
+    // Skip candidates that fail verification so the next route is tried.
+    if (fastCheck && !LSiMBA::MBA::fastCheckEquivalent(MBA, res, bitCount))
+      continue;
+    SimpMBA = res;
+    return true;
+  }
+  return false;
+}
+
 RouteResult RouteSimplify(const std::string &MBA, std::string &SimpMBA,
                           int bitCount, bool useZ3, bool fastCheck,
-                          bool runParallel, bool checkLinear) {
+                          bool runParallel, bool checkLinear,
+                          bool autoFallback) {
   (void)runParallel;
   (void)checkLinear; // the native path applies these itself
 
@@ -437,8 +511,12 @@ RouteResult RouteSimplify(const std::string &MBA, std::string &SimpMBA,
   if (choice == "msimba") {
     std::string res =
         LSiMBA::MBA::MultibitSimplifier::simplify(MBA, bitCount, false);
-    if (res.empty())
+    if (res.empty()) {
+      if (autoFallback && isAutoMode() &&
+          TryAutoFallback(MBA, SimpMBA, bitCount, useZ3, fastCheck, "msimba"))
+        return RouteResult::SUCCESS;
       return RouteResult::FAILED;
+    }
     SimpMBA = res;
     if (!verifyNonNativeResult(MBA, res, bitCount, fastCheck))
       return RouteResult::INVALID;
@@ -457,8 +535,12 @@ RouteResult RouteSimplify(const std::string &MBA, std::string &SimpMBA,
         LSiMBA::MBA::simplifyMba(MBA, bitCount, useZ3, false, -1, tsec);
     if (res.empty() && ShouldWalkSubAST)
       res = walkTopLevelTerms(MBA, bitCount, useZ3, "general");
-    if (res.empty())
+    if (res.empty()) {
+      if (autoFallback && isAutoMode() &&
+          TryAutoFallback(MBA, SimpMBA, bitCount, useZ3, fastCheck, "general"))
+        return RouteResult::SUCCESS;
       return RouteResult::FAILED;
+    }
     SimpMBA = res;
     if (!verifyNonNativeResult(MBA, res, bitCount, fastCheck))
       return RouteResult::INVALID;
@@ -484,11 +566,14 @@ RouteResult RouteSimplify(const std::string &MBA, std::string &SimpMBA,
       return RouteResult::SUCCESS;
     }
   }
+  if (autoFallback && isAutoMode() &&
+      TryAutoFallback(MBA, SimpMBA, bitCount, useZ3, fastCheck, "external"))
+    return RouteResult::SUCCESS;
   return RouteResult::FAILED;
 }
 
 bool TrySelectedSimplifier(const std::string &Expr, std::string &SimpMBA,
-                           int bitWidth, bool useZ3) {
+                           int bitWidth, bool useZ3, bool autoFallback) {
   std::string choice = effectiveChoice(Expr, bitWidth);
   if (choice.empty())
     return false;
@@ -502,8 +587,14 @@ bool TrySelectedSimplifier(const std::string &Expr, std::string &SimpMBA,
   if (choice == "msimba") {
     std::string res =
         LSiMBA::MBA::MultibitSimplifier::simplify(Expr, bitWidth, false);
-    if (res.empty())
+    if (res.empty()) {
+      // auto-fallback: try the other routes (result left unverified; the
+      // caller's verify() step validates it, as for the primary result).
+      if (autoFallback && isAutoMode() &&
+          TryAutoFallback(Expr, SimpMBA, bitWidth, useZ3, false, "msimba"))
+        return true;
       return false;
+    }
     SimpMBA = res;
     return true;
   }
@@ -514,8 +605,12 @@ bool TrySelectedSimplifier(const std::string &Expr, std::string &SimpMBA,
         LSiMBA::MBA::simplifyMba(Expr, bitWidth, useZ3, false, -1, tsec);
     if (res.empty() && ShouldWalkSubAST)
       res = walkTopLevelTerms(Expr, bitWidth, useZ3, "general");
-    if (res.empty())
+    if (res.empty()) {
+      if (autoFallback && isAutoMode() &&
+          TryAutoFallback(Expr, SimpMBA, bitWidth, useZ3, false, "general"))
+        return true;
       return false;
+    }
     SimpMBA = res;
     return true;
   }
@@ -533,6 +628,9 @@ bool TrySelectedSimplifier(const std::string &Expr, std::string &SimpMBA,
       return true;
     }
   }
+  if (autoFallback && isAutoMode() &&
+      TryAutoFallback(Expr, SimpMBA, bitWidth, useZ3, false, "external"))
+    return true;
   return false;
 }
 
