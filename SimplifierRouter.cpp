@@ -442,6 +442,12 @@ RouteResult RouteSimplify(const std::string &MBA, std::string &SimpMBA,
     SimpMBA = res;
     if (!verifyNonNativeResult(MBA, res, bitCount, fastCheck))
       return RouteResult::INVALID;
+    // With --prove, verify the result with Z3 (see plans/
+    // Z3_PROVE_SEMILINEAR_PLAN.md: Z3 QF_BV times out on the multi-variable
+    // cases at any width; the canonical-form check is the fast path that
+    // Phase 2 adds).
+    if (useZ3 && !LSiMBA::MBA::proveEquivalent(MBA, res, bitCount))
+      return RouteResult::INVALID;
     return RouteResult::SUCCESS;
   }
 
