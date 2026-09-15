@@ -18,6 +18,7 @@
 // define MBA_HAS_Z3 (see CMakeLists.txt); without it proveEquivalent is a
 // safe no-op returning false.
 #ifdef MBA_HAS_Z3
+#include "SemiLinearProver.h"
 #include "Z3Prover.h"
 #endif
 
@@ -152,7 +153,15 @@ bool proveEquivalent(const std::string &orig, const std::string &simp,
   // string to the native Z3 tokenizer would then see an unknown variable.
   std::string e0 = normalizeForNativeTokenizer(a->toString());
   std::string e1 = normalizeForNativeTokenizer(b->toString());
-  return proveReplacement(e0, e1, bitCount, vars);
+
+  // 1) QF_BV: sub-millisecond on the easy cases — keep it first.
+  if (proveReplacement(e0, e1, bitCount, vars))
+    return true;
+  // 2) MSiMBA signature lifting: complete for the semi-linear class (the
+  //    hard `sum(const x bitwise)` cases that time out QF_BV), ~ms.
+  //    ABSTAIN (2) on non-semilinear sides falls through to the old result
+  //    (not proved).
+  return proveSemiLinear(e0, e1, bitCount, vars) == 1;
 #endif
 }
 

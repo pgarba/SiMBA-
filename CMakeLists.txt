@@ -178,7 +178,8 @@ set(MBA_SOURCES
     "MBA/Implicant.cpp" "MBA/Dnf.cpp" "MBA/BitwiseFactory.cpp"
     "MBA/LinearSimplifier.cpp" "MBA/GeneralSimplifier.cpp" "MBA/Verify.cpp"
     "MBA/MultibitSimplifier.cpp" "MBA/MultibitRefiner.cpp"
-    "MBA/ConstantSubstituter.cpp")
+    "MBA/ConstantSubstituter.cpp"
+    "MBA/SemiLinearProver.cpp" "MBA/SemiLinearProver.h")
 
 add_executable(SiMBA++ "CSiMBA.cpp" "CSiMBA.h" "LLVMParser.cpp" "LLVMParser.h" "Simplifier.h" "MBAChecker.cpp" "MBAChecker.h" "Simplifier.cpp" "ShuttingYard.cpp" "Modulo.cpp" "Modulo.h" "Z3Prover.cpp" "Z3Prover.h" "SimplifierRouter.cpp" "SimplifierRouter.h" ${MBA_SOURCES})
 target_compile_definitions(SiMBA++ PRIVATE MBA_HAS_Z3)

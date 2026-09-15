@@ -1,5 +1,13 @@
 # Kissat SAT Proving for Semi-Linear MBAs — Plan
 
+> **STATUS (2026-09): Step 0 gate FAILED; plan superseded by the adapted
+> MSiMBA signature-lifting prover (`MBA/SemiLinearProver.{h,cpp}` — see
+> `REMAINING_WORK_PLAN.md` P1).** The direct SAT refutation is intractable
+> for this class (every CDCL solver tested > 5 min at 32-bit). The
+> signature-theorem adaptation meets the same gate in ~30-70 ms and is
+> integrated. Steps 1-3 (Kissat integration) are parked as an optional
+> general fallback; the certified benchmark lives at `/tmp/kissat_bench.cpp`.
+
 ## Goal
 
 Provide a **complete, sound, independent** proof for the semi-linear

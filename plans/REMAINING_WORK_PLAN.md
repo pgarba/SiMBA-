@@ -15,7 +15,7 @@
 | Prove test suite (honest Z3 metric) | **DONE** — 32-bit simba/msimba, 8-bit gamba, 10 s timeout |
 | Canonical ground-truth validation | **DONE** — 934/950 canonical, 0 bad, 16 fail (negative-constant coverage gap, see P2) |
 | `auto` default + `--auto-fallback` | **DONE** (b2eae11) — fixes checkLinear over-claim mis-routes |
-| GAMBA test suite repair (P0) | **DONE** — honest runner (crash ⇒ FAIL), 11 dead oracle tests archived, tier2 on native binary: 0.8 s at N=100, 800/800 |
+| GAMBA test suite repair (P0) | **DONE** (8aa605d) — honest runner (crash ⇒ FAIL), 11 dead oracle tests archived, tier2 on native binary: 0.8 s at N=100, 800/800 |
 | CoBRA dataset benchmark | **DONE** (2026-09-15) — 99.5% new / 100% already-covered; see section below |
 | verify() width fix (lifted.ll) | **DONE** (checklist fully ticked, `REMAINING_WORK_VERIFY_FIX.md`) |
 
@@ -164,6 +164,64 @@ Kissat fetchable (single .h/.c, MIT), CaDiCaL already built as fallback.
 bit-blasting `/tmp/conj32.smt2` + `/tmp/conj.smt2`, Tseitin to CNF, Kissat
 solve. Proceed only if 32-bit → UNSAT < 1 s and 64-bit → UNSAT < 30 s
 (fallback: per-bit instances, trivially parallel).
+
+**Step 0 result (gate FAILED — 2026-07): direct approach intractable.**
+Bench built (`/tmp/kissat_bench`: own BitSlicer — ripple adders, const×var
+and generic mul, `#x`/`#b`/decimal constant fixing — + iterative Tseitin,
+exhaustively cross-checked against Python ground truth on 16 small pairs,
+all OK). First 3 gate encodings were wrong (NOT=identity, AND/OR
+one-sided, IMPL/ITE broken; XOR 4-clause→6-clause) — all fixed and
+certified. Hard-case benchmark on line 1 of `data/MSiMBA/e1_4vars.txt`
+(`expr, groundtruth` comma-split; 64-bit dataset), target `x + 5148131303079159687`:
+- encode: 32-bit 62.7k vars/241k clauses in 0.09 s; 64-bit 241k/930k in 0.34 s
+- whole-formula UNSAT: Kissat/CaDiCaL/Maplesat/CMS5(xornative)/Z3 all > 5 min
+  at **32-bit** (even 16-bit > 1 min for every solver). Ground polarity
+  confirmed by `mba_cli verify` (EQUIVALENT) — instances are truly UNSAT,
+  just CDCL-hostile (long carry cones + XOR density).
+- plan-sanctioned per-bit fallback: bits 0–~10 solve (bit 0: 2.6k clauses →
+  15 ms; bit 5: 38k → 0.18 s); bits 15+ intractable for all 4 solvers
+  (116k-clause bit-15 instance > 2.5 min each).
+- native-XOR encoding (CMS `x`-prefix clauses, 1 clause per XOR/NOT, zero
+  aux vars) implemented and verified; helps parse, no solve-time breakthrough.
+**Per the plan's stop condition: do not proceed to integration as written.**
+Adaptation under consideration: MSiMBA signature-theorem decomposition
+(prove 128 fixed-input signature-point instances, each trivially small; the
+only non-SAT-checked step is the cited semi-linear equivalence theorem
+arXiv:2406.10016 + the project's AST linearity check).
+
+**Adapted P1 (user-approved 2026-09) — DONE.** The direct approach died at
+the gate; the adaptation passes it with large margins:
+- Theorem validation: `E == GT for all inputs` iff equal multi-bit signature
+  vectors (N x 2^t points, per-bit `E(c0*2^i, ...) >> i`), validated
+  empirically on 800 random MSiMBA-class pairs at 3-4 bits (0 mismatches,
+  signature-equality == exhaustive-equivalence; /tmp/theorem_check2.py).
+- `MBA/SemiLinearProver.{h,cpp}` (production): Z3 AST class check (abstain
+  outside the class — over-approximate in the safe direction) + direct
+  N-bit evaluation of the parsed BV tree at each signature point (memoized
+  DAG walk — naive recursion is exponential on carry chains; also: the
+  tree-eval function must NOT be declared `bool` — it silently truncated
+  results to 1). Returns PROVED / NOT-PROVED (with differing count) /
+  ABSTAIN. Eval failures ABSTAIN (never prove on a partial evaluation).
+- Integration: `proveEquivalent` (MBA/Verify.cpp) = QF_BV first, then
+  `proveSemiLinear` fallback.
+- Bench (certified in `/tmp/kissat_bench.cpp`): own BitSlicer + Tseitin,
+exhaustively cross-checked vs Python ground truth (16 pairs, per-assignment
+CNF reduction); slicer fixed-input path cross-checked vs the direct
+evaluator on 29 random pairs. Native-XOR DIMACS output for CMS
+(`x`-prefix) implemented and verified on small cases.
+- **Gate (adapted):** 32-bit hard case PROVED in **24-35 ms** (< 1 s ✓);
+  64-bit PROVED in **53-73 ms** (< 30 s ✓). Negative controls: tampered
+  constant -> NOT PROVED (32 differing points); var x var mul -> ABSTAIN.
+- **Effect (tests/run_prove_tests.py, N=10):** msimba proved **24/95 ->
+  164/190 (86%)** — the hard `sum(const x bitwise)` cases that timed out Z3
+  for minutes now prove in ~25 ms. simba 41/170, gamba 61/70.
+- Known limits: (a) the signature theorem is cited + empirically validated,
+  not machine-checked — the one non-SAT-verified inference in the proof
+  chain; (b) class check abstains on var x var products (those stay on the
+  Z3/SAT path); (c) the direct Kissat SAT refutation (KISSAT_PROVE_PLAN
+  steps 1-3) remains unbuilt — keep as a general fallback for
+  non-semilinear cases only if ever needed; the bench proves the encoding
+  pipeline itself is correct.
 
 **Expected effect:** msimba prove metric jumps from 24/95 (N=5) toward
 near-complete; simba hard cases improve; the prove suite becomes a real
