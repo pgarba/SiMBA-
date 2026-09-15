@@ -13,17 +13,46 @@ at 8; run with a larger bitCount manually if desired.)
 """
 import os
 import random
+import shutil
 import subprocess
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-CLI = os.path.join(HERE, "build", "mba_cli.exe")
+
+
+def find_cli():
+    """Locate a native mba_cli. Preference: repo-root build-linux (the
+    standard native build) -> MBA/build/mba_cli -> Wine-wrapped .exe as a
+    last resort on non-Windows. Returns (argv_prefix, description)."""
+    if os.name == "nt":
+        for cand in ("build", "mba_cli.exe"), ("build", "mba_cli"):
+            p = os.path.join(HERE, *cand)
+            if os.path.exists(p):
+                return [p], "native " + p
+        sys.exit(f"error: no mba_cli found under {os.path.join(HERE, 'build')}")
+    for p in (
+        os.path.join(HERE, "..", "build-linux", "mba_cli"),
+        os.path.join(HERE, "build", "mba_cli"),
+    ):
+        if os.path.exists(p) and os.access(p, os.X_OK):
+            return [p], "native " + p
+    exe = os.path.join(HERE, "build", "mba_cli.exe")
+    wine = shutil.which("wine")
+    if os.path.exists(exe) and wine:
+        return [wine, exe], "wine " + exe
+    sys.exit(
+        "error: no usable mba_cli (tried build-linux/mba_cli, build/mba_cli, "
+        "wine build/mba_cli.exe); build it: cmake -S . -B build-linux && cmake --build build-linux"
+    )
+
+
+CLI, CLI_DESC = find_cli()
 
 
 def mba_eval(bc, expr, values):
     """Run mba_cli eval; returns (varnames, result)."""
     out = subprocess.run(
-        [CLI, "eval", str(bc), expr, ",".join(str(v) for v in values)],
+        CLI + ["eval", str(bc), expr, ",".join(str(v) for v in values)],
         capture_output=True, text=True, check=True,
     ).stdout.strip().splitlines()
     varnames = out[0].split(",") if out and out[0] != "" else []
@@ -33,6 +62,7 @@ def mba_eval(bc, expr, values):
 
 def main():
     trials = int(sys.argv[1]) if len(sys.argv) > 1 else 500
+    print(f"using mba_cli: {CLI_DESC}")
     B = 8  # Fixed bit width (the general simplifier is exponential in width).
     M = 1 << B
     rng = random.Random(1234)

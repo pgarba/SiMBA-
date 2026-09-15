@@ -15,6 +15,7 @@
 | Prove test suite (honest Z3 metric) | **DONE** — 32-bit simba/msimba, 8-bit gamba, 10 s timeout |
 | Canonical ground-truth validation | **DONE** — 934/950 canonical, 0 bad, 16 fail (negative-constant coverage gap, see P2) |
 | `auto` default + `--auto-fallback` | **DONE** (b2eae11) — fixes checkLinear over-claim mis-routes |
+| GAMBA test suite repair (P0) | **DONE** — honest runner (crash ⇒ FAIL), 11 dead oracle tests archived, tier2 on native binary: 0.8 s at N=100, 800/800 |
 | CoBRA dataset benchmark | **DONE** (2026-09-15) — 99.5% new / 100% already-covered; see section below |
 | verify() width fix (lifted.ll) | **DONE** (checklist fully ticked, `REMAINING_WORK_VERIFY_FIX.md`) |
 
@@ -94,7 +95,21 @@ fix, re-run `tests/test_canonical.py` + `tests/run_cobra_tests.py`.
 
 ---
 
-## P0 — Repair the GAMBA differential test suite (NEW finding — false passes)
+## P0 — Repair the GAMBA differential test suite (DONE)
+
+**Resolution:** `run_all_tests.py` now FAILs on non-zero child exit, timeout,
+or missing script (no silent passes; verified with a deliberately broken
+child). The 11 oracle-dependent tests (9 import crashes + `diff_general`
+hardcoded Windows path + `diff_qsynth_ea` backslash path) moved to
+`MBA/archive_differential/` (still in git history). `test_tier2_semantics.py`
+uses the native binary with a fallback chain (repo-root `build-linux/mba_cli`
+→ `MBA/build/mba_cli` → Wine `.exe` on non-Windows): 800 checks, 0 mismatch
+in 0.8 s at N=100 (was ~30 min via Wine). Acceptance met: suite < 2 min,
+tier2 genuinely executed, exit 0, broken child fails the runner.
+
+---
+
+## P0 (original audit) — Repair the GAMBA differential test suite (NEW finding — false passes)
 
 **Problem (measured 2026-09-15).** Commit `3d44203` removed the vendored
 Python oracle (`external/GAMBA/src/`) — by design, the C++ port is complete.
@@ -197,7 +212,7 @@ re-run `tests/test_canonical.py` (higher N) + `tests/run_cobra_tests.py`.
 
 ## Suggested order
 
-1. **P0** (honest test signal) — 2–4 h, unblocks trust in everything else.
+1. ~~**P0** (honest test signal) — done.~~
 2. **P1** (Kissat) — 3–4 days, the main capability gain.
 3. **P2** (negative constants) — ½–1 day, can slot between P1 steps.
 4. **P3** items as needed.
