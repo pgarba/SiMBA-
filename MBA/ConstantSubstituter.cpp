@@ -70,9 +70,20 @@ ConstantSubstituter::apply(const std::shared_ptr<Node> &ast,
     return {nullptr, {}};
 
   // Substitute all unique constants with temporary variables.
+  //
+  // The name MUST be a single parser token: the substituted expression is
+  // serialized and re-parsed (by the 1-bit SiMBA path), so a name with an
+  // operator in it is silently rewritten. The old `um + to_string(constant)`
+  // produced `um-1112` for negative constants, which re-parses as the
+  // SUBTRACTION `um - 1112` — the 1-bit solver then works on a different
+  // expression, back-substitution finds no `um-1112` variable, and the
+  // result is not equivalent (it used to surface as the 16 negative-
+  // constant canonical-test failures; tests/test_canonical.py).
   std::unordered_map<int64_t, std::string> substMapping;
   for (auto &[constant, users] : userMapping) {
-    std::string name = "um" + std::to_string(constant);
+    std::string name =
+        constant < 0 ? ("um_n" + std::to_string(static_cast<uint64_t>(-constant)))
+                     : ("um" + std::to_string(constant));
     if (existingVars.count(name))
       return {nullptr, {}}; // Name conflict.
 

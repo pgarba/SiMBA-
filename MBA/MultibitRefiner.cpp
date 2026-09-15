@@ -169,26 +169,16 @@ MultibitRefiner::trySimplifyXor(uint64_t constantOffset,
       }
     }
 
-    // Try XOR-with-1 pair (x^y case).
-    uint64_t xorInv = moduloMask & (coeffA ^ 1);
-    if (xorInv != coeffA) {
-      auto it = coeffToMask.find(xorInv);
-      if (it != coeffToMask.end()) {
-        uint64_t maskB = it->second;
-        uint64_t negatedMask = moduloMask & ~maskA;
-        if (canChangeMaskTo(xorInv, maskB, negatedMask)) {
-          uint64_t multiplied = moduloMask & (xorInv * maskA);
-          uint64_t adjustedConstant = moduloMask & (constantOffset - multiplied);
-          coeffToMask.erase(coeffA);
-          coeffToMask.erase(xorInv);
-          static XorResult result;
-          result.adjustedConstant = adjustedConstant;
-          result.coeff = xorInv;
-          result.xorMask = maskA;
-          return &result;
-        }
-      }
-    }
+    // NOTE: an earlier "XOR-with-1" branch (matching coeff pairs (c, c^1)
+    // as x^y patterns) was removed: it is not in the C# reference
+    // (MultibitRefiner.cs TrySimplifyXor only checks the negation pair)
+    // and it false-matches arbitrary per-bit slope pairs — e.g. slopes
+    // {-2, -1} (which are c and c^1 as 64-bit values but are NOT an
+    // XOR pattern) committed to a non-equivalent XOR term, after which
+    // the final fast-check gate rejected the whole simplification and
+    // the case came back unsolved (mba_obf_linear L9/L55 in
+    // tests/test_canonical.py). Genuine x^y patterns are recovered by
+    // the per-combination elimination + negation rule.
   }
   return nullptr;
 }
