@@ -29,7 +29,8 @@ Z3 QF_BV via `Z3Prover.cpp`, then the MSiMBA signature prover
   prover, negative-constant fixes. Current correctness gates (all green):
   - `python3 MBA/run_all_tests.py` → OVERALL PASS
   - `python3 tests/test_canonical.py 100 8` → 1900/1900, 0 fail
-  - `python3 tests/run_prove_tests.py 10 4` → msimba 164/190 proved
+  - `python3 tests/run_prove_tests.py 10 4` → msimba 190/190 proved
+    (was 164/190 before plan 2; the WS-A class-check fix raised it)
 
 **Guiding constraint:** correctness first. Any change must keep the three
 gates above green and keep per-dataset solve rates unchanged/improved.
@@ -79,6 +80,18 @@ Current order (added in P1): `QF_BV (proveReplacement, internal budget =
 --timeout)` → on failure `proveSemiLinear` (abstains outside the class).
 On hard in-class pairs the QF_BV step eats the whole budget first.
 
+**RESULT (landed, same machine 2026-09):**
+- Hard case (`e1_4vars` line 1, `--timeout=10`): **10.02 s → 17 ms** wall
+  (10.6 ms in `proveEquivalent`), still PROVED.
+- Negative control: in-class tampered GT → **NOT PROVED in ~3–8 ms**
+  (signature refutation, no QF_BV timeout); out-of-class nonlinear pair
+  still PROVED via QF_BV.
+- Prove harness msimba section: **384.0 s → 2.2 s (174×)**; proved
+  **177/190 → 190/190** (see class-check fix below). Simba/gamba
+  sections unchanged except gamba 61/70 → 65/70 proved (same fix).
+- All three gates green after both changes (run_all_tests PASS,
+  canonical 1900/1900, harness above).
+
 **Change:** check the class *before* QF_BV:
 1. `isSemiLinearClass(e0)` and `isSemiLinearClass(e1)` (each ~ms; both parse
    through the same `getZ3ExprFromString` the QF_BV path uses).
@@ -106,6 +119,19 @@ final answer and is *stronger* evidence than a QF_BV timeout).
 `--timeout=10` (expect ~50 ms, still "proved") → negative control (tamper
 the GT constant → NOT PROVED fast) → re-run the three gates → record
 before/after for `run_prove_tests.py 10 4` total wall time.
+
+**Class-check bug found while verifying (SemiLinearProver.cpp, fixed):**
+`semiLin` only accepted `bvmul` with a *raw* numeral on the constant
+side, but the native Z3 tokenizer emits negative decimal constants as
+`bvmul(x, (bvneg #x…))`. Every MSiMBA original with a negative multiplier
+(e.g. `* -8506239995682775442`) was therefore misclassified as
+out-of-class and paid the full QF_BV timeout (13 of 190 msimba cases,
+plus 4 gamba cases). Fix: `gNumeralOrNeg` helper — `bvneg(numeral)` is a
+canonical bit-vector numeral (value `(2^N − c) mod 2^N`); evaluation was
+already correct (`evalBVDirect` handles `bvneg` with width masking, which
+matches Z3's `bv_val` reduction). This is what took msimba from 177/190
+to 190/190 proved — a *completeness* gain for the class check, verified
+by the harness (no gate weakened).
 
 ---
 
@@ -204,9 +230,9 @@ history).
 
 ## 6. Definition of done
 
-1. WS-A landed: hard-case prove **≤ 100 ms** at `--timeout=10`; prove
-   harness msimba section wall time reduced **≥ 5×**; negative control
-   (tampered GT) still fails fast.
+1. ~~WS-A landed~~ **DONE:** hard-case prove **17 ms** at `--timeout=10`
+   (≤ 100 ms ✓); msimba section **384.0 s → 2.2 s (174×)** (≥ 5× ✓);
+   tampered-GT control fails in ~3–8 ms ✓.
 2. WS-B landed to the extent measured wins exist: qsynth_ea batch C++
    time **≤ 0.25 s** or a documented "no further win" with evidence.
 3. All three gates green; solve rates unchanged; before/after numbers

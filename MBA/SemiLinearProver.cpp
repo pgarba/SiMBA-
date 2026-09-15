@@ -73,10 +73,23 @@ bool gNumeral(z3::expr e, uint64_t &v) {
   return false;
 }
 
+// True if e is a numeral, or the canonical form of one: bvneg(numeral)
+// (the parser emits negative decimal constants this way, e.g. `* -5` ->
+// bvmul(x, (bvneg #x5))). Both are bit-vector numerals of the sort width.
+bool gNumeralOrNeg(z3::expr e, uint64_t &v) {
+  if (gNumeral(e, v))
+    return true;
+  if (e.is_app() && e.num_args() == 1 &&
+      symstr(e.decl().name()) == "bvneg")
+    return gNumeral(e.arg(0), v);
+  return false;
+}
+
 // ---- Semi-linear class check (precondition for the lifting theorem) ----
 // Base class: variables and numerals under bvnot/bvand/bvor/bvxor/
 // bvadd/bvsub/bvneg/shl(const). The full class adds bvmul/bvsmul with a
-// numeral on one side (recursively) and bvadd/bvsub of full-class terms.
+// numeral (incl. bvneg(numeral)) on one side (recursively) and
+// bvadd/bvsub of full-class terms.
 bool semiBase(z3::expr e) {
   if (e.is_app() && e.num_args() == 0)
     return true; // var or numeral
@@ -109,9 +122,9 @@ bool semiLin(z3::expr e) {
   if (op == "bvmul" || op == "bvsmul") {
     z3::expr a = e.arg(0), b = e.arg(1);
     uint64_t av, bv;
-    if (gNumeral(a, av))
+    if (gNumeralOrNeg(a, av))
       return semiLin(b);
-    if (gNumeral(b, bv))
+    if (gNumeralOrNeg(b, bv))
       return semiLin(a);
     return false;
   }

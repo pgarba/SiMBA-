@@ -271,12 +271,17 @@ is correct — it was verified against Python per-bit ground truth):
 
 ## P3 — Optional / lower priority
 
-1. **GAMBA performance** (`GAMBA_PERF_PLAN2.md` — self-contained plan for a
-   fresh session, baselines measured 2026-09): WS-A skip the Z3 QF_BV
-   timeout in the prove path when the signature prover applies (hard-case
-   prove 10.02 s → ~50 ms); WS-B general-route substitution candidates
-   (~92 % of its C++ time) + structural-hash cycle detection + no-progress
-   guard. Plan 1 (`GAMBA_PERF_PLAN.md`) kept as history (A1/A3/B3 done).
+1. **GAMBA performance** (`GAMBA_PERF_PLAN2.md`):
+   - **WS-A done:** in-class pairs skip the Z3 QF_BV timeout in the prove
+     path (hard case 10.02 s → 17 ms; harness msimba section 384 s → 2.2 s,
+     174×). Also fixed a class-check gap: `bvmul` by `bvneg(numeral)`
+     (negative decimal constants) is now in the semi-linear class —
+     msimba proved 177/190 → **190/190**, gamba 61/70 → 65/70. Details in
+     the plan file §2 RESULT.
+   - **WS-B open:** general-route substitution candidates (~92 % of its C++
+     time) + structural-hash cycle detection + no-progress guard
+     (target: qsynth_ea batch 0.53 s → ≤ 0.25 s).
+   - Plan 1 (`GAMBA_PERF_PLAN.md`) kept as history (A1/A3/B3 done).
 2. **Git submodules** for `external/MSiMBA` (330 M), `external/bitwuzla`
    (109 M), `external/yices2` (154 M) — currently untracked separate repos;
    submodules give reproducible pins. Housekeeping, ~1 h.

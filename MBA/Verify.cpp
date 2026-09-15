@@ -154,13 +154,29 @@ bool proveEquivalent(const std::string &orig, const std::string &simp,
   std::string e0 = normalizeForNativeTokenizer(a->toString());
   std::string e1 = normalizeForNativeTokenizer(b->toString());
 
-  // 1) QF_BV: sub-millisecond on the easy cases — keep it first.
+  // 0) Semi-linear class check (ms): the signature prover is COMPLETE for
+  //    in-class pairs and runs in ~ms, while QF_BV burns the whole --timeout
+  //    budget on hard in-class pairs before any signature fallback can run.
+  //    So when BOTH sides are in class, the signature prover is the
+  //    authority: NOT-PROVED is final (a differing signature point is a
+  //    genuine refutation — strictly stronger evidence than a QF_BV
+  //    timeout, so do not fall back to QF_BV to "re-prove").
+  bool inClass = isSemiLinearClass(e0, bitCount, vars) &&
+                 isSemiLinearClass(e1, bitCount, vars);
+  if (inClass) {
+    int r = proveSemiLinear(e0, e1, bitCount, vars);
+    if (r == 1)
+      return true; // PROVED by the signature theorem
+    if (r == 0)
+      return false; // NOT PROVED: refuted — final
+    // r == 2 (ABSTAIN) should not happen after the class check; fall
+    // through to QF_BV below.
+  }
+
+  // 1) QF_BV: sub-millisecond on the easy cases.
   if (proveReplacement(e0, e1, bitCount, vars))
     return true;
-  // 2) MSiMBA signature lifting: complete for the semi-linear class (the
-  //    hard `sum(const x bitwise)` cases that time out QF_BV), ~ms.
-  //    ABSTAIN (2) on non-semilinear sides falls through to the old result
-  //    (not proved).
+  // 2) MSiMBA signature lifting (out-of-class path; ABSTAIN -> not proved).
   return proveSemiLinear(e0, e1, bitCount, vars) == 1;
 #endif
 }
