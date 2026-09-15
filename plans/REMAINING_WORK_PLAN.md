@@ -13,7 +13,7 @@
 | Z3 proving (QF_BV) | **DONE** — 10,000–60,000x on mul-heavy; hard semi-linear still times out (root cause: structure, not width) |
 | msimba `--prove` wiring | **DONE** (77098ab) |
 | Prove test suite (honest Z3 metric) | **DONE** — 32-bit simba/msimba, 8-bit gamba, 10 s timeout |
-| Canonical ground-truth validation | **DONE** — 934/950 canonical, 0 bad, 16 fail (negative-constant coverage gap, see P2) |
+| Canonical ground-truth validation | **DONE** — 1900/1900 canonical, 0 bad, 0 fail (N=100; see P2) |
 | `auto` default + `--auto-fallback` | **DONE** (b2eae11) — fixes checkLinear over-claim mis-routes |
 | GAMBA test suite repair (P0) | **DONE** (8aa605d) — honest runner (crash ⇒ FAIL), 11 dead oracle tests archived, tier2 on native binary: 0.8 s at N=100, 800/800 |
 | CoBRA dataset benchmark | **DONE** (2026-09-15) — 99.5% new / 100% already-covered; see section below |
@@ -229,23 +229,43 @@ independent-verification metric instead of "trusted on timeout".
 
 ---
 
-## P2 — Normalizer negative-constant / mask-constant gap (small, ½–1 day)
+## P2 — Normalizer negative-constant / mask-constant gap — **DONE**
 
-`tests/test_canonical.py`: 16 fails (934 canonical, 0 bad). All are
-negative-constant edge cases the normalizer does not handle at all
-(`-3335`, `-6*…`, `^` in the ground truth) — a **coverage gap, not a
-canonicity problem** (where the normalizer succeeds, it is canonical and
-matches ground truth). The CoBRA benchmark (section above) found the same
-gap from the other side: specific mask constants (`-10`, `2^63`, …) make
-`simplifyGeneric`'s coefficient fitting produce wrong results that the
-fast-check gate then rejects. Likely one root cause.
+`tests/test_canonical.py` had 16 fails (934 canonical, 0 bad) — all
+negative-constant edge cases. Instrumentation (temporary `[DBG]` prints
+in `simplifyGeneric`/`simplify`, plus refiner-trace harnesses in
+`/tmp/mbg*.cpp`) found **three distinct root causes**, none of them the
+suspected signed/unsigned arithmetic in the coefficient fitter (that path
+is correct — it was verified against Python per-bit ground truth):
 
-**Fix:** instrument `simplifyGeneric`/`simplifyEntry` for `(-10&x)` at
-8-bit (c=246), find the bad fitted coefficient (suspect: modular
-arithmetic signed/unsigned handling in `subtractCoeff` /
-`canChangeCoefficientTo` / `tryEliminateUniqueValues`), fix, then
-re-run `tests/test_canonical.py` (higher N) + `tests/run_cobra_tests.py`.
-**Acceptance:** 0 canonical fails at N=100; msimba.txt 1000/1000.
+1. **Constant-substituter temp names were not parser-safe** (the big one).
+   `ConstantSubstituter::apply` named temp variables `um + to_string(c)`;
+   for negative constants that produced `um-1112`, which the 1-bit
+   round-trip re-parse splits into the SUBTRACTION `um - 1112`. The 1-bit
+   solver then worked on a different expression, back-substitution found
+   no `um-1112` variable, and the final fast-check correctly rejected the
+   mangled result — the whole simplification came back empty. Fix:
+   sign-safe names (`um_n1112` for -1112) + a guard in
+   `simplifyViaConstantSubstitution` that rejects any result whose AST
+   contains a variable that is neither an original nor a declared temp
+   name (defense in depth).
+2. **Pure-constant inputs bailed out.** `MultibitSimplifier::simplify`
+   returned "" for `varCount == 0` (ground truths like `2*~1111-1*1111`).
+   Now reduces by evaluation and returns the constant.
+3. **`trySimplifyXor` had a spurious "XOR-with-1" branch** (`c, c^1`
+   pairs, added in commit 92de952) that is not in the C# reference
+   (`MultibitRefiner.cs TrySimplifyXor` checks only the negation pair) and
+   false-matches arbitrary per-bit slope values — e.g. slopes {-2, -1}
+   are `c` and `c^1` as 64-bit integers but not an XOR pattern. The
+   wrong XOR term then failed the final fast-check and the case came
+   back unsolved (mba_obf_linear L9/L55). Removed; verified zero
+   regressions: all 3796 baseline-solved dataset cases produce
+   byte-identical outputs (json diff of before/after over
+   data/MSiMBA, 200 lines/file).
+
+**Acceptance met:** `tests/test_canonical.py` N=100 → **1900 canonical,
+0 bad, 0 fail (100.0%)**; `tests/run_cobra_tests.py` → 0 failed
+(18994/19080 new + 13000/13000 covered); P0 suite still PASS.
 
 ---
 

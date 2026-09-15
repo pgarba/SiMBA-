@@ -844,6 +844,27 @@ std::string MultibitSimplifier::simplifyViaConstantSubstitution(
   if (!simplified)
     return simplifiedStr; // Return the string if parsing fails.
 
+  // Guard: every variable left in the simplified AST must be either an
+  // original variable or one of the temporary names (to be back-substituted).
+  // Any other name means the 1-bit round-trip mangled something (e.g. a
+  // temp name split on an operator); in that case the shortcut is unsound
+  // and must be skipped.
+  std::unordered_set<std::string> allowedVars = existingVars;
+  for (auto &[constant, name] : substMapping)
+    allowedVars.insert(name);
+  std::function<bool(const std::shared_ptr<Node> &)> checkVars =
+      [&](const std::shared_ptr<Node> &node) {
+        if (node->type == NodeType::VARIABLE &&
+            !allowedVars.count(node->vname))
+          return false;
+        for (auto &child : node->children)
+          if (!checkVars(child))
+            return false;
+        return true;
+      };
+  if (!checkVars(simplified))
+    return "";
+
   // Back-substitute the constants.
   auto result = ConstantSubstituter::applyBackSubstitution(simplified, substMapping);
   if (!result)
@@ -909,7 +930,19 @@ std::shared_ptr<Node> MultibitSimplifier::normalizeNegatedSum(
 std::string MultibitSimplifier::simplify(const std::string &expr, int bitCount,
                                          bool modRed) {
   MultibitSimplifier solver(expr, bitCount, modRed);
-  if (!solver.ast || solver.varCount == 0 || solver.varCount > 15)
+  if (!solver.ast)
+    return "";
+  // Pure-constant expressions (varCount == 0) reduce by evaluation: the
+  // simplified form is the constant itself. Previously this bailed out
+  // ("unsolved"), which surfaced as canonical-test failures on ground truths
+  // like `2*~1111-1*1111` (tests/test_canonical.py).
+  if (solver.varCount == 0) {
+    uint64_t mask = solver.bitCount >= 64 ? ~0ull
+                                          : ((1ull << solver.bitCount) - 1);
+    uint64_t value = mask & solver.ast->eval(std::vector<uint64_t>());
+    return std::to_string(static_cast<int64_t>(value));
+  }
+  if (solver.varCount > 15)
     return "";
 
   solver.buildResultVector();
