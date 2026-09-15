@@ -1,4 +1,9 @@
-# Performance-improvement plan: GAMBA native C++ port
+# Performance-improvement plan: GAMBA native C++ port (PLAN 1 — history)
+
+> **SUPERSEDED for new work:** see `plans/GAMBA_PERF_PLAN2.md` (prove-path
+> timeout fix + remaining general-route items, baselines re-measured
+> 2026-09 on the Linux box). Keep this file as the record of what was
+> measured/done (A1, A3, B3, MBASIMBA_PERF, batch mode, H4 finding).
 
 Self-contained plan for a fresh session. All paths relative to `C:\github\SiMBA-`
 (branch `feat/gamba-native-verification`). The correctness fix for the 6 `qsynth_ea`
