@@ -50,3 +50,7 @@ _pytemp/
 
 # pi web build artifacts
 .pi-web/
+
+# Vendored third-party solver clones + C# MSiMBA reference (re-clonable from upstream).
+# external/GAMBA keeps its few committed files (tracked files stay tracked).
+external/
