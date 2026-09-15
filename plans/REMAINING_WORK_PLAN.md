@@ -271,9 +271,12 @@ is correct — it was verified against Python per-bit ground truth):
 
 ## P3 — Optional / lower priority
 
-1. **GAMBA perf P2** (`GAMBA_PERF_PLAN.md`): C1 smarter substitution
-   candidates, C2 per-substep time budget, C3 parallel sub-expressions.
-   Only if general-route wall time becomes a problem in practice.
+1. **GAMBA performance** (`GAMBA_PERF_PLAN2.md` — self-contained plan for a
+   fresh session, baselines measured 2026-09): WS-A skip the Z3 QF_BV
+   timeout in the prove path when the signature prover applies (hard-case
+   prove 10.02 s → ~50 ms); WS-B general-route substitution candidates
+   (~92 % of its C++ time) + structural-hash cycle detection + no-progress
+   guard. Plan 1 (`GAMBA_PERF_PLAN.md`) kept as history (A1/A3/B3 done).
 2. **Git submodules** for `external/MSiMBA` (330 M), `external/bitwuzla`
    (109 M), `external/yices2` (154 M) — currently untracked separate repos;
    submodules give reproducible pins. Housekeeping, ~1 h.
