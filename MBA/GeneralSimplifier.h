@@ -63,8 +63,46 @@ class GeneralSimplifier {
     bool enabled = false;
     long iters = 0, refactorCalls = 0, refactorSkips = 0;
     double tLinear = 0, tRefactor = 0, tSubst = 0, tTotal = 0;
+    // B-i instrumentation: substitution enumeration stats. substCalls =
+    // node-level simplifyViaSubstitution calls; subsetTried = candidate
+    // subsets that passed the popcount filter; substFound = subsets whose
+    // copy+substitute+re-simplify produced a non-null result;
+    // substImproved = subsets accepted (strictly simpler / equal-complexity
+    // gate passed, node mutated). ByPopcount[k] counts subsetTried for
+    // popcount k+1 (k>=3 only; smaller popcounts always pass the filter).
+    // NodesHist bins: candidate-count histogram [<=4, 5-9, 10-20, >20].
+    long substCalls = 0, subsetTried = 0, substFound = 0, substImproved = 0;
+        // B-iii: fixed-point loop terminations by reason.
+    long loopNoChange = 0, loopCycle = 0, loopDeadline = 0, loopMaxIt = 0;
+    // B-i: per-attempt cost breakdown (seconds).
+    double tSubCopy = 0, tSubRefine = 0, tSubSimplify = 0;
+    double tSubMech = 0; // substituteAllOccurences + replaceVariable + getMaxVname
+    double tSubTail = 0; // trailing collectAndEnumerateVariables + refine
+    double tSubAccept = 0; // accepted result: node->copy + refine + markLinear
+    double tSubAccRefine = 0, tSubAccMarkLin = 0;
+    long substWalkChanged = 0; // accepted passes where refineAfterSubstitution fired
+    double tComplexity = 0; // isSecondMoreOrEquallyComplex
+    double tLinearSub = 0; // simplifyLinearSubexpression total
+    double tLinearMba = 0; // ... of which the string-level linear solver
+    double tLinearParse = 0; // ... of which parse+copy of the result
+    long subsetTriedByPop[4] = {0, 0, 0, 0};
+    long subsetImprovedByPop[4] = {0, 0, 0, 0};
+    long nodesHist[4] = {0, 0, 0, 0};
+    long linearSubCalls = 0, linearSubChanged = 0, linearSubDupCalls = 0;
+    long linearCacheHits = 0;
   };
   PerfCounters perf;
+
+  // B-i: per-simplify() set of already-seen linear-subexpression strings
+  // (duplicate-input rate of the string-level linear solver).
+  std::set<std::string> linearSeen;
+  // W1: memo for the string-level linear solver. Key = exact subexpression
+  // string; value = the solver's output. The solver is a pure function of its
+  // string (deterministic, stateless w.r.t. the tree), so reusing its output
+  // for an identical key is sound. A cached value equal to the key is a fixed
+  // point, so it lets us skip the solver AND the changed-comparison entirely.
+  std::unordered_map<std::string, std::string> linearSimplifyMemo;
+  bool linMemoEnabled = false;
 
   std::shared_ptr<Node> getZero();
   std::string getVname(int i) const;

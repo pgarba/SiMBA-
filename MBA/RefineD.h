@@ -17,6 +17,20 @@
 
   // ------------------------------------------------- refine after substitution
   bool refineAfterSubstitution();
+  // W2 (WS-B): three-valued core of refineAfterSubstitution. Unchanged =
+  // subtree structurally identical to the previous checked pass (checks
+  // skipped); Stable = checks ran, found no pattern, fingerprint cached;
+  // Changed = a pattern was rewritten (or a child changed).
+  enum class PatternRefine { Unchanged, Stable, Changed };
+  PatternRefine refineAfterSubstitutionDetail();
+  // Fingerprint state for the check above. The 13 pattern checks are a pure
+  // function of (type, constant, children (identity + structure)); they
+  // never read isLinear/state/vidx. In-place mutation breaks the fingerprint
+  // of the mutated node (type/constant) or of its parent (children list), so
+  // the checks re-run there and in every ancestor — no invalidation audit
+  // needed. Two independent 64-bit FNV-1a folds guard against collisions.
+  bool patternHashValid = false;
+  uint64_t patternHash1 = 0, patternHash2 = 0;
   bool checkBitwiseInSumsCancelTerms();
   int checkTransformBitwiseInSumCancel(int idx, const std::shared_ptr<Node> &bitw,
                                        int64_t factor);
