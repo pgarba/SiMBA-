@@ -29,9 +29,10 @@ Use an external simplfier like **GAMBA** to crunch non linear MBAs on LLVM IR!
 
 # Native C++ GAMBA port (nonlinear MBAs)
 
-The `MBA/` directory contains a native C++ port of the vendored Python **GAMBA**
-simplifier (`external/GAMBA`), which extends SiMBA's linear MBA simplification to
-**nonlinear** MBAs. It is built and verified independently of the main LLVM
+The `MBA/` directory contains a native C++ port of the **GAMBA** nonlinear
+MBA simplifier (the vendored Python/C# reference was removed once the port
+was complete and validated), which extends SiMBA's linear MBA simplification
+to **nonlinear** MBAs. It is built and verified independently of the main LLVM
 build:
 
 - **Build the standalone MBA core + CLI:** `powershell -File MBA\build.ps1`
