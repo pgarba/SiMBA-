@@ -5,15 +5,115 @@
 #include <cctype>
 #include <cstdio>
 #include <cstdlib>
+#include <functional>
+#include <set>
+#include <sstream>
 
 namespace LSiMBA {
 namespace MBA {
 
 using namespace std;
 
-// Mirrors node.py Node.to_string.
+// Global toString accounting (MBASIMBA_PERF=1), read by GeneralSimplifier's
+// PERF line. Thread-safe via atomics; cheap (one flag load) when off.
+// W3-debug: validate the markLinear fast path against the full recompute.
+bool &mlCheckModeRef() {
+  static bool v = [] {
+    const char *p = std::getenv("MBASIMBA_MLCHECK");
+    return (p != nullptr && p[0] == '1');
+  }();
+  return v;
+}
+bool mlCheckMode = mlCheckModeRef();
+
+// W3: the markLinear fast path. On this dataset its skip rate (72%) does not
+// beat its per-call hash overhead, so it is OFF by default; MBASIMBA_MLFast=1
+// re-enables it. The self-check (MBASIMBA_MLCHECK=1) validates it either way.
+bool &mlFastEnabledRef() {
+  static bool v = [] {
+    const char *p = std::getenv("MBASIMBA_MLFast");
+    return (p != nullptr && p[0] == '1');
+  }();
+  return v;
+}
+bool mlFastEnabled = mlFastEnabledRef();
+
+// W3-debug: assert that a node's state equals a full recompute of its
+// current context (states only; linearEnd is a derived cache that fresh
+// copies legitimately leave at 0). Aborts at the corruption origin.
+void mlAssertConsistent(const Node &n, const char *where) {
+  static bool inAssert = false;
+  if (inAssert)
+    return;
+  inAssert = true;
+  auto shadow = n.getCopy();
+  inAssert = false;
+  shadow->invalidatePatternCaches();
+  shadow->markLinearFull();
+  auto seq = [](const Node &root) {
+    std::string s;
+    std::function<void(const Node &)> rec = [&](const Node &m) {
+      s += "[" + std::to_string((int)m.type) + ":" + std::to_string((int)m.state) +
+          ":" + m.vname + ":" + std::to_string((int)m.constant.getSExtValue()) + ":";
+      for (auto &cc : m.children)
+        rec(*cc);
+      s += "]";
+    };
+    rec(root);
+    return s;
+  };
+  if (seq(n) != seq(*shadow)) {
+    fprintf(stderr, "MLCHECK INCONSISTENT SOURCE in %s:\n mine=%s\n full=%s\n",
+            where, seq(n).c_str(), seq(*shadow).c_str());
+    std::abort();
+  }
+}
+
+CheckPerf &checkPerf() {
+  static CheckPerf inst;
+  static bool init = [] {
+    const char *p = std::getenv("MBASIMBA_PERF");
+    if (p && p[0] == '1')
+      inst.enabled = true;
+    return true;
+  }();
+  (void)init;
+  return inst;
+}
+
+ToStringPerf &toStringPerf() {
+  static ToStringPerf inst;
+  static bool init = [] {
+    const char *p = std::getenv("MBASIMBA_PERF");
+    if (p != nullptr && p[0] == '1')
+      inst.enabled.store(true);
+    return true;
+  }();
+  (void)init;
+  return inst;
+}
+
+// Mirrors node.py Node.to_string (top-level-timed wrapper around
+// toStringImpl; nested recursive calls are not double-counted).
 string Node::toString(bool withParentheses, int end,
                       const vector<string> *varNames) {
+  thread_local bool inToString = false;
+  auto &impl = toStringPerf();
+  if (!impl.enabled.load() || inToString)
+    return toStringImpl(withParentheses, end, varNames);
+  inToString = true;
+  impl.calls++;
+  auto t0 = std::chrono::steady_clock::now();
+  string r = toStringImpl(withParentheses, end, varNames);
+  impl.nanos += std::chrono::duration_cast<std::chrono::nanoseconds>(
+                    std::chrono::steady_clock::now() - t0)
+                    .count();
+  inToString = false;
+  return r;
+}
+
+string Node::toStringImpl(bool withParentheses, int end,
+                          const vector<string> *varNames) {
   if (end == -1)
     end = static_cast<int>(children.size());
 
@@ -26,10 +126,10 @@ string Node::toString(bool withParentheses, int end,
   if (type == NodeType::POWER) {
     auto child1 = children[0];
     auto child2 = children[1];
-    string ret = child1->toString(typeRank(child1->type) > typeRank(NodeType::VARIABLE), -1,
+    string ret = child1->toStringImpl(typeRank(child1->type) > typeRank(NodeType::VARIABLE), -1,
                                   varNames) +
                  "**" +
-                 child2->toString(typeRank(child2->type) > typeRank(NodeType::VARIABLE), -1,
+                 child2->toStringImpl(typeRank(child2->type) > typeRank(NodeType::VARIABLE), -1,
                                   varNames);
     if (withParentheses)
       ret = "(" + ret + ")";
@@ -39,7 +139,7 @@ string Node::toString(bool withParentheses, int end,
   if (type == NodeType::NEGATION) {
     auto child = children[0];
     string ret = "~" +
-                child->toString(typeRank(child->type) > typeRank(NodeType::NEGATION), -1,
+                child->toStringImpl(typeRank(child->type) > typeRank(NodeType::NEGATION), -1,
                                 varNames);
     if (withParentheses)
       ret = "(" + ret + ")";
@@ -49,11 +149,11 @@ string Node::toString(bool withParentheses, int end,
   if (type == NodeType::PRODUCT) {
     auto child1 = children[0];
     string ret1 =
-        child1->toString(typeRank(child1->type) > typeRank(NodeType::PRODUCT), -1, varNames);
+        child1->toStringImpl(typeRank(child1->type) > typeRank(NodeType::PRODUCT), -1, varNames);
     string ret = ret1;
     for (int i = 1; i < end; ++i) {
       ret += "*" +
-             children[i]->toString(
+             children[i]->toStringImpl(
                  typeRank(children[i]->type) > typeRank(NodeType::PRODUCT), -1, varNames);
     }
     // Rather than multiplying by -1, only use the minus and get rid of '1*'.
@@ -66,10 +166,10 @@ string Node::toString(bool withParentheses, int end,
 
   if (type == NodeType::SUM) {
     auto child1 = children[0];
-    string ret = child1->toString(typeRank(child1->type) > typeRank(NodeType::SUM), -1, varNames);
+    string ret = child1->toStringImpl(typeRank(child1->type) > typeRank(NodeType::SUM), -1, varNames);
     for (int i = 1; i < end; ++i) {
       string s =
-          children[i]->toString(typeRank(children[i]->type) > typeRank(NodeType::SUM), -1,
+          children[i]->toStringImpl(typeRank(children[i]->type) > typeRank(NodeType::SUM), -1,
                                 varNames);
       if (!s.empty() && s[0] != '-')
         ret += "+";
@@ -83,10 +183,10 @@ string Node::toString(bool withParentheses, int end,
   if (type == NodeType::CONJUNCTION) {
     auto child1 = children[0];
     string ret =
-        child1->toString(typeRank(child1->type) > typeRank(NodeType::CONJUNCTION), -1, varNames);
+        child1->toStringImpl(typeRank(child1->type) > typeRank(NodeType::CONJUNCTION), -1, varNames);
     for (int i = 1; i < end; ++i) {
       ret += "&" +
-             children[i]->toString(
+             children[i]->toStringImpl(
                  typeRank(children[i]->type) > typeRank(NodeType::CONJUNCTION), -1, varNames);
     }
     if (withParentheses)
@@ -96,11 +196,11 @@ string Node::toString(bool withParentheses, int end,
 
   if (type == NodeType::EXCL_DISJUNCTION) {
     auto child1 = children[0];
-    string ret = child1->toString(
+    string ret = child1->toStringImpl(
         typeRank(child1->type) > typeRank(NodeType::EXCL_DISJUNCTION), -1, varNames);
     for (int i = 1; i < end; ++i) {
       ret += "^" +
-             children[i]->toString(
+             children[i]->toStringImpl(
                  typeRank(children[i]->type) > typeRank(NodeType::EXCL_DISJUNCTION), -1, varNames);
     }
     if (withParentheses)
@@ -110,11 +210,11 @@ string Node::toString(bool withParentheses, int end,
 
   if (type == NodeType::INCL_DISJUNCTION) {
     auto child1 = children[0];
-    string ret = child1->toString(
+    string ret = child1->toStringImpl(
         typeRank(child1->type) > typeRank(NodeType::INCL_DISJUNCTION), -1, varNames);
     for (int i = 1; i < end; ++i) {
       ret += "|" +
-             children[i]->toString(
+             children[i]->toStringImpl(
                  typeRank(children[i]->type) > typeRank(NodeType::INCL_DISJUNCTION), -1, varNames);
     }
     if (withParentheses)
@@ -127,9 +227,9 @@ string Node::toString(bool withParentheses, int end,
     const char *op = (type == NodeType::RSHIFT) ? ">>" : (type == NodeType::UDIV ? "/" : "%");
     auto child1 = children[0];
     string ret =
-        child1->toString(ChildNeedsParens(child1->type, type), -1, varNames) +
+        child1->toStringImpl(ChildNeedsParens(child1->type, type), -1, varNames) +
         op +
-        children[1]->toString(ChildNeedsParens(children[1]->type, type), -1, varNames);
+        children[1]->toStringImpl(ChildNeedsParens(children[1]->type, type), -1, varNames);
     if (withParentheses)
       ret = "(" + ret + ")";
     return ret;
@@ -410,6 +510,14 @@ std::shared_ptr<Node> Node::getOptNegativeTransformedNegated() const {
 
 // ===================================================== Phase 2: mark linear
 void Node::markLinear(bool restrictedScope) {
+  if (!restrictedScope) {
+    if (mlFastEnabled)
+      markLinearFast();
+    else
+      markLinearFull();
+    return;
+  }
+
   for (auto &c : children)
     if (!restrictedScope || c->state == NodeState::UNKNOWN)
       c->markLinear();
@@ -431,6 +539,218 @@ void Node::markLinear(bool restrictedScope) {
     markLinearConstant();
 
   reorderAndDetermineLinearEnd();
+}
+
+void Node::markLinearFull() {
+  for (auto &c : children)
+    c->markLinearFull();
+  if (type == NodeType::INCL_DISJUNCTION || type == NodeType::EXCL_DISJUNCTION ||
+      type == NodeType::CONJUNCTION || type == NodeType::NEGATION)
+    markLinearBitwise();
+  else if (type == NodeType::SUM)
+    markLinearSum();
+  else if (type == NodeType::PRODUCT)
+    markLinearProduct();
+  else if (type == NodeType::POWER)
+    markLinearPower();
+  else if (type == NodeType::RSHIFT || type == NodeType::UDIV || type == NodeType::UREM)
+    state = NodeState::NONLINEAR;
+  else if (type == NodeType::VARIABLE)
+    markLinearVariable();
+  else if (type == NodeType::CONSTANT)
+    markLinearConstant();
+  reorderAndDetermineLinearEnd();
+}
+
+void Node::invalidatePatternCaches() {
+  mlKeyValid = false;
+  patternHashValid = false;
+  for (auto &c : children)
+    c->invalidatePatternCaches();
+}
+
+namespace {
+inline uint64_t mlFnv1a64(uint64_t h, uint64_t x) {
+  h ^= x;
+  h *= 1099511628211ULL;
+  return h;
+}
+} // namespace
+
+bool Node::markLinearFast() {
+  bool allStable = true;
+  for (auto &c : children)
+    if (!c->markLinearFast())
+      allStable = false;
+
+  // Structural fingerprint (no object pointers): preserved by deep copies,
+  // so getCopy propagates the cached fingerprint. The constant IS included:
+  // markLinearConstant's result depends on it (0 / -1 are BITWISE).
+  // Captured PRE-reorder (the cache stores the pre-reorder form; after a
+  // moving reorder the hash misses and the next call settles the cache).
+  uint64_t h1 = 1469598103934665603ULL;
+  uint64_t h2 = 1469598103934665604ULL;
+  auto mlFold = [&h1, &h2](uint64_t x) {
+    h1 = mlFnv1a64(h1, x);
+    h2 = mlFnv1a64(h2, x ^ 0x9E3779B97F4A7C15ULL);
+  };
+  mlFold(static_cast<uint64_t>(type));
+  mlFold(constant.getZExtValue());
+  mlFold(constant.shl(64).getZExtValue());
+  for (auto &c : children) {
+    mlFold(static_cast<uint64_t>(c->type));
+    mlFold(static_cast<uint64_t>(c->state));
+  }
+  // MBASIMBA_MLCHECK: exact structural context for collision-free key
+  // validation (debug only; the hash path above is the production key).
+  std::vector<uint64_t> ctxVec;
+  if (mlCheckMode) {
+    ctxVec.reserve(3 + 2 * children.size());
+    ctxVec.push_back(static_cast<uint64_t>(type));
+    ctxVec.push_back(constant.getZExtValue());
+    ctxVec.push_back(constant.shl(64).getZExtValue());
+    for (auto &c : children) {
+      ctxVec.push_back(static_cast<uint64_t>(c->type));
+      ctxVec.push_back(static_cast<uint64_t>(c->state));
+    }
+  }
+
+  static std::set<int> noSkipTypes = [] {
+    std::set<int> s;
+    if (const char *p = std::getenv("MBASIMBA_MLSKIP_OFF")) {
+      std::stringstream ss(p);
+      std::string tok;
+      while (std::getline(ss, tok, ','))
+        if (!tok.empty())
+          s.insert(std::stoi(tok));
+    }
+    return s;
+  }();
+  bool exactCtxMatch = !mlCheckMode || (ctxVec == mlKeyCtx);
+  if (mlCheckMode && h1 == mlKey1 && h2 == mlKey2 && !exactCtxMatch) {
+    fprintf(stderr, "MLCHECK HASH COLLISION: type=%d tree=%s\n", (int)type,
+            toString().c_str());
+    std::abort();
+  }
+  const bool noSkip =
+      !noSkipTypes.empty() && noSkipTypes.count(static_cast<int>(type));
+  if (allStable && mlKeyValid && h1 == mlKey1 && h2 == mlKey2 && exactCtxMatch &&
+      !noSkip) {
+    if (checkPerf().enabled)
+      checkPerf().mlSkips++;
+    // linearEnd is a derived cache; a matching key means (state, context) is
+    // unchanged since it was last derived, so it is still consistent — except
+    // when this node came from getCopy/getShallowCopy/copyAll, which leave it
+    // at 0. Refresh only in that case (idempotent O(n) count + re-order).
+    if (linearEnd == 0)
+      reorderAndDetermineLinearEnd();
+    if (mlCheckMode) {
+      auto shadow = getCopy();
+      shadow->invalidatePatternCaches();
+      shadow->markLinearFull();
+      auto seq = [](const Node &n) {
+        std::string s;
+        std::function<void(const Node &)> rec = [&](const Node &m) {
+          s += "[" + std::to_string((int)m.type) + ":" + std::to_string((int)m.state) +
+              ":" + std::to_string(m.linearEnd) + ":" + m.vname +
+              ":" + std::to_string((int)m.constant.getSExtValue()) + ":";
+          for (auto &cc : m.children)
+            rec(*cc);
+          s += "]";
+        };
+        rec(n);
+        return s;
+      };
+      if (seq(*this) != seq(*shadow)) {
+        // Decisive: what does the pure dispatch give for the current ctx?
+        NodeState fstate;
+        if (type == NodeType::INCL_DISJUNCTION || type == NodeType::EXCL_DISJUNCTION ||
+            type == NodeType::CONJUNCTION || type == NodeType::NEGATION)
+          fstate = children.empty() ? NodeState::BITWISE
+                                     : (std::all_of(children.begin(), children.end(),
+                                                     [](const auto &cc) {
+                                                       return cc->state == NodeState::BITWISE;
+                                                     })
+                                           ? NodeState::BITWISE
+                                           : NodeState::MIXED);
+        else if (type == NodeType::SUM)
+          fstate = [&] {
+            NodeState st = NodeState::UNKNOWN;
+            for (auto &cc : children) {
+              if (cc->state == NodeState::MIXED)
+                return NodeState::MIXED;
+              if (cc->state == NodeState::NONLINEAR)
+                st = NodeState::NONLINEAR;
+            }
+            return st == NodeState::NONLINEAR ? st : NodeState::LINEAR;
+          }();
+        else
+          fstate = NodeState::UNKNOWN; // not critical
+        fprintf(stderr,
+                "MLCHECK MISMATCH at type=%d state=%d le=%d f(ctx)=%d shadow=%d "
+                "keyValid=%d ctxMatch=%d\n",
+                (int)type, (int)state, linearEnd, (int)fstate, (int)shadow->state,
+                (int)mlKeyValid, (int)exactCtxMatch);
+        for (size_t i = 0; i < children.size(); ++i) {
+          auto live = children[i];
+          auto sh = shadow->children[i];
+          if ((int)live->state != (int)sh->state || live->linearEnd != sh->linearEnd) {
+            fprintf(stderr,
+                    "  STALE CHILD %zu: live(state=%d le=%d) full(state=%d le=%d) "
+                    "childTree=%s\n", i, (int)live->state, live->linearEnd, (int)sh->state,
+                    sh->linearEnd, live->toString().c_str());
+          }
+        }
+        fprintf(stderr, "  mine=%s\n  full=%s\n", seq(*this).c_str(), seq(*shadow).c_str());
+        std::abort();
+      }
+    }
+    return true; // recompute would set the identical state; skip
+  }
+
+  auto oldState = state;
+  const bool keyMatched = mlKeyValid && h1 == mlKey1 && h2 == mlKey2;
+
+  if (type == NodeType::INCL_DISJUNCTION || type == NodeType::EXCL_DISJUNCTION ||
+      type == NodeType::CONJUNCTION || type == NodeType::NEGATION)
+    markLinearBitwise();
+  else if (type == NodeType::SUM)
+    markLinearSum();
+  else if (type == NodeType::PRODUCT)
+    markLinearProduct();
+  else if (type == NodeType::POWER)
+    markLinearPower();
+  else if (type == NodeType::RSHIFT || type == NodeType::UDIV || type == NodeType::UREM)
+    state = NodeState::NONLINEAR;
+  else if (type == NodeType::VARIABLE)
+    markLinearVariable();
+  else if (type == NodeType::CONSTANT)
+    markLinearConstant();
+
+  reorderAndDetermineLinearEnd();
+
+  mlKey1 = h1;
+  mlKey2 = h2;
+  mlKeyValid = true;
+  if (mlCheckMode) {
+    mlKeyCtx = std::move(ctxVec);
+    auto shadow = getCopy();
+    shadow->invalidatePatternCaches();
+    shadow->markLinearFull();
+    if ((int)shadow->state != (int)state || shadow->linearEnd != linearEnd) {
+      fprintf(stderr,
+              "MLCHECK BAD CACHE on recompute: type=%d oldState=%d newState=%d "
+              "fullState=%d le(mine=%d full=%d) allStable=%d keyWasValid=%d "
+              "keyMatched=%d tree=%s\n",
+              (int)type, (int)oldState, (int)state, (int)shadow->state, linearEnd,
+              shadow->linearEnd, (int)allStable, (int)mlKeyValid, (int)keyMatched,
+              toString().c_str());
+      std::abort();
+    }
+  }
+  if (checkPerf().enabled)
+    checkPerf().mlRecomputes++;
+  return state == oldState;
 }
 
 void Node::markLinearBitwise() {
@@ -758,6 +1078,11 @@ void Node::copy(const Node &node) {
   std::string vn = node.vname;
   int vi = node.vidx;
   MBAValue c = node.constant;
+  bool mv = node.mlKeyValid;
+  uint64_t mk1 = node.mlKey1;
+  uint64_t mk2 = node.mlKey2;
+  std::vector<uint64_t> mkc = node.mlKeyCtx;
+  int le = node.linearEnd;
 
   type = t;
   state = s;
@@ -765,6 +1090,20 @@ void Node::copy(const Node &node) {
   vname = vn;
   vidx = vi;
   constant = c;
+  // The transplanted (state, key) pair must come from the same node and the
+  // same instant: keeping this node's own (older) key next to `node`'s state
+  // is unsound — if the aliased children are structurally identical to this
+  // node's former children, the stale key matches and the fast path skips
+  // forever, keeping the transplanted state even as the shared children are
+  // re-marked. Propagating `node`'s key is safe: this node's current context
+  // is exactly `node`'s (same children, constant, type), so a key match
+  // still implies the state is up to date, and any later re-mark of a shared
+  // child changes the context and defeats the key.
+  mlKeyValid = mv;
+  mlKey1 = mk1;
+  mlKey2 = mk2;
+  mlKeyCtx = std::move(mkc);
+  linearEnd = le; // sound by the same argument as the key above
 }
 
 void Node::copyAll(const Node &node) {
@@ -774,6 +1113,13 @@ void Node::copyAll(const Node &node) {
   vname = node.vname;
   vidx = node.vidx;
   constant = node.constant;
+  mlKeyValid = node.mlKeyValid;
+  mlKey1 = node.mlKey1;
+  mlKey2 = node.mlKey2;
+  mlKeyCtx = node.mlKeyCtx;
+  patternHashValid = node.patternHashValid;
+  patternHash1 = node.patternHash1;
+  patternHash2 = node.patternHash2;
   for (auto &child : node.children)
     children.push_back(child->getCopy());
 }
@@ -784,6 +1130,13 @@ shared_ptr<Node> Node::getCopy() const {
   n->vname = vname;
   n->vidx = vidx;
   n->constant = constant;
+  n->mlKeyValid = mlKeyValid;
+  n->mlKey1 = mlKey1;
+  n->mlKey2 = mlKey2;
+  n->mlKeyCtx = mlKeyCtx;
+  n->patternHashValid = patternHashValid;
+  n->patternHash1 = patternHash1;
+  n->patternHash2 = patternHash2;
   for (auto &child : children)
     n->children.push_back(child->getCopy());
   return n;
@@ -796,6 +1149,13 @@ shared_ptr<Node> Node::getShallowCopy() const {
   n->vidx = vidx;
   n->constant = constant;
   n->children = children; // copy the list (shared child pointers)
+  n->mlKeyValid = mlKeyValid;
+  n->mlKey1 = mlKey1;
+  n->mlKey2 = mlKey2;
+  n->mlKeyCtx = mlKeyCtx;
+  n->patternHashValid = patternHashValid;
+  n->patternHash1 = patternHash1;
+  n->patternHash2 = patternHash2;
   return n;
 }
 

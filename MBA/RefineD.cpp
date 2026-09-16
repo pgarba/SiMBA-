@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cstdio>
 
 namespace LSiMBA {
@@ -270,39 +271,101 @@ bool Node::checkVerify(const std::shared_ptr<Node> &other, int bitCount) {
 }
 
 // ===================================================== refine after substitution
-bool Node::refineAfterSubstitution() {
-  bool changed = false;
-  for (auto &c : children)
-    if (c->refineAfterSubstitution())
-      changed = true;
+namespace {
+// FNV-1a 64-bit fold (offset basis passed in via the caller's h).
+inline uint64_t fnv1a64(uint64_t h, uint64_t x) {
+  h ^= x;
+  h *= 1099511628211ULL;
+  return h;
+}
+} // namespace
 
-  if (checkBitwiseInSumsCancelTerms())
+Node::PatternRefine Node::refineAfterSubstitutionDetail() {
+  bool childStable = true;   // all children Unchanged
+  bool childChanged = false; // some child Changed
+  for (auto &c : children) {
+    auto r = c->refineAfterSubstitutionDetail();
+    if (r == PatternRefine::Changed)
+      childChanged = true;
+    else if (r == PatternRefine::Stable)
+      childStable = false;
+  }
+
+  uint64_t h1 = 1469598103934665603ULL;
+  uint64_t h2 = 1469598103934665604ULL;
+  auto fold = [&h1, &h2](uint64_t x) {
+    h1 = fnv1a64(h1, x);
+    h2 = fnv1a64(h2, x ^ 0x9E3779B97F4A7C15ULL);
+  };
+  // Structural fingerprint (no object pointers): a deep copy preserves it,
+  // so getCopy propagates the cached fingerprint and unchanged subtrees of a
+  // candidate remain skippable.
+  fold(static_cast<uint64_t>(type));
+  fold(constant.getZExtValue());
+  fold(constant.shl(64).getZExtValue());
+  for (auto &c : children) {
+    fold(static_cast<uint64_t>(c->type));
+    fold(c->constant.getZExtValue());
+    fold(c->constant.shl(64).getZExtValue());
+  }
+
+  if (childStable && patternHashValid && h1 == patternHash1 && h2 == patternHash2)
+    return PatternRefine::Unchanged;
+
+  patternHashValid = false;
+  bool changed = childChanged;
+  auto timeCheck = [this](int idx, auto fn) -> bool {
+    if (checkPerf().enabled) {
+      auto t0 = std::chrono::steady_clock::now();
+      bool r = fn();
+      checkPerf().t[idx] += std::chrono::duration<double>(
+                                 std::chrono::steady_clock::now() - t0)
+                                 .count();
+      if (r)
+        checkPerf().fired[idx]++;
+      checkPerf().calls[idx]++;
+      return r;
+    }
+    return fn();
+  };
+  if (timeCheck(0, [this] { return checkBitwiseInSumsCancelTerms(); }))
     changed = true;
-  if (checkBitwiseInSumsReplaceTerms())
+  if (timeCheck(1, [this] { return checkBitwiseInSumsReplaceTerms(); }))
     changed = true;
-  if (checkDisjInvolvingXorInSums())
+  if (timeCheck(2, [this] { return checkDisjInvolvingXorInSums(); }))
     changed = true;
-  if (checkXorInvolvingDisj())
+  if (timeCheck(3, [this] { return checkXorInvolvingDisj(); }))
     changed = true;
-  if (checkNegativeBitwInverse())
+  if (timeCheck(4, [this] { return checkNegativeBitwInverse(); }))
     changed = true;
-  if (checkXorPairsWithConstants())
+  if (timeCheck(5, [this] { return checkXorPairsWithConstants(); }))
     changed = true;
-  if (checkBitwPairsWithConstants())
+  if (timeCheck(6, [this] { return checkBitwPairsWithConstants(); }))
     changed = true;
-  if (checkDiffBitwPairsWithConstants())
+  if (timeCheck(7, [this] { return checkDiffBitwPairsWithConstants(); }))
     changed = true;
-  if (checkBitwTuplesWithConstants())
+  if (timeCheck(8, [this] { return checkBitwTuplesWithConstants(); }))
     changed = true;
-  if (checkBitwPairsWithInverses())
+  if (timeCheck(9, [this] { return checkBitwPairsWithInverses(); }))
     changed = true;
-  if (checkDiffBitwPairsWithInverses())
+  if (timeCheck(10, [this] { return checkDiffBitwPairsWithInverses(); }))
     changed = true;
-  if (checkBitwAndOpInSum())
+  if (timeCheck(11, [this] { return checkBitwAndOpInSum(); }))
     changed = true;
-  if (checkInsertXorInSum())
+  if (timeCheck(12, [this] { return checkInsertXorInSum(); }))
     changed = true;
-  return changed;
+
+  if (!changed) {
+    patternHash1 = h1;
+    patternHash2 = h2;
+    patternHashValid = true;
+    return PatternRefine::Stable;
+  }
+  return PatternRefine::Changed;
+}
+
+bool Node::refineAfterSubstitution() {
+  return refineAfterSubstitutionDetail() == PatternRefine::Changed;
 }
 
 // ===================================================== bitwise in sums: cancel terms
@@ -313,7 +376,7 @@ bool Node::checkBitwiseInSumsCancelTerms() {
   if (children.size() > MAX_CHILDREN_TO_TRANSFORM_BITW)
     return false;
 
-  bool changed = true;
+  bool changed = false;  // W2: was `true` (reported changed even without a rewrite)
   int i = 0;
   while (true) {
     if (i >= static_cast<int>(children.size()))
@@ -351,6 +414,7 @@ bool Node::checkBitwiseInSumsCancelTerms() {
     }
 
     // Otherwise adapt the iteration index.
+    changed = true;
     i = newIdx + 1;
   }
 }
@@ -576,7 +640,7 @@ bool Node::checkBitwiseInSumsReplaceTerms() {
   if (children.size() > MAX_CHILDREN_TO_TRANSFORM_BITW)
     return false;
 
-  bool changed = true;
+  bool changed = false;  // W2: was `true` (reported changed even without a rewrite)
   int i = 0;
   while (true) {
     if (i >= static_cast<int>(children.size()))
@@ -608,6 +672,7 @@ bool Node::checkBitwiseInSumsReplaceTerms() {
     }
 
     // Adapt the iteration index.
+    changed = true;
     i = newIdx + 1;
   }
 

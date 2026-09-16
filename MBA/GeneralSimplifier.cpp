@@ -26,6 +26,10 @@ GeneralSimplifier::GeneralSimplifier(int bitCount, bool modRed, int verifBitCoun
       timeoutSec(timeoutSec) {
   const char *p = std::getenv("MBASIMBA_PERF");
   perf.enabled = (p != nullptr && p[0] == '1');
+  // W1: per-expression linear-solver memo. Shipped ON (validated
+  // byte-identical on the full dataset); MBASIMBA_LINMEMO=0 disables it.
+  const char *m = std::getenv("MBASIMBA_LINMEMO");
+  linMemoEnabled = (m == nullptr || m[0] != '0');
 }
 
 // A3: lazily-created zero constant node (equivalent to parse("0", ...)).
@@ -534,8 +538,11 @@ bool GeneralSimplifier::simplifyNonlinearSubexpression(const std::shared_ptr<Nod
   }
 
   for (int i = 0; i < maxIt; ++i) {
-    if (std::chrono::steady_clock::now() > deadline)
+    if (std::chrono::steady_clock::now() > deadline) {
+      if (perf.enabled)
+        perf.loopDeadline++;
       break;
+    }
     if (perf.enabled)
       perf.iters++;
 
@@ -548,12 +555,20 @@ bool GeneralSimplifier::simplifyNonlinearSubexpression(const std::shared_ptr<Nod
       return true;
     }
 
-    if (!ch)
+    if (!ch) {
+      if (perf.enabled)
+        perf.loopNoChange++;
       break;
+    }
 
     std::string s = node->toString();
-    if (prev.count(s))
+    if (prev.count(s)) {
+      if (perf.enabled)
+        perf.loopCycle++;
       break;
+    }
+    if (perf.enabled && i == maxIt - 1)
+      perf.loopMaxIt++;
     prev.insert(s);
   }
 
@@ -563,14 +578,57 @@ bool GeneralSimplifier::simplifyNonlinearSubexpression(const std::shared_ptr<Nod
 // Simplify the given linear subexpression.
 bool GeneralSimplifier::simplifyLinearSubexpression(const std::shared_ptr<Node> &node) {
   std::string subexpr = node->toString();
+  if (perf.enabled)
+    perf.linearSubDupCalls += (linearSeen.count(subexpr) != 0) ? 1 : 0;
+  if (perf.enabled)
+    linearSeen.insert(subexpr);
+
+  // W1: memoize the string-level linear solver (90% of calls on this
+  // dataset re-submit an already-seen subexpression). A cached value equal
+  // to the key is a solver fixed point: the solver would return unchanged,
+  // so skip it and the comparison entirely.
+  if (linMemoEnabled) {
+    auto it = linearSimplifyMemo.find(subexpr);
+    if (it != linearSimplifyMemo.end()) {
+      if (perf.enabled)
+        perf.linearCacheHits++;
+      if (it->second == subexpr)
+        return false;
+      auto parsed = parse(it->second, bitCount, modRed, true, true);
+      if (parsed != nullptr)
+        node->copy(*parsed);
+      return true;
+    }
+  }
+
+  std::chrono::steady_clock::time_point ts;
+  if (perf.enabled)
+    ts = std::chrono::steady_clock::now();
   std::string simpl = simplifyLinearMba(subexpr, bitCount, false, false, modRed);
+  if (linMemoEnabled)
+    linearSimplifyMemo.emplace(subexpr, simpl);
+  if (perf.enabled) {
+    perf.tLinearMba +=
+        std::chrono::duration<double>(std::chrono::steady_clock::now() - ts).count();
+    perf.linearSubCalls++;
+  }
   bool changed = simpl != subexpr;
 
   if (changed) {
+    if (perf.enabled)
+      ts = std::chrono::steady_clock::now();
     auto parsed = parse(simpl, bitCount, modRed, true, true);
     if (parsed != nullptr)
       node->copy(*parsed);
+    if (perf.enabled) {
+      perf.tLinearParse +=
+          std::chrono::duration<double>(std::chrono::steady_clock::now() - ts).count();
+      perf.linearSubChanged++;
+    }
   }
+  if (perf.enabled)
+    perf.tLinearSub +=
+        std::chrono::duration<double>(std::chrono::steady_clock::now() - ts).count();
 
   return changed;
 }
@@ -593,9 +651,18 @@ std::vector<std::shared_ptr<Node>> GeneralSimplifier::collectNodesForSubstitutio
 std::shared_ptr<Node> GeneralSimplifier::getSimplViaSubstitutionOfNodes(
     const std::shared_ptr<Node> &node, const std::vector<std::shared_ptr<Node>> &nodes,
     bool onlyFullMatch) {
+  std::chrono::steady_clock::time_point ts;
+  if (perf.enabled)
+    ts = std::chrono::steady_clock::now();
   auto r = node->getCopy();
+  if (perf.enabled)
+    perf.tSubCopy +=
+        std::chrono::duration<double>(std::chrono::steady_clock::now() - ts).count();
 
+  if (perf.enabled)
+    ts = std::chrono::steady_clock::now();
   int n = node->getMaxVname("Y[", "]");
+  (void)ts;
   int start = (n == -1) ? 0 : n + 1;
 
   for (size_t i = 0; i < nodes.size(); ++i) {
@@ -605,19 +672,48 @@ std::shared_ptr<Node> GeneralSimplifier::getSimplViaSubstitutionOfNodes(
       return nullptr;
   }
 
+  if (perf.enabled)
+    perf.tSubMech +=
+        std::chrono::duration<double>(std::chrono::steady_clock::now() - ts).count();
+
+  if (perf.enabled)
+    ts = std::chrono::steady_clock::now();
   r->refine();
   r->markLinear();
+  if (perf.enabled)
+    perf.tSubRefine +=
+        std::chrono::duration<double>(std::chrono::steady_clock::now() - ts).count();
 
+  if (perf.enabled)
+    ts = std::chrono::steady_clock::now();
   collectAndEnumerateVariables(r);
+  if (perf.enabled)
+    perf.tSubTail +=
+        std::chrono::duration<double>(std::chrono::steady_clock::now() - ts).count();
 
+  if (perf.enabled)
+    ts = std::chrono::steady_clock::now();
   simplifySubexpression(r, nullptr, true, true);
+  if (perf.enabled)
+    perf.tSubSimplify +=
+        std::chrono::duration<double>(std::chrono::steady_clock::now() - ts).count();
 
+  if (perf.enabled)
+    ts = std::chrono::steady_clock::now();
   for (size_t i = 0; i < nodes.size(); ++i) {
     std::string vname = getVname(start + static_cast<int>(i));
     r->replaceVariable(vname, nodes[i]);
   }
+  if (perf.enabled)
+    perf.tSubMech +=
+        std::chrono::duration<double>(std::chrono::steady_clock::now() - ts).count();
 
+  if (perf.enabled)
+    ts = std::chrono::steady_clock::now();
   r->refine();
+  if (perf.enabled)
+    perf.tSubTail +=
+        std::chrono::duration<double>(std::chrono::steady_clock::now() - ts).count();
   return r;
 }
 
@@ -637,17 +733,53 @@ bool GeneralSimplifier::isSecondMoreOrEquallyComplex(const std::shared_ptr<Node>
 bool GeneralSimplifier::simplifyViaSubstitutionOfNodes(const std::shared_ptr<Node> &node,
                                                       const std::vector<std::shared_ptr<Node>> &nodes,
                                                       bool onlyFullMatch) {
+  std::chrono::steady_clock::time_point ts;
   auto r = getSimplViaSubstitutionOfNodes(node, nodes, onlyFullMatch);
 
-  if (r == nullptr || !isSecondMoreOrEquallyComplex(r, node))
+  if (r == nullptr)
+    return false;
+  if (perf.enabled)
+    perf.substFound++;
+  if (perf.enabled)
+    ts = std::chrono::steady_clock::now();
+  bool complex = isSecondMoreOrEquallyComplex(r, node);
+  if (perf.enabled)
+    perf.tComplexity +=
+        std::chrono::duration<double>(std::chrono::steady_clock::now() - ts).count();
+  if (!complex)
     return false;
 
+  if (perf.enabled) {
+    long pc = static_cast<long>(nodes.size());
+    if (pc - 1 < 4)
+      perf.subsetImprovedByPop[pc - 1]++;
+    perf.substImproved++;
+  }
+  if (perf.enabled)
+    ts = std::chrono::steady_clock::now();
   node->copy(*r);
 
-  if (node->refineAfterSubstitution())
+  if (node->refineAfterSubstitution()) {
+    if (perf.enabled) {
+      perf.substWalkChanged++;
+      perf.tSubAccRefine +=
+          std::chrono::duration<double>(std::chrono::steady_clock::now() - ts).count();
+      ts = std::chrono::steady_clock::now();
+    }
     node->refine();
+    if (perf.enabled)
+      perf.tSubAccMarkLin +=
+          std::chrono::duration<double>(std::chrono::steady_clock::now() - ts).count();
+    ts = std::chrono::steady_clock::now();
+  }
 
   node->markLinear();
+  if (perf.enabled) {
+    perf.tSubAccMarkLin +=
+        std::chrono::duration<double>(std::chrono::steady_clock::now() - ts).count();
+    perf.tSubAccept +=
+        std::chrono::duration<double>(std::chrono::steady_clock::now() - ts).count();
+  }
 
   return true;
 }
@@ -664,6 +796,12 @@ bool GeneralSimplifier::simplifyViaSubstitutionForIndex(const std::shared_ptr<No
     n >>= 1;
   }
 
+  if (perf.enabled) {
+    perf.subsetTried++;
+    long pc = static_cast<long>(sel.size());
+    if (pc - 1 < 4)
+      perf.subsetTriedByPop[pc - 1]++;
+  }
   bool changed = false;
   if (simplifyViaSubstitutionOfNodes(node, sel, false))
     changed = true;
@@ -685,6 +823,12 @@ bool GeneralSimplifier::simplifyViaSubstitution(const std::shared_ptr<Node> &nod
   std::vector<std::shared_ptr<Node>> nodes = collectNodesForSubstitution(node);
   if (nodes.empty())
     return false;
+
+  if (perf.enabled) {
+    perf.substCalls++;
+    size_t n = nodes.size();
+    perf.nodesHist[n <= 4 ? 0 : (n <= 9 ? 1 : (n <= 20 ? 2 : 3))]++;
+  }
 
   bool changed = false;
 
@@ -782,6 +926,17 @@ bool GeneralSimplifier::checkVerify(const std::string &orig,
 // Simplify the given expression.
 std::string GeneralSimplifier::simplify(const std::string &expr, bool useZ3) {
   noChangeFingerprint.clear();  // A1: fresh per expression
+  if (perf.enabled) {
+    linearSeen.clear();  // B-i: fresh per expression
+    for (int i = 0; i < 13; ++i) {
+      checkPerf().t[i] = 0;
+      checkPerf().calls[i] = 0;
+      checkPerf().fired[i] = 0;
+    }
+    checkPerf().mlSkips = 0;
+    checkPerf().mlRecomputes = 0;
+  }
+  linearSimplifyMemo.clear();  // W1: fresh per expression (bounded memory)
 
   std::chrono::steady_clock::time_point tStart;
   if (perf.enabled)
@@ -809,9 +964,47 @@ std::string GeneralSimplifier::simplify(const std::string &expr, bool useZ3) {
         std::chrono::duration<double>(std::chrono::steady_clock::now() - tStart).count();
     fprintf(stderr,
             "PERF iters=%ld refactor=%ld skips=%ld tLinear=%.4f tRefactor=%.4f "
-            "tSubst=%.4f tTotal=%.4f\n",
+            "tSubst=%.4f tTotal=%.4f "
+            "substCalls=%ld subsetTried=%ld substFound=%ld substImproved=%ld "
+            "substWalkChanged=%ld "
+            "triedByPop=[%ld,%ld,%ld,%ld] impByPop=[%ld,%ld,%ld,%ld] "
+            "nodesHist=[%ld,%ld,%ld,%ld] "
+            "loopNoChange=%ld loopCycle=%ld loopDeadline=%ld loopMaxIt=%ld "
+            "tSubCopy=%.4f tSubRefine=%.4f tSubSimplify=%.4f "
+            "tSubMech=%.4f tSubTail=%.4f tSubAccept=%.4f tSubAccRefine=%.4f "
+            "tSubAccMarkLin=%.4f tComplexity=%.4f "
+            "tLinearSub=%.4f tLinearMba=%.4f tLinearParse=%.4f "
+            "linearSubCalls=%ld linearSubChanged=%ld linearSubDupCalls=%ld "
+            "linearCacheHits=%ld toStringCalls=%ld toStringT=%.4f "
+            "checkT=%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f "
+            "checkFired=%ld,%ld,%ld,%ld,%ld,%ld,%ld,%ld,%ld,%ld,%ld,%ld,%ld\n",
             perf.iters, perf.refactorCalls, perf.refactorSkips, perf.tLinear,
-            perf.tRefactor, perf.tSubst, perf.tTotal);
+            perf.tRefactor, perf.tSubst, perf.tTotal, perf.substCalls,
+            perf.subsetTried, perf.substFound, perf.substImproved,
+            perf.substWalkChanged,
+            perf.subsetTriedByPop[0], perf.subsetTriedByPop[1], perf.subsetTriedByPop[2],
+            perf.subsetTriedByPop[3], perf.subsetImprovedByPop[0],
+            perf.subsetImprovedByPop[1], perf.subsetImprovedByPop[2],
+            perf.subsetImprovedByPop[3], perf.nodesHist[0], perf.nodesHist[1],
+            perf.nodesHist[2], perf.nodesHist[3], perf.loopNoChange, perf.loopCycle,
+            perf.loopDeadline, perf.loopMaxIt, perf.tSubCopy, perf.tSubRefine,
+            perf.tSubSimplify, perf.tSubMech, perf.tSubTail, perf.tSubAccept,
+            perf.tSubAccRefine, perf.tSubAccMarkLin, perf.tComplexity,
+            perf.tLinearSub,
+            perf.tLinearMba, perf.tLinearParse, perf.linearSubCalls,
+            perf.linearSubChanged, perf.linearSubDupCalls, perf.linearCacheHits,
+            toStringPerf().calls.load(),
+            toStringPerf().nanos.load() / 1e9,
+            checkPerf().t[0], checkPerf().t[1], checkPerf().t[2], checkPerf().t[3],
+            checkPerf().t[4], checkPerf().t[5], checkPerf().t[6], checkPerf().t[7],
+            checkPerf().t[8], checkPerf().t[9], checkPerf().t[10], checkPerf().t[11],
+            checkPerf().t[12], checkPerf().fired[0], checkPerf().fired[1],
+            checkPerf().fired[2], checkPerf().fired[3], checkPerf().fired[4],
+            checkPerf().fired[5], checkPerf().fired[6], checkPerf().fired[7],
+            checkPerf().fired[8], checkPerf().fired[9], checkPerf().fired[10],
+            checkPerf().fired[11], checkPerf().fired[12]);
+    fprintf(stderr, "PERF_ML skips=%ld recomputes=%ld\n", checkPerf().mlSkips,
+            checkPerf().mlRecomputes);
   }
 
   return result;

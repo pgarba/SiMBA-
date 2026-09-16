@@ -9,6 +9,8 @@
 #ifndef MBA_NODE_H
 #define MBA_NODE_H
 
+#include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -21,6 +23,28 @@
 
 namespace LSiMBA {
 namespace MBA {
+
+// Top-level Node::toString accounting (enabled by MBASIMBA_PERF=1).
+struct ToStringPerf {
+  std::atomic<bool> enabled{false};
+  std::atomic<long> calls{0};
+  std::atomic<long long> nanos{0};
+};
+ToStringPerf &toStringPerf();
+
+// Per-check accounting for the 13 post-substitution pattern checks
+// (enabled by MBASIMBA_PERF=1). Index 0..12 matches the order in
+// Node::refineAfterSubstitutionDetail.
+struct CheckPerf {
+  bool enabled = false;
+  double t[13] = {0};
+  long calls[13] = {0};
+  long fired[13] = {0};
+  // W3: markLinear fast-path counters.
+  long mlSkips = 0;
+  long mlRecomputes = 0;
+};
+CheckPerf &checkPerf();
 
 class Node {
 public:
@@ -45,6 +69,10 @@ public:
   // ---------------------------------------------------------------- string
   std::string toString(bool withParentheses = false, int end = -1,
                        const std::vector<std::string> *varNames = nullptr);
+  // Untimed core (toString is a top-level-timed wrapper under
+  // MBASIMBA_PERF=1; internal recursion calls toStringImpl directly).
+  std::string toStringImpl(bool withParentheses, int end,
+                           const std::vector<std::string> *varNames);
 
   std::string partToString(int end) { return toString(false, end); }
 
@@ -106,6 +134,24 @@ public:
 
   // ------------------------------------------------------------- mark linear
   void markLinear(bool restrictedScope = false);
+  // W3 (WS-B): incremental markLinear for the full-scope case. Returns true
+  // if the node's state is unchanged since the previous fast mark (recompute
+  // skipped). A node skips its recompute when every child reports unchanged
+  // state and its (type, children (identity + type + state)) fingerprint is
+  // unchanged. The recompute is a pure function of that fingerprint, so a
+  // match guarantees an identical result; any in-place mutation breaks the
+  // fingerprint of the mutated node or of its parent, forcing a recompute
+  // there and in every ancestor. Two 64-bit FNV-1a folds guard collisions.
+  bool markLinearFast();
+  // W3-debug: original full-scope markLinear without caching; also used to
+  // validate the fast path (MBASIMBA_MLCHECK=1).
+  void markLinearFull();
+  void invalidatePatternCaches();
+  bool mlKeyValid = false;
+  uint64_t mlKey1 = 0, mlKey2 = 0;
+  // W3-debug (MBASIMBA_MLCHECK): full structural context for exact key
+  // comparison, to rule out hash collisions.
+  std::vector<uint64_t> mlKeyCtx;
   void markLinearBitwise();
   void markLinearSum();
   void markLinearProduct();

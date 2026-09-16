@@ -278,9 +278,21 @@ is correct — it was verified against Python per-bit ground truth):
      (negative decimal constants) is now in the semi-linear class —
      msimba proved 177/190 → **190/190**, gamba 61/70 → 65/70. Details in
      the plan file §2 RESULT.
-   - **WS-B open:** general-route substitution candidates (~92 % of its C++
-     time) + structural-hash cycle detection + no-progress guard
-     (target: qsynth_ea batch 0.53 s → ≤ 0.25 s).
+   - **WS-B done (2026-09):** qsynth_ea 100-expr batch 0.410 s →
+     **0.262 s (−36 %)**, byte-identical output, all gates green
+     (proved counts unchanged: simba 41/170, msimba 190/190, gamba
+     65/70). Shipped: W1 per-expression linear-solver memo (91 % of
+     submissions are duplicates; ON by default, `MBASIMBA_LINMEMO=0` to
+     disable), W2 validated-key pattern walk (13 RefineD checks skipped
+     on unchanged subtrees), quirk fix in the two bitwise-in-sums
+     checks (redundant post-accept `refine()` eliminated,
+     substWalkChanged 2753 → 61). W3 incremental markLinear was built
+     and validated (72 % skip rate) but has no net win (per-call hash
+     cost ≈ dispatch saved); shipped OFF behind `MBASIMBA_MLFast=1`,
+     with a `MBASIMBA_MLCHECK=1` shadow self-check that passes on the
+     full dataset. The Node::copy stale-key bug found during W3
+     validation is fixed (triple propagation). Details in
+     `GAMBA_PERF_PLAN2.md` §6.2.
    - Plan 1 (`GAMBA_PERF_PLAN.md`) kept as history (A1/A3/B3 done).
 2. **Git submodules** for `external/MSiMBA` (330 M), `external/bitwuzla`
    (109 M), `external/yices2` (154 M) — currently untracked separate repos;

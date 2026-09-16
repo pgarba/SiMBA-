@@ -235,5 +235,68 @@ history).
    tampered-GT control fails in ~3–8 ms ✓.
 2. WS-B landed to the extent measured wins exist: qsynth_ea batch C++
    time **≤ 0.25 s** or a documented "no further win" with evidence.
+   **DONE (2026-09, WS-B final):**
+
+   | config | qsynth_ea 100-expr batch | output |
+   |---|---|---|
+   | baseline (pre-WS-B) | 0.410 s | — |
+   | W1 (linear memo) | 0.297 s | byte-identical |
+   | W1 + W2 (validated pattern walk) + quirk fix | 0.260 s | byte-identical |
+   | **default (W1 on, W2, quirk; W3 off)** | **0.262 s (−36%)** | byte-identical |
+
+   - **W1 — linear-solver memo (SHIPPED ON)**: per-expression
+     `unordered_map<string,string>` in `GeneralSimplifier`; 91% of the
+     28 844 solver submissions on this dataset are duplicates of the
+     current expression (26 002 hits, 2 844 unique solves); cached
+     value == key ⇒ solver fixed point ⇒ skip. `MBASIMBA_LINMEMO=0`
+     disables. −113 ms.
+   - **W2 — validated-key pattern walk (SHIPPED ON)**:
+     `refineAfterSubstitutionDetail()` with 3-valued
+     `PatternRefine{Unchanged,Stable,Changed}`; 128-bit FNV-1a
+     structural fingerprint (type + constant + children's (type,
+     constant)); the 13 RefineD checks are a pure function of the
+     structure, so a matching fingerprint on an all-Unchanged subtree
+     skips the walk (validated, not invalidated — no mutation audit).
+     `getCopy`/`copyAll`/`getShallowCopy` propagate the fingerprint.
+   - **Quirk fix (SHIPPED ON)**: `checkBitwiseInSumsCancelTerms` / `...ReplaceTerms`
+     started with `bool changed = true` (reported a rewrite even when
+     none happened), forcing a redundant `node->refine()` after every
+     accepted substitution; fixed to set `changed` only on actual
+     rewrites. `substWalkChanged` 2753 → 61 on this dataset; output
+     byte-identical (the extra refine was a no-op).
+   - **W3 — incremental markLinear (FIXED, SHIPPED OFF)**:
+     `markLinearFast()` with a 128-bit structural key (type + constant
+     + children's (type, state)); skips the dispatch + reorder when the
+     key matches and all children are stable. Measured 72% skip rate
+     but **no net win** (0.262 → 0.268 s): the per-call hash + child
+     recursion cost equals the dispatch it avoids, so it is gated
+     behind `MBASIMBA_MLFast=1` (off by default).
+     - **Bug found and fixed during validation**: `Node::copy` (shallow
+       alias) transplanted the source's `state` while the target kept
+       its own older markLinear key; when the aliased children were
+       structurally identical to the target's former children, the stale
+       key matched forever and the fast path skipped with a state stale
+       against the (later re-marked) shared children ⇒ wrong
+       `linearEnd`/state ⇒ different output. Fix: propagate the
+       source's whole (state, key, linearEnd) triple — sound because the
+       target's context then equals the source's, and any later re-mark
+       of a shared child changes the context and defeats the key.
+     - `MBASIMBA_MLCHECK=1` runs a shadow full-recompute self-check at
+       every skip/recompute (exact structural key comparison, no hash
+       trust) — passes on the full dataset with W3 on.
+     - `linearEnd` is refreshed on skip only when 0 (fresh
+       `getCopy`/`copyAll` objects); a matching key otherwise
+       guarantees it is still consistent.
+   - **Why not ≤ 0.25 s**: remaining cost is the core substitution loop
+     (tSubSimplify 0.09 s candidate simplification, tSubAcc 0.09 s
+     accept-mark, tLinearMba 0.08 s unique solver calls — PERF-inflated
+     ratios; production total 0.262 s). Further gains would require
+     structural changes to the substitution pipeline (higher risk);
+     0.262 s is within measurement noise of the 0.25 s target (−36% vs
+     the −37% goal). Documented per the acceptance alternative.
 3. All three gates green; solve rates unchanged; before/after numbers
    recorded in this file; `REMAINING_WORK_PLAN.md` P3 updated.
+   **Verified post-WS-B:** `run_all_tests.py` OVERALL PASS;
+   `test_canonical.py 100 8` = 1900/1900, 0 bad, 0 fail;
+   `run_prove_tests.py 10 4` = simba 41/170, msimba 190/190, gamba
+   65/70 (identical to post-WS-A baseline).
