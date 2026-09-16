@@ -17,11 +17,14 @@ import subprocess
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-EXE = os.path.join(HERE, "build", "mba_cli.exe")
+_BUILD_DIR = os.path.join(HERE, "build")
+EXE = (os.path.join(_BUILD_DIR, "mba_cli.exe")
+       if os.path.exists(os.path.join(_BUILD_DIR, "mba_cli.exe"))
+       else os.path.join(_BUILD_DIR, "mba_cli"))
 DATASETS = [
-    r"data\GAMBA\mba_obf_nonlinear.txt",
-    r"data\GAMBA\mba_flatten.txt",
-    r"data\GAMBA\syntia.txt",
+    "data/GAMBA/mba_obf_nonlinear.txt",
+    "data/GAMBA/mba_flatten.txt",
+    "data/GAMBA/syntia.txt",
 ]
 ROOT = os.path.dirname(HERE)
 

@@ -55,3 +55,8 @@ _pytemp/
 # Local solver/reference clones (Z3/LLVM come from the toolchain deps dir,
 # never from here). Re-clone into external/ if a solver experiment resumes.
 external/
+
+# LLVM IR generated at ctest time by scripts/convert_data_to_llvm.py
+llvm/e[0-9]_[0-9]vars.ll
+llvm/pldi_dataset_*.ll
+llvm/test_data.ll
