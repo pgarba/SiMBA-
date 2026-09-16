@@ -227,15 +227,15 @@ std::shared_ptr<Node> Node::getOptArgNegXorSameNeg() {
   if (!children[0]->isConstant(-1))
     return nullptr;
 
-  auto xor = children[1];
-  if (xor->type != NodeType::EXCL_DISJUNCTION)
+  auto xnode = children[1];
+  if (xnode->type != NodeType::EXCL_DISJUNCTION)
     return nullptr;
-  if (xor->children.size() != 2)
+  if (xnode->children.size() != 2)
     return nullptr;
 
-  auto node0 = xor->children[0]->getCopy();
+  auto node0 = xnode->children[0]->getCopy();
   node0->multiplyByMinusOne();
-  if (node0->equals(*xor->children[1]))
+  if (node0->equals(*xnode->children[1]))
     return node0;
 
   return nullptr;
@@ -316,15 +316,15 @@ std::shared_ptr<Node> Node::getOptArgNegatedXorSameNeg() {
   if (type != NodeType::NEGATION)
     return nullptr;
 
-  auto xor = children[0];
-  if (xor->type != NodeType::EXCL_DISJUNCTION)
+  auto xnode = children[0];
+  if (xnode->type != NodeType::EXCL_DISJUNCTION)
     return nullptr;
-  if (xor->children.size() != 2)
+  if (xnode->children.size() != 2)
     return nullptr;
 
-  auto node0 = xor->children[0]->getCopy();
+  auto node0 = xnode->children[0]->getCopy();
   node0->multiplyByMinusOne();
-  if (node0->equals(*xor->children[1]))
+  if (node0->equals(*xnode->children[1]))
     return node0;
 
   return nullptr;

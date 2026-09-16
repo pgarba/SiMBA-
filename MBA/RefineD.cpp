@@ -861,18 +861,18 @@ bool Node::checkDisjInvolvingXorInSums() {
       continue;
 
     int oIdx = xorIdx == 0 ? 1 : 0;
-    auto xor = node->children[xorIdx];
+    auto xnode = node->children[xorIdx];
     auto o = node->children[oIdx];
 
-    if (xor->children.size() != 2)
+    if (xnode->children.size() != 2)
       continue;
 
-    if (o->equals(*xor->children[0])) {
+    if (o->equals(*xnode->children[0])) {
       o = newNodeWithChildren(NodeType::CONJUNCTION,
-                              {o->getShallowCopy(), xor->children[1]->getCopy()});
-    } else if (o->equals(*xor->children[1])) {
+                              {o->getShallowCopy(), xnode->children[1]->getCopy()});
+    } else if (o->equals(*xnode->children[1])) {
       o = newNodeWithChildren(NodeType::CONJUNCTION,
-                              {o->getShallowCopy(), xor->children[0]->getCopy()});
+                              {o->getShallowCopy(), xnode->children[0]->getCopy()});
     } else if (o->type != NodeType::CONJUNCTION) {
       continue;
     } else {
@@ -880,9 +880,9 @@ bool Node::checkDisjInvolvingXorInSums() {
       bool found1 = false;
 
       for (auto &ch : o->children) {
-        if (ch->equals(*xor->children[0]))
+        if (ch->equals(*xnode->children[0]))
           found0 = true;
-        else if (ch->equals(*xor->children[1]))
+        else if (ch->equals(*xnode->children[1]))
           found1 = true;
 
         if (found0 && found1)
@@ -891,9 +891,9 @@ bool Node::checkDisjInvolvingXorInSums() {
 
       if (found0) {
         if (!found1)
-          o->children.push_back(xor->children[1]->getCopy());
+          o->children.push_back(xnode->children[1]->getCopy());
       } else if (found1) {
-        o->children.push_back(xor->children[0]->getCopy());
+        o->children.push_back(xnode->children[0]->getCopy());
       } else {
         continue;
       }
@@ -906,10 +906,10 @@ bool Node::checkDisjInvolvingXorInSums() {
     changed = true;
 
     if (factor == 1) {
-      children.push_back(xor->getShallowCopy());
+      children.push_back(xnode->getShallowCopy());
     } else {
       auto prod = newNodeWithChildren(NodeType::PRODUCT,
-                                      {newConstantNode(factor), xor->getShallowCopy()});
+                                      {newConstantNode(factor), xnode->getShallowCopy()});
       children.push_back(prod);
     }
     node->copy(*o);

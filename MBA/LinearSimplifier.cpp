@@ -146,9 +146,9 @@ void LinearSimplifier::checkSolutionComplexity(const std::string &e, int t,
 
   if (res.empty()) {
     res = expr;
-    compl.assign(static_cast<int>(Metric::COUNT) - static_cast<int>(metric), -1);
+    complVec.assign(static_cast<int>(Metric::COUNT) - static_cast<int>(metric), -1);
     if (t != -1 && metric <= Metric::TERMS)
-      compl[static_cast<int>(Metric::TERMS) - static_cast<int>(metric)] = t;
+      complVec[static_cast<int>(Metric::TERMS) - static_cast<int>(metric)] = t;
     return;
   }
 
@@ -157,14 +157,14 @@ void LinearSimplifier::checkSolutionComplexity(const std::string &e, int t,
   for (int m = 0; m < static_cast<int>(Metric::COUNT) - static_cast<int>(metric); ++m) {
     Metric mm = static_cast<Metric>(static_cast<int>(metric) + m);
     newCompl[m] = computeMetric(expr, mm, t);
-    if (compl[m] == -1)
-      compl[m] = computeMetric(res, mm);
+    if (complVec[m] == -1)
+      complVec[m] = computeMetric(res, mm);
 
-    if (newCompl[m] > compl[m])
+    if (newCompl[m] > complVec[m])
       return;
-    if (newCompl[m] < compl[m]) {
+    if (newCompl[m] < complVec[m]) {
       res = expr;
-      compl = newCompl;
+      complVec = newCompl;
       return;
     }
   }
@@ -172,7 +172,7 @@ void LinearSimplifier::checkSolutionComplexity(const std::string &e, int t,
 
 int LinearSimplifier::getTermCountOfCurrentSolution() const {
   int m = static_cast<int>(Metric::TERMS) - static_cast<int>(metric);
-  return compl[m];
+  return complVec[m];
 }
 
 std::string LinearSimplifier::getBitwiseExpression(int offset) {
@@ -856,7 +856,7 @@ bool LinearSimplifier::checkVerify(const std::string &simpl) {
 
 std::string LinearSimplifier::simplify(bool useZ3) {
   res.clear();
-  compl.clear();
+  complVec.clear();
 
   std::string simpl = simplifyImpl(useZ3);
   return checkVerify(simpl) ? simpl : "";

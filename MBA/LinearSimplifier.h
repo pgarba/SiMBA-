@@ -65,7 +65,7 @@ class LinearSimplifier {
   std::shared_ptr<BitwiseFactory> bitwiseFactory;
   std::vector<int64_t> resultVector; // int64_t: 64-bit values overflow int32
   std::string res;
-  std::vector<int> compl;
+  std::vector<int> complVec;
   int lincombTerms = -1;
 
   std::string getTmpVname(int i) const;

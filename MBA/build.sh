@@ -18,20 +18,19 @@ here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 out="$here/build"
 mkdir -p "$out"
 
-sources=(
-  "$here/Node.cpp" "$here/Parser.cpp" "$here/Batch.cpp"
-  "$here/RefineA.cpp" "$here/RefineB.cpp" "$here/RefineC.cpp" "$here/RefineD.cpp"
-  "$here/Expand.cpp" "$here/Substitute.cpp" "$here/Bitwise.cpp"
-  "$here/Implicant.cpp" "$here/Dnf.cpp" "$here/BitwiseFactory.cpp"
-  "$here/LinearSimplifier.cpp" "$here/GeneralSimplifier.cpp"
-  # Verify.cpp carries the fast-check / Z3-proof verification. Without
-  # MBA_HAS_Z3 (not defined here) its proveEquivalent is a no-op, so no Z3
-  # library is needed.
-  "$here/Verify.cpp" "$here/mba_cli.cpp"
-)
+# All MBA sources except the CLI driver (kept last, like CMake's
+# MBA_SOURCES + mba_cli.cpp). Verify.cpp carries the fast-check / Z3-proof
+# verification; without MBA_HAS_Z3 (not defined here) its proveEquivalent
+# is a no-op, so no Z3 library is needed.
+sources=()
+for f in "$here"/*.cpp; do
+  [ "$(basename "$f")" = "mba_cli.cpp" ] && continue
+  sources+=("$f")
+done
+sources+=("$here/mba_cli.cpp")
 
 # shellcheck disable=SC2086
-g++ -std=c++17 -O2 -fPIC -I"$here" -I"$here/.." -I"$LLVM_INC" $LLVM_CXXFLAGS \
+g++ -std=c++17 -O2 -fPIC -I"$here" -I"$here/.." -I"$here/../include" -I"$LLVM_INC" $LLVM_CXXFLAGS \
   "${sources[@]}" \
   -o "$out/mba_cli" $LLVM_LIBS -ldl -lpthread
 
