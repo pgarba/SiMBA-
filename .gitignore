@@ -52,5 +52,6 @@ _pytemp/
 .pi-web/
 
 # Vendored third-party solver clones + C# MSiMBA reference (re-clonable from upstream).
-# external/GAMBA keeps its few committed files (tracked files stay tracked).
+# Local solver/reference clones (Z3/LLVM come from the toolchain deps dir,
+# never from here). Re-clone into external/ if a solver experiment resumes.
 external/
