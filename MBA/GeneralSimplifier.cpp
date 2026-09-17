@@ -30,6 +30,9 @@ GeneralSimplifier::GeneralSimplifier(int bitCount, bool modRed, int verifBitCoun
   // byte-identical on the full dataset); MBASIMBA_LINMEMO=0 disables it.
   const char *m = std::getenv("MBASIMBA_LINMEMO");
   linMemoEnabled = (m == nullptr || m[0] != '0');
+  // Phase 2: direct single-pass first (CoBRA-style). Default on.
+  const char *d = std::getenv("MBASIMBA_DIRECT");
+  directEnabled = (d == nullptr || d[0] != '0');
   // Phase-1 substitution budget (see header). Default: 150ms cumulative
   // substitution time (the controlling knob), no subset cap. 0 disables
   // (historical unbounded behavior). Measured on the 10-variable obfuscatorx
@@ -971,6 +974,37 @@ bool GeneralSimplifier::checkVerify(const std::string &orig,
   return simplTree->checkVerify(origTree, verifBitCount);
 }
 
+// Phase 2: direct single-pass (CoBRA-style) simplification.
+std::string GeneralSimplifier::simplifyDirect(const std::string &expr) {
+  auto root = parse(expr, bitCount, modRed, true, true);
+  if (root == nullptr)
+    return "";
+  // Phase 2: the direct transform only wins for high-varCount non-polynomial
+  // MBAs, where the iterative substitution search thrashes over 2^vars subsets
+  // for a small net gain (e.g. the 9-16 var obfuscatorx cases: direct gives a
+  // verified result in ~2ms vs ~30s for the full search). For low-varCount or
+  // polynomial MBAs the iterative path is both faster and yields a more
+  // compact result (measured: direct is up to ~5x larger on 2-var
+  // permutation64), so defer to it there.
+  std::vector<std::string> dvars;
+  root->collectVariables(dvars);
+  if (static_cast<int>(dvars.size()) < 6)
+    return "";
+  // One bottom-up linear (AND-basis) decomposition pass. noRefactor + noSubst
+  // means the per-node fixed-point loop runs at most ~1-2 iterations (the
+  // linear part, then the isLinear check) — a direct transform, not a search.
+  simplifySubexpression(root, nullptr, /*noRefactor=*/true, /*noSubst=*/true);
+  root->polish();
+  std::string simpl = root->toString();
+  if (simpl == expr)
+    return ""; // no change: not a useful direct result
+  // Full-width verification gate (the direct path skips the per-node checks
+  // the iterative path performs). Never return an unverified result.
+  if (!fastCheckEquivalent(expr, simpl, bitCount, 100, true))
+    return "";
+  return simpl;
+}
+
 // Simplify the given expression.
 std::string GeneralSimplifier::simplify(const std::string &expr, bool useZ3) {
   noChangeFingerprint.clear();  // A1: fresh per expression
@@ -994,6 +1028,15 @@ std::string GeneralSimplifier::simplify(const std::string &expr, bool useZ3) {
 
   // Mirror the Python 30s timeout with a wall-clock deadline.
   deadline = std::chrono::steady_clock::now() + std::chrono::seconds(timeoutSec);
+
+  // Phase 2: try the direct single-pass first (CoBRA-style fast verified
+  // equivalent). If it yields a result, return it immediately — no iterative
+  // refactor/substitution search. On "", fall through to the full path.
+  if (directEnabled) {
+    std::string direct = simplifyDirect(expr);
+    if (!direct.empty())
+      return direct;
+  }
 
   std::string result;
   auto root = parse(expr, bitCount, modRed, true, true);

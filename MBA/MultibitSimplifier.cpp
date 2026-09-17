@@ -159,8 +159,11 @@ MultibitSimplifier::MultibitSimplifier(const std::string &expr, int bitCount,
     return; // too many variables
   numCombinations = 1ull << varCount;
 
-  // Phase-1 budget (see header). Default 300ms; 0 disables.
-  budgetMs = 300.0;
+  // Phase-1/2 budget (see header). Default 50ms; 0 disables. Genuine
+  // semi-linear cases (the msimba dataset, ~ms each) finish far below it;
+  // the mixed-product dead end (obfuscatorx) is capped here before falling
+  // back to the (now direct) general route.
+  budgetMs = 50.0;
   if (const char *b = std::getenv("MBASIMBA_MSIMBA_BUDGET_MS")) {
     try {
       budgetMs = std::stod(b);
