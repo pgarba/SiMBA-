@@ -372,7 +372,7 @@ std::vector<std::vector<Decision>> LinearSimplifier::getDecisionVector(
   const std::vector<int64_t> &v = (vec != nullptr) ? *vec : resultVector;
   std::vector<std::vector<Decision>> d;
 
-  for (int r : v) {
+  for (int64_t r : v) {
     std::vector<Decision> e;
     bool f = modInt(r - coeff1) == 0;
     bool s = modInt(r - coeff2) == 0;
