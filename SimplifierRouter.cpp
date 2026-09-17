@@ -479,7 +479,17 @@ bool autoFallbackEnabled() { return AutoFallback.getValue(); }
 bool TryAutoFallback(const std::string &MBA, std::string &SimpMBA,
                      int bitCount, bool useZ3, bool fastCheck,
                      const std::string &skip) {
-  const char *order[] = {"msimba", "general", "external"};
+  // Phase 2: the fallback order depends on varCount (mirrors the direct-path
+  // gate). High-varCount (>= 6): the general route's direct single-pass is
+  // fast (~ms) and the 2^vars MSiMBA path is a mixed-product dead end, so try
+  // general first. Low-varCount: MSiMBA is the fast path for semi-linear/
+  // multilinear MBAs (~10ms) while the full general path is slow (up to the
+  // per-call timeout at wide bit-widths), so try MSiMBA first.
+  std::vector<const char *> order = (getVarCount(MBA) >= 6)
+                                        ? std::vector<const char *>{
+                                              "general", "msimba", "external"}
+                                        : std::vector<const char *>{
+                                              "msimba", "general", "external"};
   for (const char *r : order) {
     if (std::string(r) == skip)
       continue;
@@ -516,11 +526,20 @@ RouteResult RouteSimplify(const std::string &MBA, std::string &SimpMBA,
     return RouteResult::NATIVE; // infeasible at this width: use the native path
 
   if (choice == "msimba") {
-    std::string res =
-        LSiMBA::MBA::MultibitSimplifier::simplify(MBA, bitCount, false);
+    // Phase 2: for high-varCount MBAs (>= 6) MSiMBA (2^varCount) is a dead end
+    // on mixed products and expensive even when it succeeds, while the direct
+    // general path handles them in ~ms. Skip the MSiMBA PRIMARY call and let
+    // the (general-first) auto-fallback produce the result, keeping MSiMBA as
+    // a last-resort candidate (skip=""). Low-varCount MBAs run MSiMBA as the
+    // primary (its natural tool) and exclude it from the fallback (skip).
+    bool highVar = getVarCount(MBA) >= 6;
+    std::string res;
+    if (!highVar)
+      res = LSiMBA::MBA::MultibitSimplifier::simplify(MBA, bitCount, false);
     if (res.empty()) {
       if (autoFallback && isAutoMode() &&
-          TryAutoFallback(MBA, SimpMBA, bitCount, useZ3, fastCheck, "msimba"))
+          TryAutoFallback(MBA, SimpMBA, bitCount, useZ3, fastCheck,
+                          highVar ? "" : "msimba"))
         return RouteResult::SUCCESS;
       return RouteResult::FAILED;
     }
@@ -592,13 +611,19 @@ bool TrySelectedSimplifier(const std::string &Expr, std::string &SimpMBA,
     return false; // infeasible at this width: fall back to the native path
 
   if (choice == "msimba") {
-    std::string res =
-        LSiMBA::MBA::MultibitSimplifier::simplify(Expr, bitWidth, false);
+    // Phase 2: see RouteSimplify — skip the MSiMBA primary for high-varCount
+    // MBAs and let the general-first fallback handle them; MSiMBA stays a
+    // last-resort candidate there.
+    bool highVar = getVarCount(Expr) >= 6;
+    std::string res;
+    if (!highVar)
+      res = LSiMBA::MBA::MultibitSimplifier::simplify(Expr, bitWidth, false);
     if (res.empty()) {
       // auto-fallback: try the other routes (result left unverified; the
       // caller's verify() step validates it, as for the primary result).
       if (autoFallback && isAutoMode() &&
-          TryAutoFallback(Expr, SimpMBA, bitWidth, useZ3, false, "msimba"))
+          TryAutoFallback(Expr, SimpMBA, bitWidth, useZ3, false,
+                          highVar ? "" : "msimba"))
         return true;
       return false;
     }
