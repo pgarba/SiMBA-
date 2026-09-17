@@ -276,6 +276,48 @@ form. The GAMBA general solver is correct but **exponential** in the variable
 count: it is fast on 2-var files (~0.1 s) but takes 60–70 s on 4-var files and
 is infeasible on 5/6-var files, and it does not reach 100% on any file.
 
+# Comparison with CoBRA
+
+Head-to-head against **CoBRA** (Trail of Bits' public MBA solver,
+`github.com/trailofbits/CoBRA`) on CoBRA's own benchmark datasets plus
+Saturn's simplification cases — 3,024 expressions, 64-bit — run as the
+front-door `SiMBA++` (auto routing) vs `cobra-cli`.
+
+**SiMBA++ is faster on every dataset — 4.3× faster overall (8.8 s vs 38.2 s) —
+with zero wrong results.**
+
+| Dataset | N | SiMBA solved | CoBRA solved | SiMBA time | CoBRA time | speedup |
+|---|---:|---:|---:|---:|---:|---:|
+| univariate64 | 1000 | 1000 | 1000 | **1.67 s** | 2.47 s | 1.5× |
+| multivariate64 | 1000 | 994 | 998 | **4.61 s** | 28.4 s | 6.2× |
+| permutation64 | 13 | 13 | 13 | **0.42 s** | 4.6 s | 11.0× |
+| obfuscatorx | 7 | 7 | 7 | **0.02 s** | 0.04 s | 2.0× |
+| msimba | 1000 | 1000 | 1000 | **2.08 s** | 2.6 s | 1.25× |
+| Saturn | 4 | 4 | 4 | **0.01 s** | 0.02 s | 2.0× |
+| **Total** | **3024** | **3018 (99.8%)** | 3022 (99.9%) | **8.8 s** | 38.2 s | **4.3×** |
+
+- **0 wrong results** for both solvers — every reported result is verified
+  equivalent to the original (fast-check, with a solver-independent Python
+  evaluator as a fallback verifier).
+- The largest wins are on the non-polynomial **multivariate64** (6.2×) and
+  **permutation64** (11.0×) sets, where SiMBA++'s direct single-pass transform
+  avoids CoBRA's iterative reconstruction.
+- **obfuscatorx**: SiMBA++ now simplifies each case in ~2 ms, *faster than
+  CoBRA's ~5 ms* — a ~3000× speedup over SiMBA++'s own pre-optimization
+  baseline (59.7 s for the set).
+- CoBRA solves 4 more expressions (all in multivariate64: 998 vs 994); the two
+  solvers agree on every other dataset. Solve-rate parity and a large
+  speed lead.
+
+**Methodology.** `python comparison_bench.py` drives both front doors
+(`SiMBA++ --mba=<e> --bitcount=64` and `cobra-cli --mba <e> --bitwidth 64`)
+over `data/CoBRA/{univariate64,multivariate64,permutation64,obfuscatorx,msimba}.txt`
+and Saturn's `data/saturn*` cases, flattening whitespace, and checks each
+result for equivalence with the dataset ground truth (`mba_cli verify`,
+falling back to the solver-independent Python evaluator). "solved" = a
+non-empty result that differs from the input and verifies equivalent to the
+ground truth.
+
 # General Options
 
 ```
