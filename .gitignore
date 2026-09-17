@@ -60,3 +60,7 @@ external/
 llvm/e[0-9]_[0-9]vars.ll
 llvm/pldi_dataset_*.ll
 llvm/test_data.ll
+
+# SiMBA++ vs CoBRA comparison harness output (regenerated each run)
+comparison_results.jsonl
+bench_*.log
