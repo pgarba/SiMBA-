@@ -4,7 +4,9 @@
 
 #include <algorithm>
 #include <cassert>
+#include <chrono>
 #include <cmath>
+#include <cstdlib>
 #include <cstring>
 #include <functional>
 #include <unordered_set>
@@ -156,6 +158,15 @@ MultibitSimplifier::MultibitSimplifier(const std::string &expr, int bitCount,
   if (varCount == 0 || varCount > 15)
     return; // too many variables
   numCombinations = 1ull << varCount;
+
+  // Phase-1 budget (see header). Default 300ms; 0 disables.
+  budgetMs = 300.0;
+  if (const char *b = std::getenv("MBASIMBA_MSIMBA_BUDGET_MS")) {
+    try {
+      budgetMs = std::stod(b);
+    } catch (...) {
+    }
+  }
 }
 
 // ================================================================ result vector
@@ -167,6 +178,13 @@ void MultibitSimplifier::buildResultVector() {
   resultVector.resize(numCombinations * static_cast<size_t>(bitCount), 0);
 
   for (uint32_t bitIndex = 0; bitIndex < static_cast<uint32_t>(bitCount); bitIndex++) {
+    // Phase-1: cap the exponential vector build; abort and report via
+    // budgetExceeded (the caller falls back to the general route).
+    if (budgetMs > 0 &&
+        std::chrono::steady_clock::now() > budgetDeadline) {
+      budgetExceeded = true;
+      return;
+    }
     for (uint64_t comb = 0; comb < numCombinations; comb++) {
       // Set each variable's value.
       std::vector<uint64_t> values(varCount, 0);
@@ -252,6 +270,13 @@ bool MultibitSimplifier::isLinearResultVector() const {
   // Build the multi-bit vector for the linear expression.
   std::vector<uint64_t> otherVec(numCombinations * static_cast<size_t>(bitCount), 0);
   for (uint32_t bitIndex = 0; bitIndex < static_cast<uint32_t>(bitCount); bitIndex++) {
+    // Phase-1: this check rebuilds a full vector and evaluates a
+    // 2^varCount-term expression; it is only an optimization gate. If it
+    // runs past the budget, treat the expression as non-linear (safe: we
+    // just skip the 1-bit shortcut and use the multi-bit path).
+    if (budgetMs > 0 &&
+        std::chrono::steady_clock::now() > budgetDeadline)
+      return false;
     for (uint64_t comb = 0; comb < numCombinations; comb++) {
       std::vector<uint64_t> values(varCount, 0);
       for (int v = 0; v < varCount; v++) {
@@ -389,6 +414,12 @@ MultibitSimplifier::term(const std::shared_ptr<Node> &conj, uint64_t coeff,
 // ================================================================ simplify generic
 
 std::string MultibitSimplifier::simplifyGeneric() {
+  // Phase-1: if the earlier (isLinearResultVector) stage already spent the
+  // budget, do not start this reconstruction either.
+  if (budgetMs > 0 && std::chrono::steady_clock::now() > budgetDeadline) {
+    budgetExceeded = true;
+    return "";
+  }
   // Subtract the constant offset from each row (shifted by bit index).
   uint64_t constant = resultVector[0];
   for (uint32_t bitIndex = 0; bitIndex < static_cast<uint32_t>(bitCount); bitIndex++) {
@@ -945,7 +976,16 @@ std::string MultibitSimplifier::simplify(const std::string &expr, int bitCount,
   if (solver.varCount > 15)
     return "";
 
+  // Phase-1: arm the multi-bit budget (caps the dead end on mixed-product
+  // expressions that pass the loose isSemiLinear test).
+  if (solver.budgetMs > 0)
+    solver.budgetDeadline =
+        std::chrono::steady_clock::now() +
+        std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+            std::chrono::duration<double, std::milli>(solver.budgetMs));
   solver.buildResultVector();
+  if (solver.budgetExceeded)
+    return "";
 
   // Check if the expression is actually linear (uniform result vector).
   // Only delegate to the 1-bit SiMBA path if the expression has no bitwise
@@ -969,6 +1009,8 @@ std::string MultibitSimplifier::simplify(const std::string &expr, int bitCount,
   }
 
   // Multi-bit path: find the initial linear combination.
+  if (solver.budgetExceeded)
+    return "";
   std::string result = solver.simplifyGeneric();
 
   // Try the constant substitution + 1-bit SiMBA shortcut on the SOLUTION.
