@@ -5,10 +5,19 @@ Success criteria (per expression, per solver):
   solved   : non-empty result, different from input, fast-check EQUIVALENT
              to the ground truth (or to the input when no ground truth
              exists, plus strictly shorter than the input).
+  trivial  : ground truth is identical to the input (the expression is
+             already fully simplified, e.g. a single monomial `c*x0`); the
+             solver returned an equivalent form (a correct no-op or a
+             reformat). Counted separately so a correct no-op is not
+             mislabeled "unsolved" and a superficial reformat is not counted
+             as a real "solved".
   unsolved : empty result / "Skipped" / output identical to input /
              equivalent but not shorter (no ground truth case).
   wrong    : result fails the fast-check equivalence test.
   timeout  : per-expression wall-time budget exceeded.
+
+"correct" (no real failure) = solved + trivial; "real failure" = unsolved
++ wrong + timeout.
 
 Both solvers run as separate processes, wall-clock timed, same order,
 sequential. Per-case results are logged to comparison_results.jsonl.
@@ -99,7 +108,22 @@ def equivalent(a: str, b: str, bit: int):
 
 
 def judge(expr, res, gt, bit):
-    """Return (status, verify_ms) for a solver result."""
+    """Return (status, verify_ms) for a solver result.
+
+    status in {trivial, solved, unsolved, wrong} (see module docstring).
+    """
+    if gt is not None and norm(expr) == norm(gt):
+        # Already-minimal case: the only correct simplification is the
+        # identity. Classify separately (verify the result is still
+        # equivalent so a bad rewrite is not hidden as "trivial").
+        if res is None:
+            return "unsolved", 0.0
+        t0 = time.monotonic()
+        verdict, _ = equivalent(res, expr, bit)
+        vms = (time.monotonic() - t0) * 1000.0
+        if verdict == "neq":
+            return "wrong", vms
+        return "trivial", vms
     if res is None:
         return "unsolved", 0.0
     if norm(res) == norm(expr):
@@ -308,7 +332,7 @@ def load_saturn():
 
 
 def bench(name, cases, default_bit, solver, solver_name, logf):
-    stats = {"solved": 0, "unsolved": 0, "wrong": 0, "timeout": 0}
+    stats = {"solved": 0, "trivial": 0, "unsolved": 0, "wrong": 0, "timeout": 0}
     times = []
     for i, case in enumerate(cases):
         expr, gt = case[0], case[1]
@@ -328,8 +352,9 @@ def bench(name, cases, default_bit, solver, solver_name, logf):
         if (i + 1) % 200 == 0:
             logf.flush()
             print(f"  [{solver_name}] {name}: {i+1}/{len(cases)} "
-                  f"(solved={stats['solved']} unsolved={stats['unsolved']} "
-                  f"wrong={stats['wrong']} timeout={stats['timeout']})", flush=True)
+                  f"(solved={stats['solved']} trivial={stats['trivial']} "
+                  f"unsolved={stats['unsolved']} wrong={stats['wrong']} "
+                  f"timeout={stats['timeout']})", flush=True)
     times.sort()
     return {
         "n": len(cases), **stats,
@@ -364,24 +389,29 @@ def main():
     logf.close()
 
     print()
-    print("| Dataset | N | SiMBA solved | SiMBA unsolved | SiMBA wrong | CoBRA solved | CoBRA unsolved | CoBRA wrong | SiMBA total | SiMBA median | SiMBA max | CoBRA total | CoBRA median | CoBRA max |")
-    print("|---------|---|--------------|----------------|-------------|--------------|----------------|-------------|-------------|--------------|-----------|-------------|--------------|-----------|")
-    tot = {"n": 0, "ss": 0, "su": 0, "sw": 0, "cs": 0, "cu": 0, "cw": 0, "st": 0.0, "ct": 0.0}
+    print("| Dataset | N | SiMBA solved | SiMBA trivial | SiMBA unsolved | SiMBA wrong | CoBRA solved | CoBRA trivial | CoBRA unsolved | CoBRA wrong | SiMBA total | SiMBA median | SiMBA max | CoBRA total | CoBRA median | CoBRA max |")
+    print("|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|")
+    tot = {"n": 0, "ss": 0, "striv": 0, "su": 0, "sw": 0, "cs": 0, "ctriv": 0, "cu": 0, "cw": 0, "st": 0.0, "ct": 0.0}
     for name, (s, c) in table.items():
-        print(f"| {name} | {s['n']} | {s['solved']} | {s['unsolved']+s['timeout']} | {s['wrong']} | "
-              f"{c['solved']} | {c['unsolved']+c['timeout']} | {c['wrong']} | "
+        print(f"| {name} | {s['n']} | {s['solved']} | {s['trivial']} | {s['unsolved']+s['timeout']} | {s['wrong']} | "
+              f"{c['solved']} | {c['trivial']} | {c['unsolved']+c['timeout']} | {c['wrong']} | "
               f"{s['total_s']}s | {s['median_ms']}ms | {s['max_ms']}ms | "
               f"{c['total_s']}s | {c['median_ms']}ms | {c['max_ms']}ms |")
         tot["n"] += s["n"]
-        tot["ss"] += s["solved"]; tot["su"] += s["unsolved"] + s["timeout"]; tot["sw"] += s["wrong"]
-        tot["cs"] += c["solved"]; tot["cu"] += c["unsolved"] + c["timeout"]; tot["cw"] += c["wrong"]
+        tot["ss"] += s["solved"]; tot["striv"] += s["trivial"]; tot["su"] += s["unsolved"] + s["timeout"]; tot["sw"] += s["wrong"]
+        tot["cs"] += c["solved"]; tot["ctriv"] += c["trivial"]; tot["cu"] += c["unsolved"] + c["timeout"]; tot["cw"] += c["wrong"]
         tot["st"] += s["total_s"]; tot["ct"] += c["total_s"]
-    print(f"| **Total** | {tot['n']} | {tot['ss']} | {tot['su']} | {tot['sw']} | "
-          f"{tot['cs']} | {tot['cu']} | {tot['cw']} | "
+    print(f"| **Total** | {tot['n']} | {tot['ss']} | {tot['striv']} | {tot['su']} | {tot['sw']} | "
+          f"{tot['cs']} | {tot['ctriv']} | {tot['cu']} | {tot['cw']} | "
           f"{round(tot['st'],1)}s | - | - | {round(tot['ct'],1)}s | - | - |")
-    print(f"\nSolve rate: SiMBA {tot['ss']}/{tot['n']} = {100*tot['ss']/tot['n']:.1f}%   "
-          f"CoBRA {tot['cs']}/{tot['n']} = {100*tot['cs']/tot['n']:.1f}%")
-    print(f"Total time: SiMBA {tot['st']:.1f}s   CoBRA {tot['ct']:.1f}s")
+    sc = tot["ss"] + tot["striv"]
+    cc = tot["cs"] + tot["ctriv"]
+    print(f"\nCorrect (solved + trivial): SiMBA {sc}/{tot['n']} = {100*sc/tot['n']:.1f}%   "
+          f"CoBRA {cc}/{tot['n']} = {100*cc/tot['n']:.1f}%")
+    print(f"Real failures (unsolved + wrong + timeout): SiMBA {tot['su']+tot['sw']}   "
+          f"CoBRA {tot['cu']+tot['cw']}")
+    print(f"Total time: SiMBA {tot['st']:.1f}s   CoBRA {tot['ct']:.1f}s   "
+          f"(SiMBA {tot['ct']/max(tot['st'],1e-9):.1f}x faster)")
 
 
 if __name__ == "__main__":
