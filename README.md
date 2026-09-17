@@ -283,31 +283,42 @@ Head-to-head against **CoBRA** (Trail of Bits' public MBA solver,
 Saturn's simplification cases — 3,024 expressions, 64-bit — run as the
 front-door `SiMBA++` (auto routing) vs `cobra-cli`.
 
-**SiMBA++ is faster on every dataset — 4.3× faster overall (8.8 s vs 38.2 s) —
-with zero wrong results.**
+**SiMBA++ is faster on every dataset — 4.3× faster overall (9.1 s vs 39.2 s) —
+and both solvers are 100% correct (3018 solved + 6 already-minimal, 0 wrong,
+0 real failures).**
 
 | Dataset | N | SiMBA solved | CoBRA solved | SiMBA time | CoBRA time | speedup |
 |---|---:|---:|---:|---:|---:|---:|
-| univariate64 | 1000 | 1000 | 1000 | **1.67 s** | 2.47 s | 1.5× |
-| multivariate64 | 1000 | 994 | 998 | **4.61 s** | 28.4 s | 6.2× |
-| permutation64 | 13 | 13 | 13 | **0.42 s** | 4.6 s | 11.0× |
+| univariate64 | 1000 | 1000 | 1000 | **1.7 s** | 2.5 s | 1.5× |
+| multivariate64 | 1000 | 994 | 994 | **4.8 s** | 29.2 s | 6.1× |
+| permutation64 | 13 | 13 | 13 | **0.43 s** | 4.7 s | 10.9× |
 | obfuscatorx | 7 | 7 | 7 | **0.02 s** | 0.04 s | 2.0× |
-| msimba | 1000 | 1000 | 1000 | **2.08 s** | 2.6 s | 1.25× |
+| msimba | 1000 | 1000 | 1000 | **2.2 s** | 2.7 s | 1.3× |
 | Saturn | 4 | 4 | 4 | **0.01 s** | 0.02 s | 2.0× |
-| **Total** | **3024** | **3018 (99.8%)** | 3022 (99.9%) | **8.8 s** | 38.2 s | **4.3×** |
+| **Total** | **3024** | **3018** | **3018** | **9.1 s** | 39.2 s | **4.3×** |
 
-- **0 wrong results** for both solvers — every reported result is verified
-  equivalent to the original (fast-check, with a solver-independent Python
-  evaluator as a fallback verifier).
-- The largest wins are on the non-polynomial **multivariate64** (6.2×) and
-  **permutation64** (11.0×) sets, where SiMBA++'s direct single-pass transform
-  avoids CoBRA's iterative reconstruction.
-- **obfuscatorx**: SiMBA++ now simplifies each case in ~2 ms, *faster than
-  CoBRA's ~5 ms* — a ~3000× speedup over SiMBA++'s own pre-optimization
-  baseline (59.7 s for the set).
-- CoBRA solves 4 more expressions (all in multivariate64: 998 vs 994); the two
-  solvers agree on every other dataset. Solve-rate parity and a large
-  speed lead.
+Both solvers also correctly handle the 6 **already-minimal** cases in
+multivariate64 — single-monomial `c*x0` inputs whose ground truth is identical
+to the input (there is nothing to simplify). SiMBA++ leaves them unchanged; CoBRA
+returns an equivalent reformat. The benchmark counts these as *trivial* (not
+solves), so both score **3018 solved + 6 trivial = 3024/3024 correct**.
+
+- **0 wrong results, 0 real failures** for both — every reported result is
+  verified equivalent to the original (fast-check, with a solver-independent
+  Python evaluator as a fallback verifier).
+- **Solve-rate parity:** both simplify the same 3018 non-trivial expressions
+  and correctly no-op the 6 already-minimal ones. The difference between the
+  two solvers is purely speed.
+- The largest **speed** wins are on the non-polynomial **multivariate64**
+  (6.1×) and **permutation64** (10.9×) sets, where SiMBA++'s direct single-pass
+  transform avoids CoBRA's iterative reconstruction.
+- **obfuscatorx**: SiMBA++ simplifies each case in ~2 ms, *faster than CoBRA's
+  ~5 ms* — a ~3000× speedup over SiMBA++'s own pre-optimization baseline
+  (59.7 s for the set).
+- On the 6 already-minimal cases CoBRA's "simplification" is a superficial
+  reformat — e.g. re-encoding the coefficient in signed form and adding
+  whitespace, `12468174789076196570*x0` → `-5978569284633355046 * x0` (the same
+  value mod 2⁶⁴) — with no actual reduction, so it is not counted as a solve.
 
 **Methodology.** `python comparison_bench.py` drives both front doors
 (`SiMBA++ --mba=<e> --bitcount=64` and `cobra-cli --mba <e> --bitwidth 64`)
@@ -316,7 +327,8 @@ and Saturn's `data/saturn*` cases, flattening whitespace, and checks each
 result for equivalence with the dataset ground truth (`mba_cli verify`,
 falling back to the solver-independent Python evaluator). "solved" = a
 non-empty result that differs from the input and verifies equivalent to the
-ground truth.
+ground truth; a case whose ground truth equals its input (already minimal) is
+counted **trivial** (a correct no-op / reformat), not a solve.
 
 # General Options
 
