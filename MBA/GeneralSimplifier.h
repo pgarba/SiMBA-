@@ -35,6 +35,15 @@ class GeneralSimplifier {
   // port runs directly and instead enforces a simple wall-clock deadline.)
   std::string simplify(const std::string &expr, bool useZ3 = false);
 
+  // Phase 2: direct single-pass simplification (CoBRA-style). One bottom-up
+  // linear (AND-basis) decomposition pass — no refactor, no substitution, no
+  // per-node fixed-point loop — then a full-width fast-check. Produces a
+  // verified equivalent in O(tree_size * 2^vars) and stops. Returns the
+  // result if a (verified, different-from-input) simplification is produced,
+  // or "" to signal the caller should run the full iterative simplify().
+  // Never returns a wrong result: every returned string is fast-check verified.
+  std::string simplifyDirect(const std::string &expr);
+
  private:
   int bitCount;
   uint64_t modulus;
@@ -117,6 +126,10 @@ class GeneralSimplifier {
   // point, so it lets us skip the solver AND the changed-comparison entirely.
   std::unordered_map<std::string, std::string> linearSimplifyMemo;
   bool linMemoEnabled = false;
+  // Phase 2: when true (default), simplify() tries the direct single-pass
+  // first and returns it if verified, else falls back to the full iterative
+  // path. MBASIMBA_DIRECT=0 disables (full iterative path only).
+  bool directEnabled = true;
 
   std::shared_ptr<Node> getZero();
   std::string getVname(int i) const;
