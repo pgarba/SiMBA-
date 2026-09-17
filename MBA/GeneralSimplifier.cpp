@@ -30,6 +30,27 @@ GeneralSimplifier::GeneralSimplifier(int bitCount, bool modRed, int verifBitCoun
   // byte-identical on the full dataset); MBASIMBA_LINMEMO=0 disables it.
   const char *m = std::getenv("MBASIMBA_LINMEMO");
   linMemoEnabled = (m == nullptr || m[0] != '0');
+  // Phase-1 substitution budget (see header). Default: 150ms cumulative
+  // substitution time (the controlling knob), no subset cap. 0 disables
+  // (historical unbounded behavior). Measured on the 10-variable obfuscatorx
+  // cases the substitution size gain only materializes after ~20s of
+  // thrashing, so a tight time bound keeps the tail bounded with no quality
+  // loss on the datasets where substitution gives early wins (e.g.
+  // permutation64 is unaffected).
+  substBudgetMs = 150.0;
+  substBudgetSubsets = 0;
+  if (const char *b = std::getenv("MBASIMBA_SUBST_BUDGET_MS")) {
+    try {
+      substBudgetMs = std::stod(b);
+    } catch (...) {
+    }
+  }
+  if (const char *s = std::getenv("MBASIMBA_SUBST_MAX_SUBSETS")) {
+    try {
+      substBudgetSubsets = std::stol(s);
+    } catch (...) {
+    }
+  }
 }
 
 // A3: lazily-created zero constant node (equivalent to parse("0", ...)).
@@ -820,6 +841,13 @@ bool GeneralSimplifier::simplifyViaSubstitutionForIndex(const std::shared_ptr<No
 
 // Simplify the given node via substitution.
 bool GeneralSimplifier::simplifyViaSubstitution(const std::shared_ptr<Node> &node) {
+  // Phase-1: enforce the per-simplify() substitution budget. Whatever was
+  // applied before the budget was exhausted is a verified-equivalent rewrite;
+  // stopping early only means "less simplified", never a wrong result.
+  if ((substBudgetMs > 0 && substTimeSpentMs >= substBudgetMs) ||
+      (substBudgetSubsets > 0 && substSubsetsSpent >= substBudgetSubsets))
+    return false;
+
   std::vector<std::shared_ptr<Node>> nodes = collectNodesForSubstitution(node);
   if (nodes.empty())
     return false;
@@ -832,6 +860,8 @@ bool GeneralSimplifier::simplifyViaSubstitution(const std::shared_ptr<Node> &nod
 
   bool changed = false;
 
+  auto tCall = std::chrono::steady_clock::now();
+
   // The Python source iterates i in [1, 2**len(nodes)); cap the range at 2^20
   // (subsets involving higher indices are not tried; the popcount filters
   // below mirror the source).
@@ -840,14 +870,32 @@ bool GeneralSimplifier::simplifyViaSubstitution(const std::shared_ptr<Node> &nod
     if (std::chrono::steady_clock::now() > deadline)
       break;
 
+    // Phase-1: stop this call once the global substitution budget is spent,
+    // so a single node cannot blow far past it.
+    if (substBudgetMs > 0 &&
+        substTimeSpentMs +
+                std::chrono::duration<double, std::milli>(
+                    std::chrono::steady_clock::now() - tCall)
+                    .count() >=
+            substBudgetMs)
+      break;
+    if (substBudgetSubsets > 0 && substSubsetsSpent >= substBudgetSubsets)
+      break;
+
     if (nodes.size() > 5 && MBAOps::popcount(static_cast<uint64_t>(i)) > 3)
       continue;
     if (nodes.size() > 9 && MBAOps::popcount(static_cast<uint64_t>(i)) > 2)
       continue;
 
+    ++substSubsetsSpent;
     if (simplifyViaSubstitutionForIndex(node, nodes, i))
       changed = true;
   }
+
+  substTimeSpentMs +=
+      std::chrono::duration<double, std::milli>(
+          std::chrono::steady_clock::now() - tCall)
+          .count();
 
   return changed;
 }
@@ -937,6 +985,8 @@ std::string GeneralSimplifier::simplify(const std::string &expr, bool useZ3) {
     checkPerf().mlRecomputes = 0;
   }
   linearSimplifyMemo.clear();  // W1: fresh per expression (bounded memory)
+  substTimeSpentMs = 0;         // Phase-1: fresh substitution budget per call
+  substSubsetsSpent = 0;
 
   std::chrono::steady_clock::time_point tStart;
   if (perf.enabled)

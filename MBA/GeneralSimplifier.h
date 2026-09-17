@@ -45,6 +45,20 @@ class GeneralSimplifier {
   std::vector<std::string> variables;
   int maxIt = 100;
 
+  // Phase-1 substitution budget. The substitution search is a combinatorial
+  // per-node subset enumeration that dominates the cost on large nonlinear
+  // MBAs (e.g. 10-variable obfuscatorx: ~20s of ~22s, 500k+ subsets, with
+  // heavy oscillation) for a small net size gain. CoBRA instead stops after a
+  // single verified equivalent. We bound the substitution work per simplify()
+  // call so the tail cost is bounded; whatever is applied before the budget
+  // is exhausted is still a verified-equivalent rewrite. 0 disables the
+  // budget (unbounded, the historical behavior). Tunable via
+  // MBASIMBA_SUBST_BUDGET_MS (and MBASIMBA_SUBST_MAX_SUBSETS).
+  double substBudgetMs = 0;     // 0 = unbounded
+  long substBudgetSubsets = 0;  // 0 = unbounded
+  double substTimeSpentMs = 0;  // accumulated across the simplify() call
+  long substSubsetsSpent = 0;   // accumulated across the simplify() call
+
   // Wall-clock deadline mirroring the Python 30s timeout.
   std::chrono::steady_clock::time_point deadline;
 

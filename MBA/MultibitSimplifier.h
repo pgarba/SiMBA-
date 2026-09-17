@@ -13,6 +13,7 @@
 //   6. Verify with fast-check.
 #pragma once
 
+#include <chrono>
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -90,6 +91,19 @@ private:
 
   bool modRed;
   bool hasBitwiseOps_ = false;
+
+  // Phase-1 wall-clock budget for the multi-bit path. The cost is
+  // exponential in the variable count (2^varCount * bitCount AST evaluations,
+  // plus the isLinearResultVector check which rebuilds a second full vector
+  // and evaluates a potentially 2^varCount-term expression). Expressions that
+  // pass the loose isSemiLinear test (any nontrivial constant inside a
+  // bitwise op) but contain mixed products (e.g. the 10-variable
+  // obfuscatorx cases) are a dead end: they burn several seconds before
+  // returning "". The budget caps that dead end; genuine semi-linear cases
+  // (the msimba dataset, ~ms each) finish far below it. 0 disables.
+  double budgetMs = 0;
+  std::chrono::steady_clock::time_point budgetDeadline{};
+  bool budgetExceeded = false;
 
   // Subtract a coefficient from the result vector.
   void subtractCoeff(uint64_t coeff, int firstStart, int width,
