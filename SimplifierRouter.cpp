@@ -417,9 +417,15 @@ bool isGatedOut(const std::string &expr, int bitCount) {
   return false;
 }
 
-// The general (LSiMBA::MBA) simplifier is exponential in the number of
-// bit-sliced variables, so it is only feasible at small widths (<=16-bit).
-// Above that it is skipped and the caller falls back to the native path.
+// The general (LSiMBA::MBA) simplifier is slow on many large expressions
+// (bounded by the per-call timeout, default 30 s). As a PRIMARY route it is
+// only feasible at small widths (<=16-bit): above that, most nonlinear
+// expressions that the native path solves in milliseconds would be sent to
+// the slow general route first. At large widths the general route is still
+// available as an AUTO-FALLBACK (TryAutoFallback): it runs only after the
+// native path produced no result, so the extra cost is paid only on the
+// cases that would otherwise be reported unsolved. Results are fast-check
+// verified before being reported (see verifyNonNativeResult).
 bool generalFeasibleAt(int bitCount) { return bitCount <= 16; }
 
 // Run a single named non-native route and return its result string (empty if
@@ -477,8 +483,9 @@ bool TryAutoFallback(const std::string &MBA, std::string &SimpMBA,
   for (const char *r : order) {
     if (std::string(r) == skip)
       continue;
-    if (std::string(r) == "general" && !generalFeasibleAt(bitCount))
-      continue;
+    // The auto-fallback runs only after the primary/native routes failed,
+    // so the general route is tried at every width here (bounded by the
+    // per-call timeout and the fast-check verification below).
     std::string res = runNamedRoute(MBA, bitCount, useZ3, r);
     if (res.empty())
       continue;

@@ -146,7 +146,7 @@ llvm::cl::opt<std::string> UseExternalSimplifier(
 llvm::cl::opt<int> MaxVarCount(
     "max-var-count", cl::Optional,
     cl::desc("Max variable count for simplification"),
-    cl::value_desc("max-var-count"), cl::init(6), cl::cat(SiMBAOpt));
+    cl::value_desc("max-var-count"), cl::init(10), cl::cat(SiMBAOpt));
 
 llvm::cl::opt<int> MinASTSize("min-ast-size", cl::Optional,
                               cl::desc("Minimum AST size for simplification"),
