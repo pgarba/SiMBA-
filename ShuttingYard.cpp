@@ -1137,7 +1137,14 @@ z3::expr getZ3ExprFromString(z3::context &Z3Ctx, std::string &expr,
             } break;
             case '#': {
               // power operator
-              z3::sort Sort(Z3Ctx);
+              // NOTE (local patch): upstream (12a7a0f) passes a default-
+              // constructed (empty) sort to ubv_to_fpa here, which segfaults
+              // inside Z3_mk_fpa_to_fp_unsigned. Use a real FPA sort that can
+              // hold BitWidth-bit values: fpa64 for <= 64 bits, otherwise a
+              // custom FPA with a full-mantissa width.
+              auto Sort = (BitWidth <= 64)
+                              ? Z3Ctx.fpa_sort(11, 52)
+                              : Z3Ctx.fpa_sort(16, (unsigned)BitWidth + 1);
               auto PowExpr = z3::pw(z3::ubv_to_fpa(lhsAP, Sort),
                                     z3::ubv_to_fpa(rhsAP, Sort));
               stackAP.push_back(z3::fpa_to_ubv(PowExpr, BitWidth));
