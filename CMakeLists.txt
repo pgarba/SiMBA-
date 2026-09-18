@@ -72,8 +72,8 @@ endif()
 #
 # Confirmed NOT sufficient on its own for the specific crash this was
 # investigated alongside (a segfault inside Z3_inc_ref on an otherwise
-# completely ordinary bv_const call, on SiMBA-heavy targets like
-# denuvomaximum): that crash reproduced identically with exceptions
+# completely ordinary bv_const call, on a large VM-protected test binary):
+# that crash reproduced identically with exceptions
 # enabled, because Z3 itself never reports an error for the call in
 # question (check_error sees Z3_OK) - it's a genuine hardware exception,
 # not a catchable C++ one. See doProveWithZ3/proveWithZ3Guarded in
@@ -231,7 +231,7 @@ if(WIN32)
 endif()
 
 # SiMBA++ static
-add_library(LSiMBA++ STATIC  "Z3Prover.cpp" "Z3Prover.h" "LLVMParser.cpp" "LLVMParser.h" "Simplifier.h" "MBAChecker.cpp" "MBAChecker.h" "Simplifier.cpp" "ShuttingYard.cpp" "Modulo.cpp" "Modulo.h")
+add_library(LSiMBA++ STATIC  "Z3Prover.cpp" "Z3Prover.h" "LLVMParser.cpp" "LLVMParser.h" "Simplifier.h" "MBAChecker.cpp" "MBAChecker.h" "Simplifier.cpp" "ShuttingYard.cpp" "Modulo.cpp" "Modulo.h" "SimplifierRouter.cpp" "SimplifierRouter.h" ${MBA_SOURCES})
 target_compile_definitions(LSiMBA++ PRIVATE MBA_HAS_Z3)
 
 # No rtti
