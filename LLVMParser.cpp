@@ -107,7 +107,8 @@ z3::context *Z3CtxGlobal = nullptr;
 //
 // Recreating the context per LLVMParser was tried, as a supposed hygiene
 // improvement, while chasing a reproducible crash on SiMBA-heavy targets
-// (denuvomaximum): an access violation deep inside libz3, first in
+// (a large VM-protected test binary): an access violation deep inside libz3,
+// first in
 // Z3_inc_ref and ultimately in Z3_del_context. It was in fact the *cause*
 // of that crash. prove() (Z3Prover.cpp) caches one solver for the whole
 // process, built from the context of the first conjecture it sees;
@@ -967,6 +968,18 @@ bool LLVMParser::verify(int ASTSize, llvm::SmallVectorImpl<BFSEntry> &AST,
   // The number of operations in the new expressions
   int Operations = 0;
 
+  // Local patch (residual MBAs in VM-protected test binaries): count ALL
+  // instructions of the original AST, casts included. Casts are real
+  // instructions that are erased together with the candidate, while a
+  // replacement that re-materializes a cast (e.g. the sext emulation
+  // '(a&127)-(a&128)' or a 'sext[8:64](a)' node) pays for it in `Operations`.
+  // Counting casts as zero on the original side made correct
+  // simplifications of candidates containing sext/zext trip the no-improve
+  // gate (ASTSize <= Operations) and leave the MBA in place (e.g. the digit
+  // accumulator in a VM-protected test binary).
+  int FullASTSize = 0;
+  for (auto &E : AST) FullASTSize++;
+
   llvm::SmallVector<APInt, 16> par;
   for (int i = 0; i < NUM_TEST_CASES; i++) {
     for (int j = 0; j < VNumber; j++) {
@@ -1004,10 +1017,10 @@ bool LLVMParser::verify(int ASTSize, llvm::SmallVectorImpl<BFSEntry> &AST,
     auto AP_R1 = eval(Expr1_replVar, par, BitWidth, &Operations);
 
     // Check if replacement is cheaper than original expression
-    if (ASTSize <= Operations) {
+    if (FullASTSize <= Operations) {
       if (this->Debug)
-        outs() << "[*] [VERIFY] no-improve '" << SimpExpr << "' AST=" << ASTSize
-               << " Ops=" << Operations << "\n";
+        outs() << "[*] [VERIFY] no-improve '" << SimpExpr << "' AST="
+               << FullASTSize << " Ops=" << Operations << "\n";
       return false;
     }
 
@@ -1713,6 +1726,57 @@ bool sameExpr(const MExprPtr &a, const MExprPtr &b) {
 
 // If E is "base * 2" or "base << 1" (either operand order for mul), return
 // base; otherwise nullptr.
+// If E is "zext(T, x & c)" (either operand order for the &), return the
+// target width T, the base x and the mask constant c.
+bool matchZextAnd(const MExprPtr &E, std::string &T, MExprPtr &x,
+                  std::string &c) {
+  if (!E || E->K != MExpr::Cast || E->Op != "zext") return false;
+  if (!E->L || E->L->K != MExpr::Bin || E->L->Op != "&") return false;
+  auto l = E->L->L, r = E->L->R;
+  if (l && l->K == MExpr::Const) {
+    c = l->S;
+    x = r;
+  } else if (r && r->K == MExpr::Const) {
+    c = r->S;
+    x = l;
+  } else {
+    return false;
+  }
+  T = E->S;
+  return true;
+}
+
+// If m is a sign-split mask, return the source width W it pins down:
+//   low  mask  2^(W-1) - 1    (e.g. 127 for W=8)
+//   high mask -(2^(W-1))      (e.g. -128 for W=8)
+// otherwise 0.
+int maskWidth(const std::string &m) {
+  bool neg = !m.empty() && m[0] == '-';
+  long v;
+  try {
+    v = std::stol(neg ? m.substr(1) : m);
+  } catch (...) {
+    return 0;
+  }
+  if (neg) v = -v;
+  if (v > 0 && (v & (v + 1)) == 0) {
+    // v = 2^k - 1  ->  W = k + 1
+    long k = 0;
+    while ((1L << k) <= v) k++;
+    return (int)(k + 1);
+  }
+  if (v < 0) {
+    long p = -v;
+    // p = 2^k  (i.e. v = -(2^k))  ->  W = k + 1.
+    if (p > 0 && (p & (p - 1)) == 0) {
+      long k = 0;
+      while ((1L << k) < p) k++;
+      return (int)(k + 1);
+    }
+  }
+  return 0;
+}
+
 MExprPtr baseOfTimes2(const MExprPtr &E) {
   if (!E || E->K != MExpr::Bin) return nullptr;
   if (E->Op == "*") {
@@ -1776,6 +1840,46 @@ MExprPtr mIdentities(const MExprPtr &E) {
     return E;
   }
   if (E->K != MExpr::Bin) return E;
+
+  // Sign-extension emulation built with zext+and (the form SiMBA's own
+  // renderer emits for narrow variables, and that LLVM keeps after it):
+  //     zext(T, x & (2^(W-1)-1)) - zext(T, x & -(2^(W-1)))  ==  sext(T, x)
+  // with an optional constant attached to the low side:
+  //     (zext(T, x & low) + c) - zext(T, x & high)  ==  sext(T, x) + c
+  // Folding this to a materializable sext node keeps the replacement
+  // value-correct for full-width inputs (see mTruncNarrow) and small enough
+  // to pass the net-reduction gate; without it the '2*(x&y)+(x^y) == x+y'
+  // identity below cannot fire because the d-side stays a 4-op emulation.
+  if (E->Op == "-") {
+    MExprPtr Lz = E->L, cVal = nullptr;
+    if (Lz && Lz->K == MExpr::Bin && Lz->Op == "+") {
+      if (Lz->R && Lz->R->K == MExpr::Const) {
+        cVal = Lz->R;
+        Lz = Lz->L;
+      } else if (Lz->L && Lz->L->K == MExpr::Const) {
+        cVal = Lz->L;
+        Lz = Lz->R;
+      }
+    }
+    std::string T1, T2, c1, c2;
+    MExprPtr x1, x2;
+    if (matchZextAnd(Lz, T1, x1, c1) && matchZextAnd(E->R, T2, x2, c2) &&
+        T1 == T2 && sameExpr(x1, x2)) {
+      int W1 = maskWidth(c1), W2 = maskWidth(c2);
+      if (W1 > 0 && W1 == W2) {
+        MExprPtr S = mCast("sext", x1, T1);
+        return cVal ? mBin("+", S, cVal) : S;
+      }
+    }
+    // Commuted subtraction: zext(T, x & high) - zext(T, x & low) == -sext
+    // (rare; the +c variant of it is not worth the extra code path).
+    if (matchZextAnd(E->L, T1, x1, c1) && matchZextAnd(E->R, T2, x2, c2) &&
+        T1 == T2 && sameExpr(x1, x2)) {
+      int W1 = maskWidth(c1), W2 = maskWidth(c2);
+      if (W1 > 0 && W1 == W2)
+        return mBin("-", mConst("0"), mCast("sext", x1, T1));
+    }
+  }
 
   // (x + y) - 2*(x & y)  ==  x ^ y
   if (E->Op == "-" && E->L && E->L->K == MExpr::Bin && E->L->Op == "+") {
@@ -1892,6 +1996,299 @@ MExprPtr mTruncNarrow(const MExprPtr &E,
   if (E->K == MExpr::Cast)
     return mCast(E->Op, L, E->S, E->SW);
   return E;
+}
+// Bound (lo, hi) of a materializable cast node's value, given the opaque
+// variable's true width. Returns false if the cast's operand is not a Var of
+// known width (or the width is too large to bound with 64-bit math).
+bool castBounds(const MExprPtr &C, const std::map<std::string, int> &VarWidths,
+                long &lo, long &hi) {
+  if (!C || C->K != MExpr::Cast || (C->Op != "sext" && C->Op != "zext"))
+    return false;
+  if (!C->L || C->L->K != MExpr::Var) return false;
+  auto It = VarWidths.find(C->L->S);
+  if (It == VarWidths.end() || It->second <= 0 || It->second > 60)
+    return false;
+  int W = It->second;
+  if (C->Op == "zext") {
+    lo = 0;
+    hi = (1L << W) - 1;
+  } else {
+    lo = -(1L << (W - 1));
+    hi = (1L << (W - 1)) - 1;
+  }
+  return true;
+}
+
+// One bottom-up round of width-aware ashr/shl folds. These are sext-emulation
+// chains the width-agnostic mIdentities cannot touch: their soundness needs
+// the opaque variable's true width.
+//
+//  (A) ashr(shl(zext[T](v), S), A)  ==  shl(sext[T](v), S - A)   (0 <= A <= S)
+//      when v is an opaque variable of width exactly T - S. The shl places v's
+//      top bit at the top of the word, so the ashr sign-extends it. Sound for
+//      full-width inputs because the shl itself discards the high bits.
+//  (B) ashr(shl(cast, K) + C, K)  ==  cast + C / 2^K
+//      when C is divisible by 2^K and the scaled sum cannot overflow 64 bits
+//      (checked against the cast's bounded range). Pure 64-bit identity under
+//      those bounds.
+// If E is an ashr node matching (A) or (B) above, return the replacement;
+// otherwise nullptr.
+MExprPtr tryAshrFolds(const MExprPtr &E,
+                      const std::map<std::string, int> &VarWidths) {
+  if (!E || E->K != MExpr::Bin || E->Op != "a" || !E->R ||
+      E->R->K != MExpr::Const)
+    return nullptr;
+  long A = 0;
+  try {
+    A = std::stol(E->R->S);
+  } catch (...) {
+    return nullptr;
+  }
+  if (A >= 0) {
+      // (A) a(<(zext[T](v), S), A)
+      if (E->L && E->L->K == MExpr::Bin && E->L->Op == "<" &&
+          E->L->R && E->L->R->K == MExpr::Const) {
+        long S = 0;
+        try {
+          S = std::stol(E->L->R->S);
+        } catch (...) {
+          S = -1;
+        }
+        auto Z = E->L->L;
+        if (Z && Z->K == MExpr::Cast && Z->Op == "zext" &&
+            Z->L && Z->L->K == MExpr::Var && S >= A && S > 0) {
+          long T = 0;
+          try {
+            T = std::stol(Z->S);
+          } catch (...) {
+            T = -1;
+          }
+          auto WIt = VarWidths.find(Z->L->S);
+          if (T > 0 && WIt != VarWidths.end() &&
+              (long)WIt->second == (long)(T - S)) {
+            if (S == A) return mCast("sext", Z->L, Z->S);
+            return mBin("<", mCast("sext", Z->L, Z->S),
+                        mConst(std::to_string(S - A)));
+          }
+        }
+      }
+      // (B) a(<(cast, K) + C, K), either operand order of the +
+      if (E->L && E->L->K == MExpr::Bin && E->L->Op == "+" && A > 0) {
+        for (int sw = 0; sw < 2; ++sw) {
+          MExprPtr Side = (sw == 0) ? E->L->L : E->L->R;
+          MExprPtr Cst = (sw == 0) ? E->L->R : E->L->L;
+          if (!Side || !Cst || Cst->K != MExpr::Const) continue;
+          if (Side->K != MExpr::Bin || Side->Op != "<" || !Side->R ||
+              Side->R->K != MExpr::Const)
+            continue;
+          long K = 0;
+          try {
+            K = std::stol(Side->R->S);
+          } catch (...) {
+            continue;
+          }
+          if (K != A || K <= 0 || K > 62) continue;
+          long C = 0;
+          try {
+            C = std::stol(Cst->S);
+          } catch (...) {
+            continue;
+          }
+          if ((C & ((1L << K) - 1)) != 0) continue;  // C must be a multiple of 2^K
+          auto Cast = Side->L;
+          long lo = 0, hi = 0;
+          if (!castBounds(Cast, VarWidths, lo, hi)) continue;
+          // Overflow check on the scaled sum (mathematical, signed): the
+          // identity holds only when cast*2^K + C does not wrap 64 bits.
+          __int128 Lim = (__int128)1 << 64;
+          if ((__int128)lo << K <= -Lim - C || ((__int128)hi << K) >= Lim - C)
+            continue;
+          return mBin("+", Cast, mConst(std::to_string(C / (1L << K))));
+        }
+      }
+    }
+  return nullptr;
+}
+
+// One bottom-up round: fold the children first (so a nested ashr chain is
+// reduced inside-out), rebuild the node, then try (A)/(B) on the rebuilt
+// node — (B) consumes the shl(cast) that (A) produces one level down.
+MExprPtr mFoldAshrShlOnce(const MExprPtr &E,
+                          const std::map<std::string, int> &VarWidths) {
+  if (!E) return E;
+  if (E->K == MExpr::Var || E->K == MExpr::Const) return E;
+  MExprPtr L = mFoldAshrShlOnce(E->L, VarWidths);
+  MExprPtr R = E->R ? mFoldAshrShlOnce(E->R, VarWidths) : nullptr;
+  MExprPtr N;
+  if (E->K == MExpr::Not)
+    N = mNot(L);
+  else if (E->K == MExpr::Cast)
+    N = mCast(E->Op, L, E->S, E->SW);
+  else
+    N = mBin(E->Op, L, R);
+  if (auto F = tryAshrFolds(N, VarWidths)) return F;
+  return N;
+}
+
+// If E is an obfuscated bit-split/complement accumulator:
+//     sub( or( and(sext(v), -2^W),  zext(and(v, ~M)) ),  zext(xor(and(v, M), M)) )
+// == sub(sext(v), M)
+// where v is an opaque variable of width exactly W (pinned by the -2^W sign
+// mask) and ~M is M's W-bit complement rendered as a signed constant.
+// Sound for full-width inputs (every sub-step evaluates at its real type
+// width): sext(v) = (sext(v)&~2^W) + zext(v);  zext(v) = zext(v&M) +
+// zext(v&~M);  zext((v&M)^M) = M - zext(v&M); and the or is a + because the
+// sign part and the low part occupy disjoint bits.
+MExprPtr tryBitSplitAccFold(const MExprPtr &E,
+                            const std::map<std::string, int> &VarWidths) {
+  if (!E || E->K != MExpr::Bin || E->Op != "-") return nullptr;
+  MExprPtr L = E->L, R = E->R;
+  if (!L || !R) return nullptr;
+
+  // R must be zext(xor(and(v, M), M)).
+  if (R->K != MExpr::Cast || R->Op != "zext" || !R->L) return nullptr;
+  MExprPtr Xor = R->L;
+  if (Xor->K != MExpr::Bin || Xor->Op != "^" || !Xor->L || !Xor->R)
+    return nullptr;
+  auto pickAndConst = [](const MExprPtr &A, const MExprPtr &B, MExprPtr &And,
+                         MExprPtr &C) {
+    if (A && A->K == MExpr::Bin && A->Op == "&" && B && B->K == MExpr::Const) {
+      And = A;
+      C = B;
+      return true;
+    }
+    if (B && B->K == MExpr::Bin && B->Op == "&" && A && A->K == MExpr::Const) {
+      And = B;
+      C = A;
+      return true;
+    }
+    return false;
+  };
+  MExprPtr AndM, M1;
+  if (!pickAndConst(Xor->L, Xor->R, AndM, M1)) return nullptr;
+  if (!AndM->L || !AndM->R) return nullptr;
+  MExprPtr v, M2;
+  if (AndM->L->K == MExpr::Var && AndM->R->K == MExpr::Const) {
+    v = AndM->L;
+    M2 = AndM->R;
+  } else if (AndM->R->K == MExpr::Var && AndM->L->K == MExpr::Const) {
+    v = AndM->R;
+    M2 = AndM->L;
+  } else {
+    return nullptr;
+  }
+  long M = 0, Mc = 0;
+  try {
+    M = std::stol(M1->S);
+    Mc = std::stol(M2->S);
+  } catch (...) {
+    return nullptr;
+  }
+  if (M != Mc) return nullptr;
+
+  // L must be or( and(sext(v), S),  zext(and(v, X)) ).
+  if (L->K != MExpr::Bin || L->Op != "|" || !L->L || !L->R) return nullptr;
+  MExprPtr SignPart, LowPart;
+  if (L->L->K == MExpr::Bin && L->L->Op == "&" && L->R->K == MExpr::Cast &&
+      L->R->Op == "zext") {
+    SignPart = L->L;
+    LowPart = L->R;
+  } else if (L->R->K == MExpr::Bin && L->R->Op == "&" &&
+             L->L->K == MExpr::Cast && L->L->Op == "zext") {
+    SignPart = L->R;
+    LowPart = L->L;
+  } else {
+    return nullptr;
+  }
+  if (!SignPart->L || !SignPart->R) return nullptr;
+  MExprPtr Sext, Scon;
+  if (SignPart->L->K == MExpr::Cast && SignPart->L->Op == "sext" &&
+      SignPart->R->K == MExpr::Const) {
+    Sext = SignPart->L;
+    Scon = SignPart->R;
+  } else if (SignPart->R->K == MExpr::Cast && SignPart->R->Op == "sext" &&
+             SignPart->L->K == MExpr::Const) {
+    Sext = SignPart->R;
+    Scon = SignPart->L;
+  } else {
+    return nullptr;
+  }
+  if (!Sext->L || !sameExpr(Sext->L, v)) return nullptr;
+  long S = 0;
+  try {
+    S = std::stol(Scon->S);
+  } catch (...) {
+    return nullptr;
+  }
+  if (S >= 0) return nullptr;
+  long TwoW = -S;  // must be 2^W
+  if (TwoW <= 1 || (TwoW & (TwoW - 1)) != 0) return nullptr;
+  long W = 0;
+  while ((1L << (W + 1)) <= TwoW) W++;
+
+  // LowPart must be zext(and(v, X)) with X = ~M (W-bit complement).
+  if (!LowPart->L || LowPart->L->K != MExpr::Bin || LowPart->L->Op != "&" ||
+      !LowPart->L->L || !LowPart->L->R)
+    return nullptr;
+  MExprPtr lv, Xcon;
+  if (LowPart->L->L->K == MExpr::Var && LowPart->L->R->K == MExpr::Const) {
+    lv = LowPart->L->L;
+    Xcon = LowPart->L->R;
+  } else if (LowPart->L->R->K == MExpr::Var &&
+             LowPart->L->L->K == MExpr::Const) {
+    lv = LowPart->L->R;
+    Xcon = LowPart->L->L;
+  } else {
+    return nullptr;
+  }
+  if (!sameExpr(lv, v)) return nullptr;
+  long X = 0;
+  try {
+    X = std::stol(Xcon->S);
+  } catch (...) {
+    return nullptr;
+  }
+  auto modp = [](long a, long p) { long r = a % p; return r < 0 ? r + p : r; };
+  if (modp(X, TwoW) != (TwoW - 1 - modp(M, TwoW))) return nullptr;
+
+  // v must be an opaque variable of width exactly W.
+  auto WIt = VarWidths.find(v->S);
+  if (WIt == VarWidths.end() || (long)WIt->second != W) return nullptr;
+
+  return mBin("-", Sext, mConst(std::to_string(M)));
+}
+
+// One bottom-up round of the bit-split accumulator fold.
+MExprPtr mFoldBitSplitOnce(const MExprPtr &E,
+                           const std::map<std::string, int> &VarWidths) {
+  if (!E) return E;
+  if (E->K == MExpr::Var || E->K == MExpr::Const) return E;
+  MExprPtr L = mFoldBitSplitOnce(E->L, VarWidths);
+  MExprPtr R = E->R ? mFoldBitSplitOnce(E->R, VarWidths) : nullptr;
+  MExprPtr N;
+  if (E->K == MExpr::Not)
+    N = mNot(L);
+  else if (E->K == MExpr::Cast)
+    N = mCast(E->Op, L, E->S, E->SW);
+  else
+    N = mBin(E->Op, L, R);
+  if (auto F = tryBitSplitAccFold(N, VarWidths)) return F;
+  return N;
+}
+
+// Fixed-point driver for the width-aware folds (ashr/shl chains and the
+// bit-split accumulator). One fold can expose another, so iterate to
+// stability (bounded; the trees are small).
+MExprPtr mFoldAshrShl(const MExprPtr &E,
+                      const std::map<std::string, int> &VarWidths) {
+  MExprPtr cur = E;
+  for (int i = 0; i < 16; ++i) {
+    MExprPtr Next = mFoldAshrShlOnce(cur, VarWidths);
+    Next = mFoldBitSplitOnce(Next, VarWidths);
+    if (mStr(Next) == mStr(cur)) return Next;
+    cur = Next;
+  }
+  return cur;
 }
 }  // namespace
 
@@ -2025,6 +2422,11 @@ bool LLVMParser::tryMBAPatterns(LSiMBA::MBACandidate &Cand, int BitWidth) {
   if (Orig.count(Cand.AST.front().I) == 0) return false;
   MExprPtr OrigRoot = Orig[Cand.AST.front().I];
   MExprPtr SimpRoot = Simp[Cand.AST.front().I];
+  // Width-aware ashr/shl sext-emulation folds (see mFoldAshrShl), then re-run
+  // the identities so the width-agnostic rules (notably 2*(x&y)+(x^y) == x+y)
+  // can fire on the newly exposed shape.
+  SimpRoot = mFoldAshrShl(SimpRoot, VarWidths);
+  SimpRoot = mSimplify(SimpRoot);
   // Rewrite any narrow opaque variable's surviving sext/zext into a real,
   // materializable cast (see mTruncNarrow) so the replacement matches the
   // original AST for all full-width inputs. The cast handler in
@@ -2333,14 +2735,24 @@ bool LLVMParser::findReplacements(llvm::DominatorTree *DT,
       }
     }
 
-    // Verify is replacement is valid
-    if (!AlreadyProved && !SkipVerify) {
+    // Verify replacement is valid. NOTE (local patch, mba-residuals.md):
+    // run this even on MBACache hits (AlreadyProved). The cache records
+    // that this candidate SHAPE once had a valid replacement, but the
+    // simplifier above still runs and may produce a DIFFERENT replacement
+    // now (e.g. the value-wrong narrow-variable sext fit). Skipping the
+    // value check on cache hits let that wrong replacement be applied
+    // unchecked, turning an exact sext-based loop accumulator into a
+    // zext-based one. The quick test below is cheap (a few hundred evals).
+    if (!SkipVerify) {
       Cand.isValid = this->verify(Cand.ASTSize, Cand.AST, Cand.Replacement,
                                   Cand.Variables, BitWidth);
     }
 
-    // Match some patterns
-    if (!AlreadyProved && !Cand.isValid) {
+    // Match some patterns. NOTE (local patch): also run these on MBACache
+    // hits when the fresh replacement failed verify (see above); without
+    // this, a shape that was once simplified via the pattern path would be
+    // stuck forever on a value-wrong fresh fit.
+    if (!Cand.isValid) {
       bool IsRepl = replaceWithKnownPatterns(Cand, ResultVector);
       if (IsRepl) {
         Cand.isValid = this->verify(Cand.ASTSize, Cand.AST, Cand.Replacement,
@@ -4070,9 +4482,10 @@ z3::expr LLVMParser::getOptimizedZ3Expression(
   // ref-counted copy, so this is safe regardless of whether it aliases one
   // of these. A real leak either way - one node per verify() attempt,
   // against a single shared, process-lifetime Z3 context (Z3CtxGlobal) -
-  // even though it wasn't the cause of the specific denuvomaximum crash
-  // this was investigated alongside (confirmed by testing: the crash
-  // still reproduced identically with this fix alone applied).
+  // even though it wasn't the cause of the specific crash on the large
+  // VM-protected test binary this was investigated alongside (confirmed by
+  // testing: the crash still reproduced identically with this fix alone
+  // applied).
   for (auto &Entry : Z3VarMap) {
     delete Entry.second;
   }
