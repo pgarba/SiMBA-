@@ -47,8 +47,12 @@ llvm::cl::opt<std::string> SimplifierChoice(
 llvm::cl::opt<bool> AutoFallback(
     "auto-fallback", llvm::cl::Optional,
     llvm::cl::desc("With --simplifier=auto, fall back to the other routes if "
-                  "the classified one produces no result (Default true)"),
-    llvm::cl::value_desc("auto-fallback"), llvm::cl::init(true),
+                  "the classified one produces no result (Default false; "
+                  "locally disabled: the general/msimba routes call "
+                  "MBA::proveEquivalent, whose Z3 power handling (z3::pw on "
+                  "FPA sorts) is incompatible with the bundled Z3 5.0.0 and "
+                  "aborts Saturn"),
+    llvm::cl::value_desc("auto-fallback"), llvm::cl::init(false),
     llvm::cl::cat(SiMBAOpt));
 
 namespace LSiMBA {
