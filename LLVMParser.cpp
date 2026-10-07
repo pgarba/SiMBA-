@@ -576,8 +576,28 @@ int LLVMParser::extractAndSimplify() {
 
     // Apply replacements and optimize
     bool Replaced = false;
+    // Every instruction erased so far, across all candidates: a later
+    // candidate whose root, AST or variables include one of them refers to
+    // freed memory (a sub-AST candidate from walkSubAST can overlap a full
+    // candidate applied before it), so it is skipped. Pointers are only
+    // compared, never dereferenced.
+    llvm::DenseSet<llvm::Instruction *> ErasedAll;
+    auto refersToErased = [&](const MBACandidate &C) {
+      if (ErasedAll.count(C.Candidate)) return true;
+      for (auto &E : C.AST)
+        if (ErasedAll.count(E.I)) return true;
+      for (auto *V : C.Variables)
+        if (auto *VI = dyn_cast<Instruction>(V); VI && ErasedAll.count(VI))
+          return true;
+      return false;
+    };
     for (int i = 0; i < Candidates.size(); i++) {
       if (Candidates[i].isValid == false) continue;
+      if (refersToErased(Candidates[i])) {
+        if (this->Debug)
+          outs() << "[!] Skipping a candidate that overlaps an applied one\n";
+        continue;
+      }
 
       if (this->Debug) {
         printAST(Candidates[i].AST);
@@ -623,6 +643,7 @@ int LLVMParser::extractAndSimplify() {
             }
             I->eraseFromParent();
             ErasedSet.insert(I);
+            ErasedAll.insert(I);
             Erased = true;
           }
         }
@@ -2794,12 +2815,57 @@ bool LLVMParser::findReplacements(llvm::DominatorTree *DT,
                << "\n";
       }
 
-      // Fill vector with replaced instructions to not solve them again
-      for (auto &E : Cand.AST) {
-        // if (E.I->getType()->isIntegerTy()) {
-        ReplacedInstructions.insert(E.I);
-        //}
+      // Mark the instructions this replacement will actually remove, so they
+      // are not solved again: the root, and every AST node whose users are
+      // all marked. A node shared with code outside the tree survives the
+      // replacement (e.g. a sum that is both a result and the input of the
+      // flag computation that is this tree) -- marking it too would block the
+      // smaller candidate rooted at it, and the program would end up with
+      // the simplified tree *and* the old obfuscated chain.
+      llvm::SmallPtrSet<llvm::Instruction *, 16> Owned;
+      Owned.insert(Cand.Candidate);
+      for (bool Grew = true; Grew;) {
+        Grew = false;
+        for (auto &E : Cand.AST) {
+          if (Owned.count(E.I) || E.I->use_empty()) continue;
+          bool AllUsersOwned = true;
+          for (auto *U : E.I->users()) {
+            auto *UI = dyn_cast<Instruction>(U);
+            if (!UI || !Owned.count(UI)) {
+              AllUsersOwned = false;
+              break;
+            }
+          }
+          if (AllUsersOwned) {
+            Owned.insert(E.I);
+            Grew = true;
+          }
+        }
       }
+      // When the tree shares nodes with other code, the replacement only
+      // removes the owned part, so it must not cost more than that (e.g. the
+      // byte a parity flag reads, trunc(sum), replaced by trunc(a) + trunc(b)
+      // while the sum itself stays: three instructions for one). An
+      // unshared tree (the classic MBA case) is accepted as before.
+      llvm::SmallPtrSet<llvm::Instruction *, 32> Distinct;
+      for (auto &E : Cand.AST) Distinct.insert(E.I);
+      if (Owned.size() < Distinct.size()) {
+        int Removed = 0;
+        for (auto *I : Owned)
+          if (!I->isCast()) Removed++;
+        int Added = countOperators(Cand.Replacement);
+        for (auto *V : Cand.Variables)
+          if (V->getType() != Cand.Candidate->getType()) Added++;  // a cast
+        if (Added > Removed) {
+          if (this->Debug) {
+            outs() << "[*] Skipping a replacement of a shared tree: it removes "
+                   << Removed << " operator(s) but adds " << Added << "\n";
+          }
+          Cand.isValid = false;
+          continue;
+        }
+      }
+      for (auto *I : Owned) ReplacedInstructions.insert(I);
 
       ReplacementFound |= true;
     }

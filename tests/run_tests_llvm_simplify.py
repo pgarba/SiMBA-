@@ -29,7 +29,15 @@ PASSED = True
 
 # List of all files to test
 filenames = ["MBA_OP.ll", "mba_comb.ll", "mbas.ll",
-             "vm_obf.ll", "scramble4.ll", "xor_op_pred.ll"]
+             "vm_obf.ll", "scramble4.ll", "xor_op_pred.ll",
+             "remill_flat_mba_add.ll"]
+
+# Text the simplified output must contain, for files where "some MBA was
+# replaced" is not enough (the wrong subtree can be replaced instead).
+expected_in_output = {
+    # the sum feeding both RAX and the flags must itself be simplified
+    "remill_flat_mba_add.ll": "add i64 %RDI, %RSI",
+}
 
 # Main function
 
@@ -111,6 +119,16 @@ def main():
 
             PASSED = False
             break
+
+        # Check the expected simplification, where one is given
+        if filename in expected_in_output:
+            with open(SimpFilePath) as f:
+                if expected_in_output[filename] not in f.read():
+                    print(bcolors.FAIL + "[E] Test " + filename + " failed: '" +
+                          expected_in_output[filename] + "' not in the output!" + bcolors.ENDC)
+                    print(bcolors.FAIL + "Command: " + cmd + bcolors.ENDC)
+                    PASSED = False
+                    break
 
         # Check if MBAs were found and simplified
         m = re.search(r"\[.\] MBAs found and replaced: '(\d+)'", output)
