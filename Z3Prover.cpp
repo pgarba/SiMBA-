@@ -25,7 +25,7 @@ llvm::cl::opt<int> timeout(
     "timeout", llvm::cl::Optional,
     llvm::cl::desc("Timeout in seconds for the Z3 solver / simplifiers "
                   "(Default 30)"),
-    llvm::cl::value_desc("timeout"), llvm::cl::init(30),
+    llvm::cl::value_desc("timeout"), llvm::cl::init(5),
     llvm::cl::cat(SiMBAOpt));
 
 // Accept unknown as unsat
@@ -109,6 +109,12 @@ bool prove(z3::expr conjecture) {
 
   // reset and add
   Solver->reset();
+  // The global "timeout" parameter above is only read when a solver is
+  // created and is not honoured by every QF_BV tactic: verify() sat in the
+  // SAT core for minutes on a hard nonlinear candidate (Civ7 0x14049C050).
+  // Bound every check explicitly; a timeout yields unknown, which is
+  // rejected unless -accept-unknown is given.
+  Solver->set("timeout", (unsigned)(timeout * 1000));
   Solver->add(conjecture);
 
   if (PrintSMT || (getenv("SIMBA_PRINT_SMT") != nullptr)) {
