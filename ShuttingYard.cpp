@@ -1177,12 +1177,32 @@ z3::expr getZ3ExprFromString(z3::context &Z3Ctx, std::string &expr,
               // inside Z3_mk_fpa_to_fp_unsigned. Use a real FPA sort that can
               // hold BitWidth-bit values: fpa64 for <= 64 bits, otherwise a
               // custom FPA with a full-mantissa width.
-              auto Sort = (BitWidth <= 64)
-                              ? Z3Ctx.fpa_sort(11, 52)
-                              : Z3Ctx.fpa_sort(16, (unsigned)BitWidth + 1);
-              auto PowExpr = z3::pw(z3::ubv_to_fpa(lhsAP, Sort),
-                                    z3::ubv_to_fpa(rhsAP, Sort));
-              stackAP.push_back(z3::fpa_to_ubv(PowExpr, BitWidth));
+              //
+              // z3::pw is only defined for Int/Real sorts: applied to the FPA
+              // values it threw "Sort mismatch ... (declare-fun ^ (Int Int)
+              // Real)" and, uncaught, aborted the whole lift (Civ7
+              // 0x14041A490). MBA power is integer exponentiation mod
+              // 2^BitWidth, so compute exactly that on the bit-vectors: square-
+              // and-multiply for a constant exponent. A symbolic exponent is
+              // not modelled - use a fresh unconstrained value, so any
+              // equivalence proof involving it fails and the candidate is
+              // rejected rather than wrongly accepted.
+              uint64_t Exp = 0;
+              if (rhsAP.is_numeral_u64(Exp)) {
+                z3::expr Result = Z3Ctx.bv_val(1, BitWidth);
+                z3::expr Base = lhsAP;
+                while (Exp) {
+                  if (Exp & 1) Result = Result * Base;
+                  Exp >>= 1;
+                  if (Exp) Base = Base * Base;
+                }
+                stackAP.push_back(Result.simplify());
+              } else {
+                static unsigned PowCounter = 0;
+                std::string Name = "__pow_unmodelled_" +
+                                   std::to_string(PowCounter++);
+                stackAP.push_back(Z3Ctx.bv_const(Name.c_str(), BitWidth));
+              }
             } break;
             case '/': {
               auto DivExpr = lhsAP / rhsAP;
