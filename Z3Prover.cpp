@@ -140,13 +140,19 @@ bool proveReplacement(std::string &expr0, std::string &expr1, int BitWidth,
   std::map<std::string, z3::expr *> VarMap;
   std::map<std::string, llvm::Type *> VarTypes;
 
-  auto Z3Exp0 =
-      getZ3ExprFromString(Z3Ctx, expr0, BitWidth, Variables, VarTypes, VarMap);
-  auto Z3Exp1 =
-      getZ3ExprFromString(Z3Ctx, expr1, BitWidth, Variables, VarTypes, VarMap);
-
-  // Prove
-  auto Result = prove(((Z3Exp0 != Z3Exp1)));
+  // A z3::exception (e.g. a sort mismatch on an operator the backend does
+  // not model) used to escape uncaught and abort the whole lift. Treat it as
+  // "not proven": the candidate is rejected and the original kept.
+  bool Result = false;
+  try {
+    auto Z3Exp0 = getZ3ExprFromString(Z3Ctx, expr0, BitWidth, Variables,
+                                      VarTypes, VarMap);
+    auto Z3Exp1 = getZ3ExprFromString(Z3Ctx, expr1, BitWidth, Variables,
+                                      VarTypes, VarMap);
+    Result = prove(((Z3Exp0 != Z3Exp1)));
+  } catch (const z3::exception &E) {
+    Result = false;
+  }
 
   // Clean up variables (the z3::expr handles belong to the global context,
   // which outlives them; dropping the local references is enough).
