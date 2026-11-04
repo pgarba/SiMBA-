@@ -120,9 +120,15 @@ int countOperators(std::string &expr) {
   return OpCount;
 }
 
+// Tokenize an expression string. A string that cannot be tokenized (unknown
+// character, malformed cast) is fatal by default; pass Ok to get *Ok = false
+// back instead - callers that are only *checking* a candidate (eval() from
+// verify()) must be able to reject it rather than abort the whole lift.
 void exprToTokens(const std::string &expr, veque::veque<Token> &tokens,
                   bool detectVariables = false,
-                  std::vector<std::string> *VNames = nullptr) {
+                  std::vector<std::string> *VNames = nullptr,
+                  bool *Ok = nullptr) {
+  if (Ok) *Ok = true;
   int Index;
   for (const auto *p = expr.c_str(); *p; ++p) {
     if (isblank(*p)) {
@@ -166,6 +172,16 @@ void exprToTokens(const std::string &expr, veque::veque<Token> &tokens,
                         std::to_string(tw);
         tokens.push_back(Token{Token::Type::Operator, s, 9, false, true});
         p = endBracket;  // loop's ++p moves past ']'
+      } else {
+        // An intermediate cast ("zext[64](...)", no source width) that should
+        // have been rewritten away before rendering (see mStr). Skipping just
+        // the 's'/'z' used to leave "ext[..." behind and die on the 'e'.
+        if (Ok) {
+          *Ok = false;
+          return;
+        }
+        llvm::outs() << "[exprToTokens]: Malformed cast in '" << expr << "'\n";
+        report_fatal_error("[exprToTokens]: malformed cast", false);
       }
     } else {
       Token::Type t = Token::Type::Unknown;
@@ -187,7 +203,21 @@ void exprToTokens(const std::string &expr, veque::veque<Token> &tokens,
 
       switch (c) {
         default:
-          llvm::outs() << "[exprToTokens]: Unkown Token '" << c << "'\n";
+          // Print the whole expression and the variable names it was meant to
+          // be read with: an unknown letter almost always means the two
+          // disagree (expression uses more variables than VNames lists).
+          if (Ok) {
+            *Ok = false;
+            return;
+          }
+          llvm::outs() << "[exprToTokens]: Unkown Token '" << c
+                       << "' at offset " << (p - expr.c_str()) << " in '"
+                       << expr << "' (variables:";
+          if (VNames)
+            for (auto &N : *VNames) llvm::outs() << " " << N;
+          else
+            llvm::outs() << " <none>";
+          llvm::outs() << ")\n";
           report_fatal_error("", false);
           break;
         case '(':
@@ -854,7 +884,7 @@ APInt APIntPow(APInt base, APInt exp) {
 }
 
 APInt eval(std::string expr, llvm::SmallVectorImpl<APInt> &par, int BitWidth,
-           int *OperationCount) {
+           int *OperationCount, bool *Ok) {
   // Replace variables with values in expression
   for (int i = 0; i < par.size(); i++) {
     std::string var = "X[" + std::to_string(i) + "]";
@@ -876,7 +906,12 @@ APInt eval(std::string expr, llvm::SmallVectorImpl<APInt> &par, int BitWidth,
   replace_all(expr, "**", "#");
 
   veque::veque<Token> tokens;
-  exprToTokens(expr, tokens);
+  bool TokOk = true;
+  exprToTokens(expr, tokens, false, nullptr, Ok ? &TokOk : nullptr);
+  if (Ok) {
+    *Ok = TokOk;
+    if (!TokOk) return APInt(BitWidth, 0);
+  }
 
   veque::veque<Token> queue;
   shuntingYard(tokens, queue);

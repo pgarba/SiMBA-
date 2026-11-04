@@ -1034,8 +1034,17 @@ bool LLVMParser::verify(int ASTSize, llvm::SmallVectorImpl<BFSEntry> &AST,
       return false;
     }
 
-    // Eval replacement
-    auto AP_R1 = eval(Expr1_replVar, par, BitWidth, &Operations);
+    // Eval replacement. A replacement string the tokenizer cannot read (an
+    // intermediate cast that survived rendering, a stray token) is simply not
+    // a valid candidate - reject it instead of aborting the whole lift
+    // (seen on VM-protected Civ7 stubs: "zext[64](...)" with no source width).
+    bool EvalOk = true;
+    auto AP_R1 = eval(Expr1_replVar, par, BitWidth, &Operations, &EvalOk);
+    if (!EvalOk) {
+      if (this->Debug)
+        outs() << "[*] [VERIFY] unparsable '" << SimpExpr << "'\n";
+      return false;
+    }
 
     // Check if replacement is cheaper than original expression
     if (FullASTSize <= Operations) {

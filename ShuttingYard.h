@@ -21,8 +21,11 @@ class Value;
 */
 int countOperators(std::string &expr);
 
+// Ok (optional): set to false instead of aborting when expr cannot be
+// tokenized; the returned value is then meaningless.
 llvm::APInt eval(std::string expr, llvm::SmallVectorImpl<llvm::APInt> &par,
-                 int BitWidth, int *OperationCount = nullptr);
+                 int BitWidth, int *OperationCount = nullptr,
+                 bool *Ok = nullptr);
 
 llvm::Function *createLLVMFunction(
     llvm::Module *M, llvm::SmallVectorImpl<llvm::Value *> &Variables,
