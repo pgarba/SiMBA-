@@ -1,3 +1,4 @@
+#include <unordered_map>
 // Phase 9: routing between the native SiMBA++ linear simplifier, the GAMBA
 // native C++ port (general / nonlinear MBAs) and the vendored Python GAMBA.
 // See SimplifierRouter.h for the option semantics.
@@ -602,8 +603,46 @@ RouteResult RouteSimplify(const std::string &MBA, std::string &SimpMBA,
   return RouteResult::FAILED;
 }
 
+static bool TrySelectedSimplifierImpl(const std::string &Expr, std::string &SimpMBA,
+                                      int bitWidth, bool useZ3, bool autoFallback);
+
+// The same expression reaches the router again and again: Saturn
+// re-optimizes the whole lifted function after every lifted block, and
+// SiMBA re-simplifies every candidate each time (on Civ7 VM stubs most of
+// the remaining SiMBA time was the general simplifier redoing identical
+// work). The result is a function of these inputs - remember it for the
+// process. Also makes runs agree: the general route is wall-clock bounded.
 bool TrySelectedSimplifier(const std::string &Expr, std::string &SimpMBA,
                            int bitWidth, bool useZ3, bool autoFallback) {
+  static std::unordered_map<std::string, std::pair<bool, std::string>> Memo;
+  std::string Key = std::to_string(bitWidth) + (useZ3 ? "z" : "-") +
+                    (autoFallback ? "a" : "-") + "|" + Expr;
+  auto It = Memo.find(Key);
+  if (It != Memo.end()) {
+    if (It->second.first) SimpMBA = It->second.second;
+    return It->second.first;
+  }
+  std::string Out = SimpMBA;
+  bool R = TrySelectedSimplifierImpl(Expr, Out, bitWidth, useZ3, autoFallback);
+  Memo.emplace(std::move(Key), std::make_pair(R, Out));
+  if (R) SimpMBA = Out;
+  return R;
+}
+
+static bool TrySelectedSimplifierImpl(const std::string &Expr, std::string &SimpMBA,
+                                      int bitWidth, bool useZ3, bool autoFallback) {
+  // The expression string is the candidate DAG rendered as a tree: shared
+  // subexpressions are repeated, so its size can explode (a 3 MB string on
+  // Civ7 0x1402C30A0, 73 s in checkLinear alone, 212 s of 316 s SiMBA time
+  // spent just classifying). No route can simplify such a string; leave it
+  // to the native path, which works on the AST itself - exactly what a
+  // "linear" classification does. SIMBA_MAX_ROUTED_EXPR overrides the limit.
+  static const size_t MaxRoutedExpr = [] {
+    const char *E = getenv("SIMBA_MAX_ROUTED_EXPR");
+    return E ? (size_t)strtoull(E, nullptr, 10) : (size_t)16384;
+  }();
+  if (MaxRoutedExpr && Expr.size() > MaxRoutedExpr)
+    return false;
   std::string choice = effectiveChoice(Expr, bitWidth);
   if (choice.empty())
     return false;
