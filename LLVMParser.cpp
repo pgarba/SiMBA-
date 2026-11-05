@@ -1,3 +1,4 @@
+#include <unordered_map>
 #include "LLVMParser.h"
 
 #include <functional>
@@ -950,6 +951,55 @@ static bool proveWithZ3Guarded(LLVMParser *Self, std::string &SimpExpr,
   return Result;
 }
 
+// Z3 verdicts by exact formula, for the whole process (see verify()).
+static std::unordered_map<std::string, bool> Z3ProofCache;
+
+// An exact, pointer-free rendering of the candidate DAG: every AST node by
+// opcode/predicate/type, every operand as another node, a variable (by
+// index and type) or a constant (width and value). Empty if some operand is
+// none of those - such a candidate is simply not cached.
+static std::string proofCacheKey(llvm::SmallVectorImpl<BFSEntry> &AST,
+                                 llvm::SmallVectorImpl<llvm::Value *> &Variables,
+                                 const std::string &SimpExpr, int BitWidth) {
+  llvm::DenseMap<llvm::Value *, unsigned> Node, Var;
+  for (auto &E : AST) Node.try_emplace(E.I, Node.size());
+  for (unsigned i = 0; i < Variables.size(); i++) Var.try_emplace(Variables[i], i);
+  std::string K;
+  llvm::raw_string_ostream OS(K);
+  OS << BitWidth << '|' << SimpExpr << '|';
+  for (unsigned i = 0; i < Variables.size(); i++) {
+    Variables[i]->getType()->print(OS);
+    OS << ',';
+  }
+  OS << '|';
+  auto TypeOf = [&](llvm::Type *T) { T->print(OS); };
+  llvm::SmallPtrSet<llvm::Instruction *, 16> Done;
+  for (auto &E : AST) {
+    if (!Done.insert(E.I).second) continue;
+    OS << 'n' << Node[E.I] << '=' << E.I->getOpcode();
+    if (auto *C = llvm::dyn_cast<llvm::CmpInst>(E.I)) OS << 'p' << C->getPredicate();
+    OS << ':';
+    TypeOf(E.I->getType());
+    OS << '(';
+    for (auto &Op : E.I->operands()) {
+      llvm::Value *V = Op.get();
+      if (auto It = Node.find(V); It != Node.end()) {
+        OS << 'n' << It->second;
+      } else if (auto It2 = Var.find(V); It2 != Var.end()) {
+        OS << 'v' << It2->second;
+      } else if (auto *CI = llvm::dyn_cast<llvm::ConstantInt>(V)) {
+        OS << 'c' << CI->getBitWidth() << ':' << CI->getValue();
+      } else {
+        return std::string();
+      }
+      OS << ',';
+    }
+    OS << ')';
+  }
+  OS.flush();
+  return K;
+}
+
 bool LLVMParser::verify(int ASTSize, llvm::SmallVectorImpl<BFSEntry> &AST,
                         std::string &SimpExpr,
                         llvm::SmallVectorImpl<llvm::Value *> &Variables,
@@ -1099,6 +1149,18 @@ bool LLVMParser::verify(int ASTSize, llvm::SmallVectorImpl<BFSEntry> &AST,
     // error case check_error/Z3_THROW is actually designed to catch.
     auto start = high_resolution_clock::now();
 
+    // The same candidate is proved again and again: Saturn re-optimizes
+    // the whole function after every lifted block, and a candidate whose
+    // shape once simplified is re-verified on every cache hit (see
+    // findReplacements). Remember Z3's verdict per exact formula - the
+    // candidate DAG with its variable wiring, constants and widths, plus
+    // the replacement - so each distinct proof (or 5 s timeout) runs once.
+    std::string ProofKey = proofCacheKey(AST, Variables, SimpExpr, BitWidth);
+    if (!ProofKey.empty()) {
+      auto It = Z3ProofCache.find(ProofKey);
+      if (It != Z3ProofCache.end()) return It->second;
+    }
+
     bool Result = false;
     try {
       Result = proveWithZ3Guarded(this, SimpExpr, Vars, AST, Variables,
@@ -1120,6 +1182,7 @@ bool LLVMParser::verify(int ASTSize, llvm::SmallVectorImpl<BFSEntry> &AST,
              << " ms Result (1 == valid): " << Result << "\n";
     }
 
+    if (!ProofKey.empty()) Z3ProofCache[ProofKey] = Result;
     return Result;
   }
 
