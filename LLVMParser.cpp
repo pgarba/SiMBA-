@@ -4388,6 +4388,11 @@ z3::expr LLVMParser::getZ3ExpressionFromAST(
           report_fatal_error("[!] Not supported call instruction!", false);
         }
       }
+    } else if (auto *FR = dyn_cast<FreezeInst>(CurInst)) {
+      // freeze only pins poison/undef to some value; on the concrete values
+      // Z3 models it is the identity (Civ7 0x140309090 aborted here).
+      auto Op0 = getZ3Val(Z3Ctx, FR->getOperand(0), ValueMAP, false);
+      ValueMAP[CurInst] = new z3::expr(*Op0);
     } else {
       CurInst->dump();
       report_fatal_error("[!] Not supported instruction in Z3 parser!", false);
