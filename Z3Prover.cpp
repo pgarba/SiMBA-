@@ -1,3 +1,4 @@
+#include <chrono>
 #include "Z3Prover.h"
 
 #include <cstdlib>
@@ -78,6 +79,9 @@ void resetZ3Solver() {
 
 void abandonZ3Solver() { Solver = nullptr; }
 
+// Work budget per check (see prove()).
+static unsigned proverRlimit() { return (unsigned)timeout * 3000u * 1000u; }
+
 bool prove(z3::expr conjecture) {
   z3::context &c = conjecture.ctx();
 
@@ -89,8 +93,15 @@ bool prove(z3::expr conjecture) {
 
   // Create new solver if needed
   if (!Solver) {
-    // Z3's "timeout" parameter is in milliseconds.
-    Z3_global_param_set("timeout", std::to_string(timeout * 1000).c_str());
+    // Bound Z3 by work (rlimit), not wall-clock time: a timeout made the
+    // verdict depend on machine load - the same proof succeeded on an idle
+    // machine and came back unknown under a parallel batch - so lifts were
+    // not reproducible. ~3000 rlimit units per ms on the hard QF_BV checks,
+    // so -timeout keeps roughly its old meaning; the wall-clock limit stays
+    // as a safety net only (12x). Global, so every solver created later
+    // (Saturn's SymLLVM included) gets the same bounds.
+    Z3_global_param_set("rlimit", std::to_string(proverRlimit()).c_str());
+    Z3_global_param_set("timeout", std::to_string(timeout * 12000).c_str());
 
     // Use the QF_BV (quantifier-free bit-vector) logic instead of the old
     // `simplify & bit-blast & smt` pipeline. The bit-blast tactic converts
@@ -114,14 +125,31 @@ bool prove(z3::expr conjecture) {
   // SAT core for minutes on a hard nonlinear candidate (Civ7 0x14049C050).
   // Bound every check explicitly; a timeout yields unknown, which is
   // rejected unless -accept-unknown is given.
-  Solver->set("timeout", (unsigned)(timeout * 1000));
+  Solver->set("rlimit", proverRlimit());
+  Solver->set("timeout", (unsigned)(timeout * 12000));
   Solver->add(conjecture);
 
   if (PrintSMT || (getenv("SIMBA_PRINT_SMT") != nullptr)) {
     llvm::outs() << "[SMT2 Start]\n" << Solver->to_smt2() << "[SMT2 End]\n";
   }
 
+  static const bool RlimitStats = getenv("SIMBA_RLIMIT_STATS") != nullptr;
+  auto StatT0 = std::chrono::steady_clock::now();
   auto R = Solver->check();
+  if (R == z3::unknown && getenv("SATURN_DEBUG_LIMITS"))
+    fprintf(stderr, "[limit] SiMBA Z3 unknown: %s\n",
+            Solver->reason_unknown().c_str());
+  if (RlimitStats) {
+    double Rl = 0;
+    z3::stats St = Solver->statistics();
+    for (unsigned i = 0; i < St.size(); i++)
+      if (St.key(i) == "rlimit count")
+        Rl = St.is_uint(i) ? St.uint_value(i) : St.double_value(i);
+    fprintf(stderr, "[z3-rlimit] rlimit=%.0f ms=%.3f res=%d\n", Rl,
+            std::chrono::duration<double, std::milli>(
+                std::chrono::steady_clock::now() - StatT0).count(),
+            (int)R);
+  }
   if (R == z3::unsat) {
     return true;
   } else if (R == z3::unknown) {

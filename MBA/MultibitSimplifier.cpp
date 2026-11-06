@@ -18,6 +18,9 @@
 #include "Parser.h"
 #include "Verify.h"
 
+// Default multi-bit budget in evaluated AST nodes (MultibitSimplifier.h).
+static constexpr uint64_t kDefaultBudgetOps = 13000000ull;  // ~267k nodes/ms
+
 namespace LSiMBA {
 namespace MBA {
 
@@ -170,6 +173,14 @@ MultibitSimplifier::MultibitSimplifier(const std::string &expr, int bitCount,
     } catch (...) {
     }
   }
+  // About what 50 ms bought on an idle machine (see the header).
+  budgetOps = budgetMs > 0 ? kDefaultBudgetOps : 0;
+  if (const char *b = std::getenv("MBASIMBA_MSIMBA_BUDGET_OPS")) {
+    try {
+      budgetOps = std::stoull(b);
+    } catch (...) {
+    }
+  }
 }
 
 // ================================================================ result vector
@@ -179,12 +190,12 @@ void MultibitSimplifier::buildResultVector() {
   // For each bit index i, evaluate the expression with each variable set to
   // either 0 or (1 << i), then shift the result right by i.
   resultVector.resize(numCombinations * static_cast<size_t>(bitCount), 0);
+  const uint64_t astNodes = std::max(1, ast->countNodes());
 
   for (uint32_t bitIndex = 0; bitIndex < static_cast<uint32_t>(bitCount); bitIndex++) {
     // Phase-1: cap the exponential vector build; abort and report via
     // budgetExceeded (the caller falls back to the general route).
-    if (budgetMs > 0 &&
-        std::chrono::steady_clock::now() > budgetDeadline) {
+    if (overBudget()) {
       budgetExceeded = true;
       return;
     }
@@ -199,6 +210,7 @@ void MultibitSimplifier::buildResultVector() {
 
       // Evaluate the AST.
       uint64_t eval = ast->eval(values);
+      opsUsed += astNodes;
       eval = moduloMask & eval;
 
       // Shift down by bitIndex (the N-bit to 1-bit transform).
@@ -269,6 +281,7 @@ bool MultibitSimplifier::isLinearResultVector() const {
 
   // Set vidx for the new AST's variables so eval() works.
   linearExpr->enumerateVariables(variables);
+  const uint64_t linearNodes = std::max(1, linearExpr->countNodes());
 
   // Build the multi-bit vector for the linear expression.
   std::vector<uint64_t> otherVec(numCombinations * static_cast<size_t>(bitCount), 0);
@@ -277,8 +290,7 @@ bool MultibitSimplifier::isLinearResultVector() const {
     // 2^varCount-term expression; it is only an optimization gate. If it
     // runs past the budget, treat the expression as non-linear (safe: we
     // just skip the 1-bit shortcut and use the multi-bit path).
-    if (budgetMs > 0 &&
-        std::chrono::steady_clock::now() > budgetDeadline)
+    if (overBudget())
       return false;
     for (uint64_t comb = 0; comb < numCombinations; comb++) {
       std::vector<uint64_t> values(varCount, 0);
@@ -288,6 +300,7 @@ bool MultibitSimplifier::isLinearResultVector() const {
         values[v] = varValue << bitIndex;
       }
       uint64_t eval = linearExpr->eval(values);
+      opsUsed += linearNodes;
       eval = moduloMask & eval;
       eval >>= bitIndex;
       otherVec[bitIndex * numCombinations + comb] = eval;
@@ -419,7 +432,7 @@ MultibitSimplifier::term(const std::shared_ptr<Node> &conj, uint64_t coeff,
 std::string MultibitSimplifier::simplifyGeneric() {
   // Phase-1: if the earlier (isLinearResultVector) stage already spent the
   // budget, do not start this reconstruction either.
-  if (budgetMs > 0 && std::chrono::steady_clock::now() > budgetDeadline) {
+  if (overBudget()) {
     budgetExceeded = true;
     return "";
   }
@@ -981,12 +994,17 @@ std::string MultibitSimplifier::simplify(const std::string &expr, int bitCount,
 
   // Phase-1: arm the multi-bit budget (caps the dead end on mixed-product
   // expressions that pass the loose isSemiLinear test).
-  if (solver.budgetMs > 0)
-    solver.budgetDeadline =
-        std::chrono::steady_clock::now() +
-        std::chrono::duration_cast<std::chrono::steady_clock::duration>(
-            std::chrono::duration<double, std::milli>(solver.budgetMs));
+  solver.opsUsed = 0;
+  static const bool BudgetStats = std::getenv("MBASIMBA_BUDGET_STATS") != nullptr;
+  auto StatT0 = std::chrono::steady_clock::now();
   solver.buildResultVector();
+  if (BudgetStats)
+    fprintf(stderr, "[msimba-budget] vars=%d bits=%d ops=%llu ms=%.3f exceeded=%d\n",
+            solver.varCount, solver.bitCount,
+            (unsigned long long)solver.opsUsed,
+            std::chrono::duration<double, std::milli>(
+                std::chrono::steady_clock::now() - StatT0).count(),
+            (int)solver.budgetExceeded);
   if (solver.budgetExceeded)
     return "";
 
