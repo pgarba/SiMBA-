@@ -3513,10 +3513,129 @@ void LLVMParser::getAST(llvm::DominatorTree *DT, llvm::Instruction *I,
   std::sort(Variables.begin(), Variables.end());
 }
 
+// Fast path for evaluateAST: the same semantics on plain APInts, without
+// creating a uniqued ConstantInt/ConstantExpr per node and test case
+// (ConstantInt::get's context hash lookups were ~60% of a Civ7 VM lift:
+// verify() evaluates every candidate on NUM_TEST_CASES inputs, and Saturn
+// re-optimizes the whole function after every lifted block). Returns false
+// for anything outside the common subset, and the caller falls back to the
+// Constant-based evaluator, so exotic nodes keep their exact old behaviour.
+static bool evaluateASTFast(llvm::SmallVectorImpl<BFSEntry> &AST,
+                            llvm::SmallVectorImpl<llvm::Value *> &Variables,
+                            llvm::SmallVectorImpl<APInt> &Par, APInt &Out) {
+  llvm::SmallDenseMap<llvm::Value *, APInt, 32> Vals;
+  auto Get = [&](llvm::Value *V, APInt &R) -> bool {
+    if (auto *C = dyn_cast<ConstantInt>(V)) {
+      R = C->getValue();
+      return true;
+    }
+    for (unsigned i = 0; i < Variables.size(); i++) {
+      if (Variables[i] != V) continue;
+      if (i >= Par.size()) return false;
+      if (V->getType()->isPointerTy()) {
+        R = Par[i];
+        return true;
+      }
+      if (!V->getType()->isIntegerTy()) return false;
+      R = Par[i].zextOrTrunc(V->getType()->getIntegerBitWidth());
+      return true;
+    }
+    auto It = Vals.find(V);
+    if (It == Vals.end()) return false;
+    R = It->second;
+    return true;
+  };
+  bool Any = false;
+  for (auto E = AST.rbegin(); E != AST.rend(); ++E) {
+    auto *I = E->I;
+    APInt A, B, C, Res;
+    if (auto *BO = dyn_cast<BinaryOperator>(I)) {
+      if (!BO->getType()->isIntegerTy()) return false;
+      if (!Get(BO->getOperand(0), A) || !Get(BO->getOperand(1), B)) return false;
+      if (A.getBitWidth() != B.getBitWidth()) return false;
+      unsigned W = A.getBitWidth();
+      switch (BO->getOpcode()) {
+        case Instruction::Add: Res = A + B; break;
+        case Instruction::Sub: Res = A - B; break;
+        case Instruction::Mul: Res = A * B; break;
+        case Instruction::And: Res = A & B; break;
+        case Instruction::Or: Res = A | B; break;
+        case Instruction::Xor: Res = A ^ B; break;
+        case Instruction::Shl: Res = A.shl(B); break;
+        case Instruction::LShr: Res = A.lshr(B); break;
+        case Instruction::AShr: Res = A.ashr(B); break;
+        case Instruction::UDiv:
+          Res = B.isZero() ? APInt(W, 0) : A.udiv(B);
+          break;
+        case Instruction::URem:
+          Res = B.isZero() ? APInt(W, 0) : A.urem(B);
+          break;
+        default: return false;
+      }
+    } else if (auto *GEP = dyn_cast<GetElementPtrInst>(I)) {
+      if (GEP->getNumOperands() != 2) return false;
+      if (!Get(GEP->getOperand(0), A) || !Get(GEP->getOperand(1), B)) return false;
+      if (A.getBitWidth() != B.getBitWidth()) return false;
+      Res = A + B;
+    } else if (isa<TruncInst>(I) || isa<ZExtInst>(I) || isa<SExtInst>(I)) {
+      if (!I->getType()->isIntegerTy() || !Get(I->getOperand(0), A)) return false;
+      unsigned W = I->getType()->getIntegerBitWidth();
+      if (isa<TruncInst>(I)) {
+        if (W > A.getBitWidth()) return false;
+        Res = A.trunc(W);
+      } else {
+        if (W < A.getBitWidth()) return false;
+        Res = isa<ZExtInst>(I) ? A.zext(W) : A.sext(W);
+      }
+    } else if (auto *SI = dyn_cast<SelectInst>(I)) {
+      if (!SI->getType()->isIntegerTy()) return false;
+      if (!Get(SI->getOperand(0), A) || A.getBitWidth() != 1) return false;
+      if (!Get(A.isOne() ? SI->getOperand(1) : SI->getOperand(2), Res))
+        return false;
+    } else if (auto *CI = dyn_cast<ICmpInst>(I)) {
+      if (!Get(CI->getOperand(0), A) || !Get(CI->getOperand(1), B)) return false;
+      if (A.getBitWidth() != B.getBitWidth()) return false;
+      Res = APInt(1, ICmpInst::compare(A, B, CI->getPredicate()));
+    } else if (auto *Call = dyn_cast<CallInst>(I)) {
+      auto *Fn = Call->getCalledFunction();
+      if (!Fn) return false;
+      auto ID = Fn->getIntrinsicID();
+      if (ID != Intrinsic::fshl && ID != Intrinsic::fshr) return false;
+      if (!Get(Call->getArgOperand(0), A) || !Get(Call->getArgOperand(1), B) ||
+          !Get(Call->getArgOperand(2), C))
+        return false;
+      unsigned W = A.getBitWidth();
+      if (W > 64 || B.getBitWidth() != W || C.getBitWidth() != W) return false;
+      unsigned Sh = C.urem(W);
+      // Concatenate A:B and shift, as the intrinsic is defined.
+      if (Sh == 0)
+        Res = ID == Intrinsic::fshl ? A : B;
+      else if (ID == Intrinsic::fshl)
+        Res = A.shl(Sh) | B.lshr(W - Sh);
+      else
+        Res = A.shl(W - Sh) | B.lshr(Sh);
+    } else {
+      return false;
+    }
+    Vals[I] = Res;
+    Out = Res;
+    Any = true;
+  }
+  return Any;
+}
+
 llvm::APInt LLVMParser::evaluateAST(
     llvm::SmallVectorImpl<BFSEntry> &AST,
     llvm::SmallVectorImpl<llvm::Value *> &Variables,
     llvm::SmallVectorImpl<APInt> &Par, bool &Error) {
+  {
+    static const bool NoFast = getenv("SIMBA_NO_FAST_EVAL") != nullptr;
+    APInt R;
+    if (!NoFast && evaluateASTFast(AST, Variables, Par, R)) {
+      Error = false;
+      return R;
+    }
+  }
   Constant *InstResult = nullptr;
 
   // has a big performance impact
