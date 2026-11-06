@@ -40,8 +40,13 @@ GeneralSimplifier::GeneralSimplifier(int bitCount, bool modRed, int verifBitCoun
   // thrashing, so a tight time bound keeps the tail bounded with no quality
   // loss on the datasets where substitution gives early wins (e.g.
   // permutation64 is unaffected).
-  substBudgetMs = 150.0;
-  substBudgetSubsets = 0;
+  //
+  // Saturn: counted in subsets by default, not milliseconds. A time budget
+  // made the result depend on machine load, so lifts were not reproducible;
+  // 7500 subsets is about what 150 ms bought (~50 subsets/ms).
+  // MBASIMBA_SUBST_BUDGET_MS still enables the time bound.
+  substBudgetMs = 0;
+  substBudgetSubsets = 7500;
   if (const char *b = std::getenv("MBASIMBA_SUBST_BUDGET_MS")) {
     try {
       substBudgetMs = std::stod(b);
@@ -565,6 +570,8 @@ bool GeneralSimplifier::simplifyNonlinearSubexpression(const std::shared_ptr<Nod
     if (std::chrono::steady_clock::now() > deadline) {
       if (perf.enabled)
         perf.loopDeadline++;
+      if (std::getenv("SATURN_DEBUG_LIMITS"))
+        fprintf(stderr, "[limit] GeneralSimplifier loop deadline\n");
       break;
     }
     if (perf.enabled)
@@ -870,8 +877,11 @@ bool GeneralSimplifier::simplifyViaSubstitution(const std::shared_ptr<Node> &nod
   // below mirror the source).
   int nBits = std::min(static_cast<int>(nodes.size()), 20);
   for (int i = 1; i < (1 << nBits); ++i) {
-    if (std::chrono::steady_clock::now() > deadline)
+    if (std::chrono::steady_clock::now() > deadline) {
+      if (std::getenv("SATURN_DEBUG_LIMITS"))
+        fprintf(stderr, "[limit] GeneralSimplifier subst deadline\n");
       break;
+    }
 
     // Phase-1: stop this call once the global substitution budget is spent,
     // so a single node cannot blow far past it.
@@ -895,6 +905,11 @@ bool GeneralSimplifier::simplifyViaSubstitution(const std::shared_ptr<Node> &nod
       changed = true;
   }
 
+  static const bool SubstStats = std::getenv("MBASIMBA_SUBST_STATS") != nullptr;
+  if (SubstStats)
+    fprintf(stderr, "[subst-budget] subsets=%ld ms=%.3f\n", substSubsetsSpent,
+            substTimeSpentMs + std::chrono::duration<double, std::milli>(
+                                   std::chrono::steady_clock::now() - tCall).count());
   substTimeSpentMs +=
       std::chrono::duration<double, std::milli>(
           std::chrono::steady_clock::now() - tCall)

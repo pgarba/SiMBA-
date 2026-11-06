@@ -162,6 +162,7 @@ int runExternal(const std::string &cmdLine, int timeoutSec, std::string &output,
 
 #else
 #include <cstdio>
+#include <cstdlib>
 #include <sys/wait.h>
 
 // Non-Windows fallback: popen (no in-process timeout; the Python GAMBA
@@ -169,6 +170,8 @@ int runExternal(const std::string &cmdLine, int timeoutSec, std::string &output,
 int runExternal(const std::string &cmdLine, int timeoutSec, std::string &output,
                 int &exitCode) {
   (void)timeoutSec;
+  if (std::getenv("SATURN_DEBUG_LIMITS"))
+    fprintf(stderr, "[limit] external call: %.120s\n", cmdLine.c_str());
   FILE *p = popen(cmdLine.c_str(), "r");
   if (!p)
     return -1;

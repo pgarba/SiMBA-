@@ -95,6 +95,30 @@ static inline int __builtin_ctz(uint64_t x) {
 #endif
 
 using namespace llvm;
+// A total order on an AST's leaves that is the same on every run:
+// arguments by position, instructions by block number and position,
+// globals by name. Sorting the Value pointers instead named the Z3
+// variables (and the MBA variables) differently from run to run - which
+// value became "a" depended on heap addresses - so Saturn's lifts were not
+// reproducible.
+static bool valueOrderLess(const llvm::Value *A, const llvm::Value *B) {
+  auto Rank = [](const llvm::Value *V) {
+    return llvm::isa<Argument>(V) ? 0 : llvm::isa<Instruction>(V) ? 1 : llvm::isa<GlobalValue>(V) ? 2 : 3;
+  };
+  int RA = Rank(A), RB = Rank(B);
+  if (RA != RB) return RA < RB;
+  if (auto *AA = llvm::dyn_cast<Argument>(A))
+    return AA->getArgNo() < llvm::cast<Argument>(B)->getArgNo();
+  if (auto *IA = llvm::dyn_cast<Instruction>(A)) {
+    auto *IB = llvm::cast<Instruction>(B);
+    if (IA->getParent() != IB->getParent())
+      return IA->getParent()->getNumber() < IB->getParent()->getNumber();
+    return IA != IB && IA->comesBefore(IB);
+  }
+  if (auto *GA = llvm::dyn_cast<GlobalValue>(A))
+    return GA->getName() < llvm::cast<GlobalValue>(B)->getName();
+  return std::less<const llvm::Value *>{}(A, B);
+}
 using namespace std;
 using namespace std::chrono;
 
@@ -227,7 +251,11 @@ LLVMParser::LLVMParser(llvm::Module *M, bool Parallel, bool Verify,
       OptimizeAfter(OptimizeAfter),
       Debug(Debug),
       Prove(Prove),
-      SP64((uint64_t)M),
+      // A fixed seed, not the Module's address: verify()'s random test
+      // values decided which candidates passed, and the address differs
+      // from run to run (ASLR, allocation), so Saturn's lifts were not
+      // reproducible.
+      SP64(0x5a7u),
       TLII(nullptr),
       TLI(nullptr) {
   // Create evaluator
@@ -257,7 +285,11 @@ LLVMParser::LLVMParser(llvm::Function *F, bool Parallel, bool Verify,
       OptimizeAfter(OptimizeAfter),
       Debug(Debug),
       Prove(Prove),
-      SP64((uint64_t)M),
+      // A fixed seed, not the Module's address: verify()'s random test
+      // values decided which candidates passed, and the address differs
+      // from run to run (ASLR, allocation), so Saturn's lifts were not
+      // reproducible.
+      SP64(0x5a7u),
       TLII(nullptr),
       TLI(nullptr) {
   // Create evaluator
@@ -3509,8 +3541,8 @@ void LLVMParser::getAST(llvm::DominatorTree *DT, llvm::Instruction *I,
     Variables.push_back(V);
   }
 
-  // Sort
-  std::sort(Variables.begin(), Variables.end());
+  // Sort (valueOrderLess: the same order on every run)
+  std::sort(Variables.begin(), Variables.end(), valueOrderLess);
 }
 
 // Fast path for evaluateAST: the same semantics on plain APInts, without
@@ -3990,10 +4022,11 @@ bool LLVMParser::doesDominateInst(DominatorTree *DT, const Instruction *InstA,
   // operand it needs - and evaluateAST walks the sorted AST assuming the
   // opposite, so getVal hits a value that is not a constant, not a
   // collected variable and not yet on the ValueStack, and aborts with
-  // "V not found!". Tie-break on the block address (via std::less, which is
-  // well defined for unrelated pointers) to make this a total order.
-  return std::less<const BasicBlock *>{}(BA, BB);
+  // "V not found!". Tie-break on the block's number in its function: a
+  // total order, and unlike the block address the same on every run.
+  return BA->getNumber() < BB->getNumber();
 }
+
 
 // Neither z3::expr::bit2bool() nor the C API it wraps (Z3_mk_bit2bool) is
 // available on every Z3 build this needs to compile against (both are
