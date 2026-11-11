@@ -30,7 +30,7 @@ PASSED = True
 # List of all files to test
 filenames = ["MBA_OP.ll", "mba_comb.ll", "mbas.ll",
              "vm_obf.ll", "scramble4.ll", "xor_op_pred.ll",
-             "remill_flat_mba_add.ll", "piecewise_step.ll"]
+             "remill_flat_mba_add.ll", "piecewise_step.ll", "cmp_boundary.ll"]
 
 # Text the simplified output must contain, for files where "some MBA was
 # replaced" is not enough (the wrong subtree can be replaced instead).
@@ -39,6 +39,13 @@ expected_in_output = {
     "remill_flat_mba_add.ll": "add i64 %RDI, %RSI",
     # the step as a comparison: t u< K+1
     "piecewise_step.ll": "icmp ult i64 %t, 425017384131442",
+    "cmp_boundary.ll": "add i64 %y, %x",
+}
+
+# Text the simplified output must not contain: known wrong simplifications
+forbidden_in_output = {
+    # the comparisons dropped (random inputs never reach x <= 1000000)
+    "cmp_boundary.ll": "xor i64 %x, 12345",
 }
 
 # Main function
@@ -128,6 +135,15 @@ def main():
                 if expected_in_output[filename] not in f.read():
                     print(bcolors.FAIL + "[E] Test " + filename + " failed: '" +
                           expected_in_output[filename] + "' not in the output!" + bcolors.ENDC)
+                    print(bcolors.FAIL + "Command: " + cmd + bcolors.ENDC)
+                    PASSED = False
+                    break
+
+        if filename in forbidden_in_output:
+            with open(SimpFilePath) as f:
+                if forbidden_in_output[filename] in f.read():
+                    print(bcolors.FAIL + "[E] Test " + filename + " failed: '" +
+                          forbidden_in_output[filename] + "' in the output!" + bcolors.ENDC)
                     print(bcolors.FAIL + "Command: " + cmd + bcolors.ENDC)
                     PASSED = False
                     break
