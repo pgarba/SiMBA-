@@ -1084,10 +1084,35 @@ bool LLVMParser::verify(int ASTSize, llvm::SmallVectorImpl<BFSEntry> &AST,
   int FullASTSize = 0;
   for (auto &E : AST) FullASTSize++;
 
+  // Random inputs essentially never reach a comparison's boundary: on
+  // select(a u<= 1000000, 64, 0) all of them take the 0 side and "0" passed
+  // the quick test. So the test also runs rounds with one variable at an
+  // edge - 0, 1, -1, the sign boundary, and each comparison constant and
+  // its neighbours - and a candidate with a comparison is always proved
+  // (below), since a boundary behind arithmetic is still out of reach.
+  bool HasCmp = false;
+  llvm::SmallVector<uint64_t, 16> Edges = {0, 1, ~0ull, 1ull << 63,
+                                           (1ull << 63) - 1};
+  for (auto &E : AST) {
+    if (!isa<CmpInst>(E.I)) continue;
+    HasCmp = true;
+    for (auto &Op : E.I->operands())
+      if (auto *C = dyn_cast<ConstantInt>(Op.get())) {
+        if (C->getBitWidth() > 64 || Edges.size() >= 40) continue;
+        uint64_t V = C->getZExtValue(), S = C->getSExtValue();
+        for (uint64_t X : {V - 1, V, V + 1, S - 1, S, S + 1})
+          if (std::find(Edges.begin(), Edges.end(), X) == Edges.end())
+            Edges.push_back(X);
+      }
+  }
+  const int EdgeCases = VNumber * (int)Edges.size();
+
   llvm::SmallVector<APInt, 16> par;
-  for (int i = 0; i < NUM_TEST_CASES; i++) {
+  for (int i = 0; i < NUM_TEST_CASES + EdgeCases; i++) {
     for (int j = 0; j < VNumber; j++) {
       auto v = SP64.next();
+      if (i >= NUM_TEST_CASES && (i - NUM_TEST_CASES) / (int)Edges.size() == j)
+        v = Edges[(i - NUM_TEST_CASES) % Edges.size()];
       // Assign each opaque variable its FULL actual type width, not just
       // BitWidth bits. BitWidth is the AST *root* width (e.g. 1 for an icmp
       // root), but the opaque variable may be wider (e.g. 8-bit for a byte).
@@ -1154,7 +1179,7 @@ bool LLVMParser::verify(int ASTSize, llvm::SmallVectorImpl<BFSEntry> &AST,
   // Prove with z3. DoZ3=false skips this (the quick test above is sufficient
   // for the local MBA identities, which are algebraic laws always true; Z3
   // otherwise spends its 30 s budget and wrongly rejects correct folds).
-  if (this->Prove && DoZ3) {
+  if ((this->Prove || HasCmp) && DoZ3) {
     // Build Variable replacements
     std::vector<std::string> Vars;
     std::map<std::string, llvm::Type *> VarTypes;
