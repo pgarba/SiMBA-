@@ -190,6 +190,16 @@ void exprToTokens(const std::string &expr, veque::veque<Token> &tokens,
       bool unary = false;
       char c = *p;
 
+      // Comparisons '<=u' (unsigned) and '<=s' (signed), 1 or 0: the
+      // piecewise simplifier's threshold tests (see Piecewise.h). Tokens 'U'
+      // and 'S', below every other binary operator.
+      if (c == '<' && p[1] == '=' && (p[2] == 'u' || p[2] == 's')) {
+        tokens.push_back(Token{Token::Type::Operator, p[2] == 'u' ? "U" : "S",
+                               1, false, false});
+        p += 2;
+        continue;
+      }
+
       // Multi-character shift operators '<<' and '>>' (GAMBA notation). A
       // single '<' or '>' (not doubled) is not a valid operator.
       if ((c == '<' || c == '>') && (p + 1)[0] == c) {
@@ -666,6 +676,13 @@ void createLLVMReplacement(llvm::Instruction *InsertionPoint,
               // stackAP.push_back(lhsAP - rhsAP);
               stackAP.push_back(Builder.CreateSub(lhsAP, rhsAP));
               break;
+            case 'U':
+            case 'S':
+              stackAP.push_back(Builder.CreateZExt(
+                  token.str[0] == 'U' ? Builder.CreateICmpULE(lhsAP, rhsAP)
+                                      : Builder.CreateICmpSLE(lhsAP, rhsAP),
+                  lhsAP->getType()));
+              break;
           }
         }
       } break;
@@ -843,6 +860,13 @@ llvm::Function *createLLVMFunction(
             case '-':
               // stackAP.push_back(lhsAP - rhsAP);
               stackAP.push_back(Builder.CreateSub(lhsAP, rhsAP));
+              break;
+            case 'U':
+            case 'S':
+              stackAP.push_back(Builder.CreateZExt(
+                  token.str[0] == 'U' ? Builder.CreateICmpULE(lhsAP, rhsAP)
+                                      : Builder.CreateICmpSLE(lhsAP, rhsAP),
+                  lhsAP->getType()));
               break;
           }
         }
@@ -1040,6 +1064,12 @@ APInt eval(std::string expr, llvm::SmallVectorImpl<APInt> &par, int BitWidth,
             case '#':
               stackAP.push_back(APIntPow(lhsAP, rhsAP));
               break;
+            case 'U':
+              stackAP.push_back(APInt(BitWidth, lhsAP.ule(rhsAP) ? 1 : 0));
+              break;
+            case 'S':
+              stackAP.push_back(APInt(BitWidth, lhsAP.sle(rhsAP) ? 1 : 0));
+              break;
           }
         }
       } break;
@@ -1227,6 +1257,14 @@ z3::expr getZ3ExprFromString(z3::context &Z3Ctx, std::string &expr,
             case '-': {
               auto SubExpr = lhsAP - rhsAP;
               stackAP.push_back(SubExpr);
+            } break;
+            case 'U':
+            case 'S': {
+              const unsigned W = lhsAP.get_sort().bv_size();
+              auto Cmp = token.str[0] == 'U' ? z3::ule(lhsAP, rhsAP)
+                                             : z3::sle(lhsAP, rhsAP);
+              stackAP.push_back(z3::ite(Cmp, Z3Ctx.bv_val(1, W),
+                                        Z3Ctx.bv_val(0, W)));
             } break;
           }
         }

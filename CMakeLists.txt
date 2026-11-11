@@ -181,7 +181,7 @@ set(MBA_SOURCES
     "MBA/ConstantSubstituter.cpp"
     "MBA/SemiLinearProver.cpp" "MBA/SemiLinearProver.h")
 
-add_executable(SiMBA++ "CSiMBA.cpp" "CSiMBA.h" "LLVMParser.cpp" "LLVMParser.h" "Simplifier.h" "MBAChecker.cpp" "MBAChecker.h" "Simplifier.cpp" "ShuttingYard.cpp" "Modulo.cpp" "Modulo.h" "Z3Prover.cpp" "Z3Prover.h" "SimplifierRouter.cpp" "SimplifierRouter.h" ${MBA_SOURCES})
+add_executable(SiMBA++ "CSiMBA.cpp" "CSiMBA.h" "LLVMParser.cpp" "LLVMParser.h" "Simplifier.h" "MBAChecker.cpp" "MBAChecker.h" "Simplifier.cpp" "ShuttingYard.cpp" "Modulo.cpp" "Modulo.h" "Z3Prover.cpp" "Z3Prover.h" "SimplifierRouter.cpp" "SimplifierRouter.h" "Piecewise.cpp" "Piecewise.h" ${MBA_SOURCES})
 target_compile_definitions(SiMBA++ PRIVATE MBA_HAS_Z3)
 
 #set_target_properties(SiMBA++ PROPERTIES
@@ -231,7 +231,7 @@ if(WIN32)
 endif()
 
 # SiMBA++ static
-add_library(LSiMBA++ STATIC  "Z3Prover.cpp" "Z3Prover.h" "LLVMParser.cpp" "LLVMParser.h" "Simplifier.h" "MBAChecker.cpp" "MBAChecker.h" "Simplifier.cpp" "ShuttingYard.cpp" "Modulo.cpp" "Modulo.h" "SimplifierRouter.cpp" "SimplifierRouter.h" ${MBA_SOURCES})
+add_library(LSiMBA++ STATIC  "Z3Prover.cpp" "Z3Prover.h" "LLVMParser.cpp" "LLVMParser.h" "Simplifier.h" "MBAChecker.cpp" "MBAChecker.h" "Simplifier.cpp" "ShuttingYard.cpp" "Modulo.cpp" "Modulo.h" "SimplifierRouter.cpp" "SimplifierRouter.h" "Piecewise.cpp" "Piecewise.h" ${MBA_SOURCES})
 target_compile_definitions(LSiMBA++ PRIVATE MBA_HAS_Z3)
 
 # No rtti
@@ -261,7 +261,7 @@ add_test(NAME MBAs_Linear_64bit_unsigned_llvm
         WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/tests)
 
 # SiMBAPass
-add_library(SiMBAPass SHARED Z3Prover.h Z3Prover.cpp Simplifier.h Simplifier.cpp SiMBAPass.cpp SiMBAPass.h LLVMParser.cpp LLVMParser.h Simplifier.h Simplifier.cpp ShuttingYard.cpp MBAChecker.cpp MBAChecker.h Modulo.cpp Modulo.h SimplifierRouter.cpp SimplifierRouter.h ${MBA_SOURCES})
+add_library(SiMBAPass SHARED Z3Prover.h Z3Prover.cpp Simplifier.h Simplifier.cpp SiMBAPass.cpp SiMBAPass.h LLVMParser.cpp LLVMParser.h Simplifier.h Simplifier.cpp ShuttingYard.cpp MBAChecker.cpp MBAChecker.h Modulo.cpp Modulo.h SimplifierRouter.cpp SimplifierRouter.h Piecewise.cpp Piecewise.h ${MBA_SOURCES})
 
 # No rtti
 set_target_properties(SiMBAPass PROPERTIES
