@@ -31,7 +31,7 @@ PASSED = True
 filenames = ["MBA_OP.ll", "mba_comb.ll", "mbas.ll",
              "vm_obf.ll", "scramble4.ll", "xor_op_pred.ll",
              "remill_flat_mba_add.ll", "piecewise_step.ll", "cmp_boundary.ll",
-             "piecewise_around.ll"]
+             "piecewise_around.ll", "narrow_compare.ll", "linear_cancel.ll"]
 
 # Text the simplified output must contain, for files where "some MBA was
 # replaced" is not enough (the wrong subtree can be replaced instead).
@@ -43,6 +43,10 @@ expected_in_output = {
     "cmp_boundary.ll": "add i64 %y, %x",
     # (v & 1) around t is t & 1, and the one-point step folds on t's range
     "piecewise_around.ll": "xor i64 %t, 425017384131441",
+    # every value of the byte tried: the roundabout null check is v == 0
+    "narrow_compare.ll": "icmp eq i8 %v, 0",
+    # (l + m) - (l - s) - 48 across the stored l - s: m - 48 + s
+    "linear_cancel.ll": "add i64 %m, -48",
 }
 
 # Text the simplified output must not contain: known wrong simplifications
