@@ -204,7 +204,7 @@ bool evalBVDirect(z3::expr e, const std::vector<std::string> &vars,
       out = (0 - argval(0, ok)) & mask;
       done = true;
     } else if ((n == "bvmul" || n == "bvsmul") && na == 2) {
-      __uint128_t p = (__uint128_t)argval(0, ok) * (__uint128_t)argval(1, ok);
+      uint64_t p = argval(0, ok) * argval(1, ok);  // the low 64 bits are all that is kept
       out = (uint64_t)(p & mask);
       done = true;
     } else if (n == "shl" && na == 2) {

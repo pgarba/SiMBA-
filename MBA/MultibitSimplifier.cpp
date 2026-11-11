@@ -2,6 +2,12 @@
 // Port of external/MSiMBA/Mba.Common/MSiMBA/MultibitSiMBA.cs.
 #include "MultibitSimplifier.h"
 
+#ifdef _MSC_VER
+#include <intrin.h>
+static inline int __builtin_ctzll(unsigned long long x) { unsigned long i; _BitScanForward64(&i, x); return (int)i; }
+static inline int __builtin_clzll(unsigned long long x) { unsigned long i; _BitScanReverse64(&i, x); return 63 - (int)i; }
+#endif
+
 #include <algorithm>
 #include <cassert>
 #include <chrono>
