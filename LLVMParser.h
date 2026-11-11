@@ -120,7 +120,14 @@ class LLVMParser {
   bool tryCandidateSimplifications(LSiMBA::MBACandidate &Cand, int BitWidth);
 
   // A step function of one variable (see Piecewise.h), proved with Z3
-  bool tryPiecewise(LSiMBA::MBACandidate &Cand, int BitWidth);
+  bool tryPiecewise(llvm::DominatorTree *DT, LSiMBA::MBACandidate &Cand,
+                    int BitWidth);
+  bool tryPiecewiseCuts(
+      LSiMBA::MBACandidate &Cand, int BitWidth,
+      llvm::SmallVectorImpl<llvm::Value *> &Cuts,
+      llvm::function_ref<bool(llvm::Value *,
+                              llvm::SmallVectorImpl<BFSEntry> &)> Body,
+      const std::vector<uint64_t> &Hints);
 
   /*
     Local MBA pattern matching: recognize the classic mixed boolean-arithmetic
