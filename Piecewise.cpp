@@ -30,7 +30,8 @@ std::string join(const std::vector<std::string> &Parts, const char *Op) {
 }  // namespace
 
 std::string simplifyPiecewise(const std::function<uint64_t(uint64_t)> &F,
-                              int Width, const std::string &V) {
+                              int Width, const std::string &V,
+                              const std::vector<uint64_t> &Hints) {
   if (Width < 8 || Width > 64) return "";
   const uint64_t Mask = Width == 64 ? ~0ull : (1ull << Width) - 1;
   const uint64_t SMin = 1ull << (Width - 1);
@@ -74,8 +75,26 @@ std::string simplifyPiecewise(const std::function<uint64_t(uint64_t)> &F,
           Vals.push_back(Y);
       }
       if (Vals.size() == 1) {
-        if (B.S.empty()) continue;  // a constant: not this function's shape
-        return join({B.S, Vals[0] ? std::to_string(Vals[0]) : ""}, OpS);
+        // One value everywhere, or everywhere but at one hinted point
+        const uint64_t C0 = Vals[0];
+        std::string Spike;
+        bool Ok = true;
+        for (auto H : Hints) {
+          const uint64_t X = H & Mask, Y = R(X);
+          if (Y == C0) continue;
+          const std::string T = std::to_string(X);
+          if ((!Spike.empty() && Spike.find("(" + V + " ^ " + T + ")") ==
+                                     std::string::npos) ||
+              R((X + 1) & Mask) != C0 || R((X - 1) & Mask) != C0) {
+            Ok = false;
+            break;
+          }
+          const uint64_t D = (Op == '^' ? Y ^ C0 : Y - C0) & Mask;
+          Spike = "((" + V + " ^ " + T + ") <=u 0)";
+          if (D != 1) Spike = "(" + Spike + " * " + std::to_string(D) + ")";
+        }
+        if (!Ok || (B.S.empty() && Spike.empty())) continue;
+        return join({B.S, C0 ? std::to_string(C0) : "", Spike}, OpS);
       }
       if (Vals.size() != 2) continue;
 
