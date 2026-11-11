@@ -30,7 +30,8 @@ PASSED = True
 # List of all files to test
 filenames = ["MBA_OP.ll", "mba_comb.ll", "mbas.ll",
              "vm_obf.ll", "scramble4.ll", "xor_op_pred.ll",
-             "remill_flat_mba_add.ll", "piecewise_step.ll", "cmp_boundary.ll"]
+             "remill_flat_mba_add.ll", "piecewise_step.ll", "cmp_boundary.ll",
+             "piecewise_around.ll"]
 
 # Text the simplified output must contain, for files where "some MBA was
 # replaced" is not enough (the wrong subtree can be replaced instead).
@@ -40,6 +41,8 @@ expected_in_output = {
     # the step as a comparison: t u< K+1
     "piecewise_step.ll": "icmp ult i64 %t, 425017384131442",
     "cmp_boundary.ll": "add i64 %y, %x",
+    # (v & 1) around t is t & 1, and the one-point step folds on t's range
+    "piecewise_around.ll": "xor i64 %t, 425017384131441",
 }
 
 # Text the simplified output must not contain: known wrong simplifications

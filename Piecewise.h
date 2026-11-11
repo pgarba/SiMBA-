@@ -4,15 +4,16 @@
 #include <cstdint>
 #include <functional>
 #include <string>
+#include <vector>
 
 namespace LSiMBA {
 
 /*
   Single-variable expressions that are a simple base - a, ~a, -a or nothing -
   combined (^ or +) with a residual that takes one value up to a threshold
-  and another above it:
+  and another above it, or another at a single point:
 
-    g(a) ^ (a <=u T ? C1 : C0)
+    g(a) ^ (a <=u T ? C1 : C0)        g(a) ^ (a == T ? C1 : C0)
 
   Obfuscators hide the comparison as a borrow, e.g. ((K-1) - (a & ~1)) >> 1,
   and no MBA simplifier can return it: their results have no comparisons.
@@ -22,9 +23,13 @@ namespace LSiMBA {
   syntax, with the comparisons "<=u" / "<=s" (0 or 1), or "" when the
   expression has another shape. The result is a guess from samples: callers
   must prove it.
+
+  No sample hits a single point, so its candidates are Hints: the
+  expression's constants, typically (written (a ^ T) <=u 0).
 */
 std::string simplifyPiecewise(const std::function<uint64_t(uint64_t)> &F,
-                              int Width, const std::string &V);
+                              int Width, const std::string &V,
+                              const std::vector<uint64_t> &Hints = {});
 
 }  // namespace LSiMBA
 
