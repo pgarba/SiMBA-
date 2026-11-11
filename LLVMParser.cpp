@@ -1720,7 +1720,8 @@ bool LLVMParser::tryCandidateSimplifications(LSiMBA::MBACandidate &Cand,
   return false;
 }
 
-bool LLVMParser::tryPiecewise(LSiMBA::MBACandidate &Cand, int BitWidth) {
+bool LLVMParser::tryPiecewise(llvm::DominatorTree *DT,
+                              LSiMBA::MBACandidate &Cand, int BitWidth) {
   if (BitWidth < 8 || BitWidth > 64 || Cand.AST.empty()) return false;
   auto *Root = Cand.AST.front().I;
   auto FullWidth = [&](llvm::Value *V) {
@@ -1756,6 +1757,223 @@ bool LLVMParser::tryPiecewise(LSiMBA::MBACandidate &Cand, int BitWidth) {
   for (auto E = Cand.AST.rbegin(); E != Cand.AST.rend(); ++E)
     if (E->I != Root && !E->I->isCast()) Cuts.push_back(E->I);
 
+  // The body's constants and their neighbours: the candidates for a step
+  // at a single point, which no sample hits
+  std::vector<uint64_t> Hints;
+  for (auto &E : Cand.AST)
+    for (auto &O : E.I->operands())
+      if (auto *C = dyn_cast<ConstantInt>(O.get()))
+        if (C->getBitWidth() == (unsigned)BitWidth && Hints.size() < 64)
+          for (uint64_t H : {C->getZExtValue(), ~C->getZExtValue(),
+                             0 - C->getZExtValue(), C->getZExtValue() - 1,
+                             C->getZExtValue() + 1})
+            Hints.push_back(H);
+
+  if (tryPiecewiseCuts(Cand, BitWidth, Cuts, Body, Hints)) return true;
+
+  // A cut but for a few subtrees around it - (uint64_t)(v & 1) next to
+  // t = sx8(u) * 10 - 528 + sx8(v), which is t & 1: if each such subtree is
+  // cut & M on samples, and Z3 proves it, the subtree's uses in the
+  // candidate read cut & M instead, and the cut is a cut. Undone unless the
+  // step is then found.
+  int Tries = 0;
+  for (auto *Cut : Cuts) {
+    auto *CutI = dyn_cast<Instruction>(Cut);
+    if (!CutI || isa<PHINode>(CutI) || !FullWidth(Cut)) continue;
+    // The nodes above the cut, and the operands they reach around it
+    llvm::SmallPtrSet<llvm::Value *, 32> Above;
+    for (auto E = Cand.AST.rbegin(); E != Cand.AST.rend(); ++E)
+      for (auto &O : E->I->operands())
+        if (O == Cut || Above.count(O)) {
+          Above.insert(E->I);
+          break;
+        }
+    if (!Above.count(Root)) continue;
+    llvm::SmallVector<llvm::Value *, 4> Around;
+    bool Ok = true;
+    for (auto &E : Cand.AST) {
+      if (!Above.count(E.I)) continue;
+      for (auto &O : E.I->operands()) {
+        llvm::Value *V = O.get();
+        if (V == Cut || Above.count(V) || isa<Constant>(V)) continue;
+        if (!V->getType()->isIntegerTy() ||
+            V->getType()->getIntegerBitWidth() > 64)
+          Ok = false;
+        else if (!llvm::is_contained(Around, V))
+          Around.push_back(V);
+      }
+    }
+    if (!Ok || Around.empty() || Around.size() > 8) continue;
+    if (++Tries > 8) break;
+
+    // Each subtree as cut & M, on samples of the candidate's variables
+    llvm::SmallVector<BFSEntry, 16> CutAST;
+    llvm::SmallVector<llvm::Value *, 8> CutVars;
+    getAST(DT, CutI, CutAST, CutVars, true);
+    struct Leaf {
+      llvm::Value *V;
+      llvm::SmallVector<BFSEntry, 16> AST;
+      llvm::SmallVector<llvm::Value *, 8> Vars;
+      uint64_t M = 0;
+    };
+    llvm::SmallVector<Leaf, 4> Leaves;
+    // A value on one sample of the variables (a variable is its own value)
+    auto Eval = [&](llvm::Value *V, llvm::SmallVectorImpl<BFSEntry> &AST,
+                    llvm::SmallVectorImpl<llvm::Value *> &Vars,
+                    llvm::DenseMap<llvm::Value *, APInt> &In,
+                    bool &Err) -> uint64_t {
+      llvm::SmallVector<APInt, 8> Par;
+      for (auto *X : Vars) {
+        auto It = In.find(X);
+        if (It == In.end()) {
+          Err = true;
+          return 0;
+        }
+        Par.push_back(It->second);
+      }
+      if (AST.empty()) return Par[0].getZExtValue();
+      bool E = false;
+      APInt R = this->evaluateAST(AST, Vars, Par, E);
+      Err |= E;
+      return E ? 0 : R.getZExtValue();
+    };
+    const uint64_t CutMask = BitWidth == 64 ? ~0ull : (1ull << BitWidth) - 1;
+    llvm::SmallVector<llvm::DenseMap<llvm::Value *, APInt>, 64> Samples;
+    for (int i = 0; i < 64 && Ok; i++) {
+      llvm::DenseMap<llvm::Value *, APInt> In;
+      auto Add = [&](llvm::SmallVectorImpl<llvm::Value *> &Vars) {
+        for (auto *X : Vars) {
+          if (!X->getType()->isIntegerTy() ||
+              X->getType()->getIntegerBitWidth() > 64)
+            Ok = false;
+          if (!Ok || In.count(X)) continue;
+          unsigned W = X->getType()->getIntegerBitWidth();
+          uint64_t R = i < 3 ? uint64_t(i) - 1 : SP64.next();
+          In.try_emplace(X, APInt(W, W == 64 ? R : R & ((1ull << W) - 1)));
+        }
+      };
+      Add(Cand.Variables);
+      Add(CutVars);
+      if (Ok) Samples.push_back(std::move(In));
+    }
+    if (!Ok) continue;
+    bool Err = false;
+    llvm::SmallVector<uint64_t, 64> CV;
+    for (auto &In : Samples) CV.push_back(Eval(Cut, CutAST, CutVars, In, Err));
+    if (Err) continue;
+    // A subtree that is not cut & M may hold one: (v & 1) | (K-1) does. Its
+    // operands are tried instead, and its uses of them rewritten too.
+    llvm::SmallPtrSet<llvm::Value *, 16> Expanded;
+    llvm::SmallVector<llvm::Value *, 8> Pending(Around.begin(), Around.end());
+    int Budget = 16;
+    while (Ok && !Pending.empty()) {
+      llvm::Value *V = Pending.pop_back_val();
+      if (llvm::any_of(Leaves, [&](Leaf &L) { return L.V == V; })) continue;
+      Leaf L{V};
+      if (auto *I = dyn_cast<Instruction>(V)) getAST(DT, I, L.AST, L.Vars, true);
+      if (L.AST.empty()) L.Vars.assign(1, V);  // a variable itself
+      llvm::SmallVector<uint64_t, 64> LV;
+      for (auto &In : Samples) {
+        LV.push_back(Eval(V, L.AST, L.Vars, In, Err));
+        L.M |= LV.back();
+      }
+      bool Fits = !Err && L.M && (L.M & ~CutMask) == 0;
+      for (size_t i = 0; i < CV.size() && Fits; i++)
+        Fits = LV[i] == (CV[i] & L.M);
+      if (Fits) {
+        Leaves.push_back(std::move(L));
+        continue;
+      }
+      auto *I = dyn_cast<Instruction>(V);
+      // (never inside the cut's own tree: the cut would read itself)
+      if (Err || !I || !InAST.count(I) || --Budget < 0 ||
+          llvm::any_of(CutAST, [&](BFSEntry &E) { return E.I == I; })) {
+        Ok = false;
+        break;
+      }
+      Expanded.insert(I);
+      for (auto &O : I->operands())
+        if (O != Cut && !isa<Constant>(O)) {
+          if (!O->getType()->isIntegerTy() ||
+              O->getType()->getIntegerBitWidth() > 64)
+            Ok = false;
+          Pending.push_back(O);
+        }
+    }
+    if (!Ok || Leaves.empty() || Leaves.size() > 4) continue;
+
+    // cut & M right after the cut; each proved equal to its subtree, then
+    // used in the candidate in its place
+    IRBuilder<> B(CutI->getNextNode());
+    llvm::SmallVector<Instruction *, 8> New;
+    llvm::SmallVector<std::pair<llvm::Value *, Instruction *>, 4> Swap;
+    for (auto &L : Leaves) {
+      Type *T = L.V->getType();
+      llvm::Value *X = B.CreateZExtOrTrunc(Cut, T);
+      if (X != Cut) New.push_back(cast<Instruction>(X));
+      auto *A = cast<Instruction>(B.CreateAnd(X, ConstantInt::get(T, L.M)));
+      New.push_back(A);
+      Swap.push_back({L.V, A});
+
+      IRBuilder<> BD(Root);
+      auto *D = cast<Instruction>(BD.CreateXor(L.V, A));
+      llvm::SmallVector<BFSEntry, 16> DAST;
+      llvm::SmallVector<llvm::Value *, 8> DVars;
+      getAST(DT, D, DAST, DVars, true);
+      std::string Zero = "0";
+      const bool SavedProve = this->Prove;
+      this->Prove = true;
+      Ok = this->verify(getASTSize(DAST), DAST, Zero, DVars,
+                        T->getIntegerBitWidth());
+      this->Prove = SavedProve;
+      D->eraseFromParent();
+      if (this->Debug)
+        outs() << "[*] [PIECEWISE] around the cut: '" << L.M << "' mask -> "
+               << (Ok ? "proved" : "rejected") << "\n";
+      if (!Ok) break;
+    }
+    auto Undo = [&]() {
+      for (auto &[Old, NewI] : Swap) NewI->replaceAllUsesWith(Old);
+      for (auto I = New.rbegin(); I != New.rend(); ++I) (*I)->eraseFromParent();
+    };
+    if (!Ok) {
+      Undo();
+      continue;
+    }
+    for (auto &[Old, NewI] : Swap)
+      Old->replaceUsesWithIf(
+          NewI, [&](Use &U) {
+            return Above.count(U.getUser()) || Expanded.count(U.getUser());
+          });
+
+    LSiMBA::MBACandidate Saved = Cand;
+    auto Rebuild = [&]() {
+      InAST.clear();
+      for (auto &E : Cand.AST) InAST.insert(E.I);
+    };
+    Cand.AST.clear();
+    Cand.Variables.clear();
+    getAST(DT, Root, Cand.AST, Cand.Variables, true);
+    Rebuild();
+    llvm::SmallVector<llvm::Value *, 1> One{Cut};
+    if (tryPiecewiseCuts(Cand, BitWidth, One, Body, Hints)) return true;
+    Undo();
+    Cand = Saved;
+    Rebuild();
+  }
+  return false;
+}
+
+bool LLVMParser::tryPiecewiseCuts(
+    LSiMBA::MBACandidate &Cand, int BitWidth,
+    llvm::SmallVectorImpl<llvm::Value *> &Cuts,
+    llvm::function_ref<bool(llvm::Value *, llvm::SmallVectorImpl<BFSEntry> &)>
+        Body,
+    const std::vector<uint64_t> &Hints) {
+  auto FullWidth = [&](llvm::Value *V) {
+    return V->getType()->isIntegerTy() &&
+           V->getType()->getIntegerBitWidth() == (unsigned)BitWidth;
+  };
   int Tries = 0;
   for (auto *Cut : Cuts) {
     llvm::SmallVector<BFSEntry, 16> Sub;
@@ -1771,7 +1989,7 @@ bool LLVMParser::tryPiecewise(LSiMBA::MBACandidate &Cand, int BitWidth) {
       Error |= E;
       return E ? 0 : R.getZExtValue();
     };
-    std::string P = LSiMBA::simplifyPiecewise(F, BitWidth, "a");
+    std::string P = LSiMBA::simplifyPiecewise(F, BitWidth, "a", Hints);
     if (Error || P.empty()) continue;
 
     // The step was found on samples, so it is always proved, with or
@@ -3010,7 +3228,7 @@ bool LLVMParser::findReplacements(llvm::DominatorTree *DT,
       }
       // One variable, a simple base plus a two-valued step: g(a) ^ (a <= T ?
       // C1 : C0), the comparison hidden as a borrow (see Piecewise.h).
-      if (!Cand.isValid) tryPiecewise(Cand, BitWidth);
+      if (!Cand.isValid) tryPiecewise(DT, Cand, BitWidth);
     }
 
     // Update cache
@@ -3192,7 +3410,7 @@ bool LLVMParser::walkSubAST(llvm::DominatorTree *DT,
         C.isValid = this->verify(C.ASTSize, C.AST, C.Replacement, C.Variables,
                                  BitWidth);
       }
-      if (!C.isValid) tryPiecewise(C, BitWidth);
+      if (!C.isValid) tryPiecewise(DT, C, BitWidth);
 
       if (C.isValid) {
         // Store valid replacement
