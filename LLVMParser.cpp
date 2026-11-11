@@ -49,6 +49,7 @@
 
 #include "CSiMBA.h"
 #include "Modulo.h"
+#include "Piecewise.h"
 #include "ShuttingYard.h"
 #include "Simplifier.h"
 #include "SimplifierRouter.h"
@@ -1694,6 +1695,81 @@ bool LLVMParser::tryCandidateSimplifications(LSiMBA::MBACandidate &Cand,
   return false;
 }
 
+bool LLVMParser::tryPiecewise(LSiMBA::MBACandidate &Cand, int BitWidth) {
+  if (BitWidth < 8 || BitWidth > 64 || Cand.AST.empty()) return false;
+  auto *Root = Cand.AST.front().I;
+  auto FullWidth = [&](llvm::Value *V) {
+    return V->getType()->isIntegerTy() &&
+           V->getType()->getIntegerBitWidth() == (unsigned)BitWidth;
+  };
+
+  // The variable of the step: the candidate's own, if it has one, else a
+  // cut - a node of the tree every path from the root to a variable goes
+  // through (an obfuscated t6 = f(t5), with t5 computed from two loads).
+  // The step's body is then the part of the tree above the cut.
+  llvm::SmallPtrSet<llvm::Instruction *, 32> InAST;
+  for (auto &E : Cand.AST) InAST.insert(E.I);
+  auto Body = [&](llvm::Value *Cut, llvm::SmallVectorImpl<BFSEntry> &Out) {
+    llvm::SmallPtrSet<llvm::Instruction *, 32> Seen{Root};
+    llvm::SmallVector<llvm::Instruction *, 32> Work{Root};
+    while (!Work.empty()) {
+      auto *I = Work.pop_back_val();
+      for (auto &O : I->operands()) {
+        if (O == Cut || isa<Constant>(O)) continue;
+        auto *OI = dyn_cast<Instruction>(O);
+        if (!OI || !InAST.count(OI)) return false;  // another variable
+        if (Seen.insert(OI).second) Work.push_back(OI);
+      }
+    }
+    for (auto &E : Cand.AST)
+      if (Seen.count(E.I)) Out.push_back(E);
+    return true;
+  };
+  llvm::SmallVector<llvm::Value *, 8> Cuts;
+  if (Cand.Variables.size() == 1) Cuts.push_back(Cand.Variables[0]);
+  // deepest first: the most of the tree in the step
+  for (auto E = Cand.AST.rbegin(); E != Cand.AST.rend(); ++E)
+    if (E->I != Root && !E->I->isCast()) Cuts.push_back(E->I);
+
+  int Tries = 0;
+  for (auto *Cut : Cuts) {
+    llvm::SmallVector<BFSEntry, 16> Sub;
+    if (!FullWidth(Cut) || !Body(Cut, Sub) || getASTSize(Sub) < 3) continue;
+    if (++Tries > 8) break;
+    llvm::SmallVector<llvm::Value *, 1> Var{Cut};
+
+    bool Error = false;
+    auto F = [&](uint64_t X) -> uint64_t {
+      llvm::SmallVector<APInt, 1> Par{APInt(BitWidth, X)};
+      bool E = false;
+      APInt R = this->evaluateAST(Sub, Var, Par, E);
+      Error |= E;
+      return E ? 0 : R.getZExtValue();
+    };
+    std::string P = LSiMBA::simplifyPiecewise(F, BitWidth, "a");
+    if (Error || P.empty()) continue;
+
+    // The step was found on samples, so it is always proved, with or
+    // without --prove
+    const bool SavedProve = this->Prove;
+    this->Prove = true;
+    const bool Ok = this->verify(getASTSize(Sub), Sub, P, Var, BitWidth);
+    this->Prove = SavedProve;
+    if (this->Debug)
+      outs() << "[*] [PIECEWISE] '" << P << "' -> "
+             << (Ok ? "proved" : "rejected") << "\n";
+    if (!Ok) continue;
+
+    Cand.AST.assign(Sub.begin(), Sub.end());
+    Cand.Variables.assign(Var.begin(), Var.end());
+    Cand.ASTSize = getASTSize(Sub);
+    Cand.Replacement = P;
+    Cand.isValid = true;
+    return true;
+  }
+  return false;
+}
+
 namespace {
 // ---------------------------------------------------------------------------
 // Local MBA pattern matching: a small canonical expression tree plus the
@@ -2907,6 +2983,9 @@ bool LLVMParser::findReplacements(llvm::DominatorTree *DT,
           Cand.isValid = true; // already verified inside
         }
       }
+      // One variable, a simple base plus a two-valued step: g(a) ^ (a <= T ?
+      // C1 : C0), the comparison hidden as a borrow (see Piecewise.h).
+      if (!Cand.isValid) tryPiecewise(Cand, BitWidth);
     }
 
     // Update cache
@@ -3088,6 +3167,7 @@ bool LLVMParser::walkSubAST(llvm::DominatorTree *DT,
         C.isValid = this->verify(C.ASTSize, C.AST, C.Replacement, C.Variables,
                                  BitWidth);
       }
+      if (!C.isValid) tryPiecewise(C, BitWidth);
 
       if (C.isValid) {
         // Store valid replacement
