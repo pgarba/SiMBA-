@@ -1,3 +1,4 @@
+#include <chrono>
 #include "Z3Prover.h"
 
 #include <cstdlib>
@@ -25,7 +26,7 @@ llvm::cl::opt<int> timeout(
     "timeout", llvm::cl::Optional,
     llvm::cl::desc("Timeout in seconds for the Z3 solver / simplifiers "
                   "(Default 30)"),
-    llvm::cl::value_desc("timeout"), llvm::cl::init(30),
+    llvm::cl::value_desc("timeout"), llvm::cl::init(5),
     llvm::cl::cat(SiMBAOpt));
 
 // Accept unknown as unsat
@@ -78,6 +79,9 @@ void resetZ3Solver() {
 
 void abandonZ3Solver() { Solver = nullptr; }
 
+// Work budget per check (see prove()).
+static unsigned proverRlimit() { return (unsigned)timeout * 3000u * 1000u; }
+
 bool prove(z3::expr conjecture) {
   z3::context &c = conjecture.ctx();
 
@@ -89,8 +93,15 @@ bool prove(z3::expr conjecture) {
 
   // Create new solver if needed
   if (!Solver) {
-    // Z3's "timeout" parameter is in milliseconds.
-    Z3_global_param_set("timeout", std::to_string(timeout * 1000).c_str());
+    // Bound Z3 by work (rlimit), not wall-clock time: a timeout made the
+    // verdict depend on machine load - the same proof succeeded on an idle
+    // machine and came back unknown under a parallel batch - so lifts were
+    // not reproducible. ~3000 rlimit units per ms on the hard QF_BV checks,
+    // so -timeout keeps roughly its old meaning; the wall-clock limit stays
+    // as a safety net only (12x). Global, so every solver created later
+    // (Saturn's SymLLVM included) gets the same bounds.
+    Z3_global_param_set("rlimit", std::to_string(proverRlimit()).c_str());
+    Z3_global_param_set("timeout", std::to_string(timeout * 12000).c_str());
 
     // Use the QF_BV (quantifier-free bit-vector) logic instead of the old
     // `simplify & bit-blast & smt` pipeline. The bit-blast tactic converts
@@ -109,13 +120,36 @@ bool prove(z3::expr conjecture) {
 
   // reset and add
   Solver->reset();
+  // The global "timeout" parameter above is only read when a solver is
+  // created and is not honoured by every QF_BV tactic: verify() sat in the
+  // SAT core for minutes on a hard nonlinear candidate (Civ7 0x14049C050).
+  // Bound every check explicitly; a timeout yields unknown, which is
+  // rejected unless -accept-unknown is given.
+  Solver->set("rlimit", proverRlimit());
+  Solver->set("timeout", (unsigned)(timeout * 12000));
   Solver->add(conjecture);
 
   if (PrintSMT || (getenv("SIMBA_PRINT_SMT") != nullptr)) {
     llvm::outs() << "[SMT2 Start]\n" << Solver->to_smt2() << "[SMT2 End]\n";
   }
 
+  static const bool RlimitStats = getenv("SIMBA_RLIMIT_STATS") != nullptr;
+  auto StatT0 = std::chrono::steady_clock::now();
   auto R = Solver->check();
+  if (R == z3::unknown && getenv("SATURN_DEBUG_LIMITS"))
+    fprintf(stderr, "[limit] SiMBA Z3 unknown: %s\n",
+            Solver->reason_unknown().c_str());
+  if (RlimitStats) {
+    double Rl = 0;
+    z3::stats St = Solver->statistics();
+    for (unsigned i = 0; i < St.size(); i++)
+      if (St.key(i) == "rlimit count")
+        Rl = St.is_uint(i) ? St.uint_value(i) : St.double_value(i);
+    fprintf(stderr, "[z3-rlimit] rlimit=%.0f ms=%.3f res=%d\n", Rl,
+            std::chrono::duration<double, std::milli>(
+                std::chrono::steady_clock::now() - StatT0).count(),
+            (int)R);
+  }
   if (R == z3::unsat) {
     return true;
   } else if (R == z3::unknown) {
@@ -140,13 +174,19 @@ bool proveReplacement(std::string &expr0, std::string &expr1, int BitWidth,
   std::map<std::string, z3::expr *> VarMap;
   std::map<std::string, llvm::Type *> VarTypes;
 
-  auto Z3Exp0 =
-      getZ3ExprFromString(Z3Ctx, expr0, BitWidth, Variables, VarTypes, VarMap);
-  auto Z3Exp1 =
-      getZ3ExprFromString(Z3Ctx, expr1, BitWidth, Variables, VarTypes, VarMap);
-
-  // Prove
-  auto Result = prove(((Z3Exp0 != Z3Exp1)));
+  // A z3::exception (e.g. a sort mismatch on an operator the backend does
+  // not model) used to escape uncaught and abort the whole lift. Treat it as
+  // "not proven": the candidate is rejected and the original kept.
+  bool Result = false;
+  try {
+    auto Z3Exp0 = getZ3ExprFromString(Z3Ctx, expr0, BitWidth, Variables,
+                                      VarTypes, VarMap);
+    auto Z3Exp1 = getZ3ExprFromString(Z3Ctx, expr1, BitWidth, Variables,
+                                      VarTypes, VarMap);
+    Result = prove(((Z3Exp0 != Z3Exp1)));
+  } catch (const z3::exception &E) {
+    Result = false;
+  }
 
   // Clean up variables (the z3::expr handles belong to the global context,
   // which outlives them; dropping the local references is enough).
