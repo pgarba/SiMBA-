@@ -4,6 +4,10 @@
 #include <functional>
 
 #include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/MapVector.h"
+#include "llvm/Analysis/ConstantFolding.h"
+#include "llvm/IR/ValueHandle.h"
+#include "llvm/Transforms/Utils/Local.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/IR/Function.h"
 #include "llvm/Support/raw_ostream.h"
@@ -538,6 +542,265 @@ static int rewriteNullByteRoundabouts(llvm::Function &F, bool Debug) {
   return Count;
 }
 
+// A comparison whose operands depend on one narrow value (up to 12 bits: a
+// byte widened, shifted, masked and put together again) is a predicate on
+// that value: every value is tried, which is the proof, and the comparison
+// rewritten as the plain one with the same truth table -
+//   icmp eq (or (and (lshr (ashr (shl (zext v), 56), 55), 1), 255), ...), 0
+// is icmp eq i8 v, 0. Inputs the tree is poison for are don't-cares.
+static bool foldNarrowCompare(llvm::ICmpInst *Root, bool Debug) {
+  auto Narrow = [](llvm::Value *V) {
+    return V->getType()->isIntegerTy() &&
+           V->getType()->getIntegerBitWidth() > 1 &&
+           V->getType()->getIntegerBitWidth() <= 12;
+  };
+  auto Inner = [](llvm::Value *V) {
+    auto *I = llvm::dyn_cast<llvm::Instruction>(V);
+    if (!I || !I->getType()->isIntegerTy()) return false;
+    if (llvm::isa<llvm::BinaryOperator>(I) || llvm::isa<llvm::ICmpInst>(I) ||
+        llvm::isa<llvm::SelectInst>(I))
+      return true;
+    return llvm::isa<llvm::ZExtInst>(I) || llvm::isa<llvm::SExtInst>(I) ||
+           llvm::isa<llvm::TruncInst>(I);
+  };
+  // The tree in post-order, down to its leaves. CutNarrow: a narrow value
+  // is a leaf even when it is computed (zext (trunc x) depends on 8 bits)
+  llvm::SmallVector<llvm::Instruction *, 32> Order;
+  llvm::SmallVector<llvm::Value *, 4> Leaves;
+  llvm::SmallPtrSet<llvm::Value *, 32> Seen;
+  bool Ok = true;
+  std::function<void(llvm::Value *, bool)> Walk = [&](llvm::Value *V,
+                                                      bool CutNarrow) {
+    if (!Ok || llvm::isa<llvm::ConstantInt>(V) || !Seen.insert(V).second)
+      return;
+    if (llvm::isa<llvm::Constant>(V) || Order.size() >= 48) {
+      Ok = false;
+      return;
+    }
+    if (V != Root && (!Inner(V) || (CutNarrow && Narrow(V)))) {
+      Leaves.push_back(V);
+      return;
+    }
+    auto *I = llvm::cast<llvm::Instruction>(V);
+    for (auto &O : I->operands()) Walk(O.get(), CutNarrow);
+    Order.push_back(I);
+  };
+  for (bool CutNarrow : {false, true}) {
+    Order.clear();
+    Leaves.clear();
+    Seen.clear();
+    Ok = true;
+    Walk(Root, CutNarrow);
+    if (Ok && Leaves.size() == 1 && Narrow(Leaves[0])) break;
+    Ok = false;
+  }
+  if (!Ok || Order.size() < 2) return false;
+  llvm::Value *Leaf = Leaves[0];
+  // already a comparison of the leaf with a constant
+  if ((Root->getOperand(0) == Leaf &&
+       llvm::isa<llvm::ConstantInt>(Root->getOperand(1))))
+    return false;
+
+  // The truth table: 0, 1, or 2 where the tree is poison
+  const unsigned W = Leaf->getType()->getIntegerBitWidth();
+  const unsigned Count = 1u << W;
+  const llvm::DataLayout &DL = Root->getModule()->getDataLayout();
+  std::vector<uint8_t> Table(Count);
+  llvm::DenseMap<llvm::Value *, llvm::Constant *> Val;
+  for (unsigned X = 0; X < Count; X++) {
+    Val.clear();
+    Val[Leaf] = llvm::ConstantInt::get(Leaf->getType(), X);
+    llvm::Constant *R = nullptr;
+    for (auto *I : Order) {
+      llvm::SmallVector<llvm::Constant *, 3> Ops;
+      for (auto &O : I->operands()) {
+        auto *C = llvm::dyn_cast<llvm::Constant>(O.get());
+        Ops.push_back(C ? C : Val.lookup(O.get()));
+        if (!Ops.back()) return false;
+      }
+      if (auto *Cmp = llvm::dyn_cast<llvm::ICmpInst>(I))
+        R = llvm::ConstantFoldCompareInstOperands(Cmp->getPredicate(), Ops[0],
+                                                  Ops[1], DL);
+      else
+        R = llvm::ConstantFoldInstOperands(I, Ops, DL);
+      if (!R) return false;
+      Val[I] = R;
+    }
+    if (auto *CI = llvm::dyn_cast<llvm::ConstantInt>(R))
+      Table[X] = CI->isOne();
+    else if (llvm::isa<llvm::PoisonValue>(R))
+      Table[X] = 2;
+    else
+      return false;
+  }
+
+  // The plain predicate with that table
+  auto Fits = [&](llvm::function_ref<bool(unsigned)> P) {
+    for (unsigned X = 0; X < Count; X++)
+      if (Table[X] != 2 && (Table[X] != 0) != P(X)) return false;
+    return true;
+  };
+  auto SExt = [&](unsigned X) {
+    return (int64_t)(X ^ (1u << (W - 1))) - (int64_t)(1u << (W - 1));
+  };
+  llvm::Value *New = nullptr;
+  auto *Ty = llvm::cast<llvm::IntegerType>(Leaf->getType());
+  auto Cmp = [&](llvm::CmpInst::Predicate P, unsigned K) {
+    return new llvm::ICmpInst(Root->getIterator(), P, Leaf,
+                              llvm::ConstantInt::get(Ty, K));
+  };
+  unsigned Ones = 0, Zeros = 0, One = 0, Zero = 0;
+  for (unsigned X = 0; X < Count; X++) {
+    if (Table[X] == 1) Ones++, One = X;
+    if (Table[X] == 0) Zeros++, Zero = X;
+  }
+  if (Ones == 0 || Zeros == 0) {
+    New = llvm::ConstantInt::get(Root->getType(), Ones != 0);
+  } else if (Ones == 1 && Fits([&](unsigned X) { return X == One; })) {
+    New = Cmp(llvm::CmpInst::ICMP_EQ, One);
+  } else if (Zeros == 1 && Fits([&](unsigned X) { return X != Zero; })) {
+    New = Cmp(llvm::CmpInst::ICMP_NE, Zero);
+  } else {
+    // one step: x <u K, x >=u K, x <s K, x >=s K
+    for (unsigned K = 1; K < Count && !New; K++) {
+      if (Fits([&](unsigned X) { return X < K; }))
+        New = Cmp(llvm::CmpInst::ICMP_ULT, K);
+      else if (Fits([&](unsigned X) { return X >= K; }))
+        New = Cmp(llvm::CmpInst::ICMP_UGT, K - 1);
+      else if (K != (1u << (W - 1)) &&
+               Fits([&](unsigned X) { return SExt(X) < SExt(K); }))
+        New = Cmp(llvm::CmpInst::ICMP_SLT, K);
+      else if (K != (1u << (W - 1)) &&
+               Fits([&](unsigned X) { return SExt(X) >= SExt(K); }))
+        New = Cmp(llvm::CmpInst::ICMP_SGT, K - 1);
+    }
+  }
+  if (!New) return false;
+  if (Debug) {
+    outs() << "[!] Narrow compare (" << Count << " inputs tried): ";
+    New->print(outs());
+    outs() << "\n";
+  }
+  Root->replaceAllUsesWith(New);
+  llvm::RecursivelyDeleteTriviallyDeadInstructions(Root);
+  return true;
+}
+
+static int foldNarrowCompares(llvm::Function &F, bool Debug) {
+  llvm::SmallVector<llvm::WeakVH, 16> Roots;
+  for (auto &BB : F)
+    for (auto &I : BB)
+      if (llvm::isa<llvm::ICmpInst>(&I)) Roots.push_back(&I);
+  int Count = 0;
+  // the last ones first: a comparison of comparisons before its parts
+  for (auto R = Roots.rbegin(); R != Roots.rend(); ++R)
+    if (auto *IC = llvm::dyn_cast_or_null<llvm::ICmpInst>(*R))
+      if (foldNarrowCompare(IC, Debug)) Count++;
+  return Count;
+}
+
+// A sum whose terms cancel across values with other uses, which is where
+// LLVM's reassociation stops:
+//   %d = sub i64 %l, %s        ; also stored
+//   %e = add i64 %l, %m
+//   %r = sub i64 %e, %d        ; %m + %s
+// The tree of add / sub / mul by a constant / shl by a constant under the
+// root as one linear combination of its leaves (exact: the arithmetic is
+// modular); rebuilt when a leaf's coefficients sum to zero.
+static bool cancelLinearTerms(llvm::BinaryOperator *Root, bool Debug) {
+  auto *Ty = llvm::dyn_cast<llvm::IntegerType>(Root->getType());
+  if (!Ty) return false;
+  const unsigned W = Ty->getBitWidth();
+  llvm::MapVector<llvm::Value *, llvm::APInt> Terms;
+  llvm::APInt K(W, 0);
+  int Nodes = 0;
+  std::function<void(llvm::Value *, const llvm::APInt &)> Collect =
+      [&](llvm::Value *V, const llvm::APInt &Coef) {
+        if (auto *C = llvm::dyn_cast<llvm::ConstantInt>(V)) {
+          K += Coef * C->getValue();
+          return;
+        }
+        auto *BO = llvm::dyn_cast<llvm::BinaryOperator>(V);
+        if (BO && Nodes < 64) {
+          auto *C1 = llvm::dyn_cast<llvm::ConstantInt>(BO->getOperand(1));
+          switch (BO->getOpcode()) {
+            case llvm::Instruction::Add:
+            case llvm::Instruction::Sub:
+              Nodes++;
+              Collect(BO->getOperand(0), Coef);
+              Collect(BO->getOperand(1),
+                      BO->getOpcode() == llvm::Instruction::Add ? Coef : -Coef);
+              return;
+            case llvm::Instruction::Mul:
+              if (!C1) break;
+              Nodes++;
+              Collect(BO->getOperand(0), Coef * C1->getValue());
+              return;
+            case llvm::Instruction::Shl:
+              if (!C1 || C1->getValue().uge(W)) break;
+              Nodes++;
+              Collect(BO->getOperand(0), Coef.shl(C1->getValue()));
+              return;
+            default:
+              break;
+          }
+        }
+        auto It = Terms.find(V);
+        if (It == Terms.end())
+          Terms.insert({V, Coef});
+        else
+          It->second += Coef;
+      };
+  Collect(Root, llvm::APInt(W, 1));
+  int Left = 0;
+  for (auto &T : Terms) Left += !T.second.isZero();
+  if (Left == (int)Terms.size() || Left > 8) return false;  // nothing cancels
+
+  // positive terms first, so the sum starts with a value and not 0 - x
+  llvm::IRBuilder<> B(Root);
+  llvm::Value *Acc = nullptr;
+  for (bool Negative : {false, true})
+    for (auto &T : Terms) {
+      if (T.second.isZero() || T.second.isNegative() != Negative) continue;
+      llvm::APInt C = Negative && Acc ? -T.second : T.second;
+      llvm::Value *X = C.isOne()
+                           ? T.first
+                           : B.CreateMul(T.first, llvm::ConstantInt::get(Ty, C));
+      if (!Acc)
+        Acc = X;
+      else
+        Acc = Negative ? B.CreateSub(Acc, X) : B.CreateAdd(Acc, X);
+    }
+  llvm::Value *New = !Acc ? llvm::ConstantInt::get(Ty, K)
+                     : K.isZero() ? Acc
+                                  : B.CreateAdd(Acc, llvm::ConstantInt::get(Ty, K));
+  if (New == Root) return false;
+  if (Debug) {
+    outs() << "[!] Linear terms cancel: " << Terms.size() - Left << " of "
+           << Terms.size() << " leaves gone from ";
+    Root->printAsOperand(outs(), false);
+    outs() << "\n";
+  }
+  Root->replaceAllUsesWith(New);
+  llvm::RecursivelyDeleteTriviallyDeadInstructions(Root);
+  return true;
+}
+
+static int cancelLinearTerms(llvm::Function &F, bool Debug) {
+  llvm::SmallVector<llvm::WeakVH, 32> Roots;
+  for (auto &BB : F)
+    for (auto &I : BB)
+      if (I.getOpcode() == llvm::Instruction::Add ||
+          I.getOpcode() == llvm::Instruction::Sub)
+        Roots.push_back(&I);
+  int Count = 0;
+  // the last ones first: a whole sum before its parts
+  for (auto R = Roots.rbegin(); R != Roots.rend(); ++R)
+    if (auto *BO = llvm::dyn_cast_or_null<llvm::BinaryOperator>(*R))
+      if (cancelLinearTerms(BO, Debug)) Count++;
+  return Count;
+}
+
 int LLVMParser::extractAndSimplify() {
   int MBASimplified = 0;
 
@@ -697,6 +960,16 @@ int LLVMParser::extractAndSimplify() {
     // the string-candidate flow, which preserves these checks (a 1-bit
     // candidate cannot express `byte == 0`).
     rewriteNullByteRoundabouts(*F, this->Debug);
+
+    // What the candidates don't cover: a comparison that depends on one
+    // narrow value, and sums whose terms cancel across shared values
+    if (int N = foldNarrowCompares(*F, this->Debug) +
+                cancelLinearTerms(*F, this->Debug)) {
+      MBASimplified += N;
+      MBACount += N;
+      MBACountStats += N;
+      Replaced = true;
+    }
 
     // Optimize if any replacements
     if (Replaced && this->OptimizeAfter) {
