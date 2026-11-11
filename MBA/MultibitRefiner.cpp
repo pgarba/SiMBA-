@@ -1,6 +1,12 @@
 // MSiMBA — Multi-bit refiner implementation.
 #include "MultibitRefiner.h"
 
+#ifdef _MSC_VER
+#include <intrin.h>
+static inline int __builtin_ctzll(unsigned long long x) { unsigned long i; _BitScanForward64(&i, x); return (int)i; }
+static inline int __builtin_clzll(unsigned long long x) { unsigned long i; _BitScanReverse64(&i, x); return 63 - (int)i; }
+#endif
+
 #include <algorithm>
 #include <climits>
 

@@ -2126,7 +2126,7 @@ MExprPtr mTruncNarrow(const MExprPtr &E,
 // variable's true width. Returns false if the cast's operand is not a Var of
 // known width (or the width is too large to bound with 64-bit math).
 bool castBounds(const MExprPtr &C, const std::map<std::string, int> &VarWidths,
-                long &lo, long &hi) {
+                int64_t &lo, int64_t &hi) {
   if (!C || C->K != MExpr::Cast || (C->Op != "sext" && C->Op != "zext"))
     return false;
   if (!C->L || C->L->K != MExpr::Var) return false;
@@ -2136,10 +2136,10 @@ bool castBounds(const MExprPtr &C, const std::map<std::string, int> &VarWidths,
   int W = It->second;
   if (C->Op == "zext") {
     lo = 0;
-    hi = (1L << W) - 1;
+    hi = (int64_t(1) << W) - 1;
   } else {
-    lo = -(1L << (W - 1));
-    hi = (1L << (W - 1)) - 1;
+    lo = -(int64_t(1) << (W - 1));
+    hi = (int64_t(1) << (W - 1)) - 1;
   }
   return true;
 }
@@ -2206,29 +2206,32 @@ MExprPtr tryAshrFolds(const MExprPtr &E,
           if (Side->K != MExpr::Bin || Side->Op != "<" || !Side->R ||
               Side->R->K != MExpr::Const)
             continue;
-          long K = 0;
+          int64_t K = 0;
           try {
-            K = std::stol(Side->R->S);
+            K = std::stoll(Side->R->S);
           } catch (...) {
             continue;
           }
           if (K != A || K <= 0 || K > 62) continue;
-          long C = 0;
+          int64_t C = 0;
           try {
-            C = std::stol(Cst->S);
+            C = std::stoll(Cst->S);
           } catch (...) {
             continue;
           }
-          if ((C & ((1L << K) - 1)) != 0) continue;  // C must be a multiple of 2^K
+          if ((C & ((int64_t(1) << K) - 1)) != 0) continue;  // C must be a multiple of 2^K
           auto Cast = Side->L;
-          long lo = 0, hi = 0;
+          int64_t lo = 0, hi = 0;
           if (!castBounds(Cast, VarWidths, lo, hi)) continue;
           // Overflow check on the scaled sum (mathematical, signed): the
           // identity holds only when cast*2^K + C does not wrap 64 bits.
-          __int128 Lim = (__int128)1 << 64;
-          if ((__int128)lo << K <= -Lim - C || ((__int128)hi << K) >= Lim - C)
+          const llvm::APInt Lim = llvm::APInt::getOneBitSet(128, 64);
+          const llvm::APInt C128(128, (uint64_t)C, true);
+          const llvm::APInt Lo = llvm::APInt(128, (uint64_t)lo, true).shl((unsigned)K);
+          const llvm::APInt Hi = llvm::APInt(128, (uint64_t)hi, true).shl((unsigned)K);
+          if (Lo.sle(-Lim - C128) || Hi.sge(Lim - C128))
             continue;
-          return mBin("+", Cast, mConst(std::to_string(C / (1L << K))));
+          return mBin("+", Cast, mConst(std::to_string(C / (int64_t(1) << K))));
         }
       }
     }
