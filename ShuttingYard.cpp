@@ -120,9 +120,15 @@ int countOperators(std::string &expr) {
   return OpCount;
 }
 
+// Tokenize an expression string. A string that cannot be tokenized (unknown
+// character, malformed cast) is fatal by default; pass Ok to get *Ok = false
+// back instead - callers that are only *checking* a candidate (eval() from
+// verify()) must be able to reject it rather than abort the whole lift.
 void exprToTokens(const std::string &expr, veque::veque<Token> &tokens,
                   bool detectVariables = false,
-                  std::vector<std::string> *VNames = nullptr) {
+                  std::vector<std::string> *VNames = nullptr,
+                  bool *Ok = nullptr) {
+  if (Ok) *Ok = true;
   int Index;
   for (const auto *p = expr.c_str(); *p; ++p) {
     if (isblank(*p)) {
@@ -166,6 +172,16 @@ void exprToTokens(const std::string &expr, veque::veque<Token> &tokens,
                         std::to_string(tw);
         tokens.push_back(Token{Token::Type::Operator, s, 9, false, true});
         p = endBracket;  // loop's ++p moves past ']'
+      } else {
+        // An intermediate cast ("zext[64](...)", no source width) that should
+        // have been rewritten away before rendering (see mStr). Skipping just
+        // the 's'/'z' used to leave "ext[..." behind and die on the 'e'.
+        if (Ok) {
+          *Ok = false;
+          return;
+        }
+        llvm::outs() << "[exprToTokens]: Malformed cast in '" << expr << "'\n";
+        report_fatal_error("[exprToTokens]: malformed cast", false);
       }
     } else {
       Token::Type t = Token::Type::Unknown;
@@ -173,6 +189,16 @@ void exprToTokens(const std::string &expr, veque::veque<Token> &tokens,
       bool rightAssociative = false;
       bool unary = false;
       char c = *p;
+
+      // Comparisons '<=u' (unsigned) and '<=s' (signed), 1 or 0: the
+      // piecewise simplifier's threshold tests (see Piecewise.h). Tokens 'U'
+      // and 'S', below every other binary operator.
+      if (c == '<' && p[1] == '=' && (p[2] == 'u' || p[2] == 's')) {
+        tokens.push_back(Token{Token::Type::Operator, p[2] == 'u' ? "U" : "S",
+                               1, false, false});
+        p += 2;
+        continue;
+      }
 
       // Multi-character shift operators '<<' and '>>' (GAMBA notation). A
       // single '<' or '>' (not doubled) is not a valid operator.
@@ -187,7 +213,21 @@ void exprToTokens(const std::string &expr, veque::veque<Token> &tokens,
 
       switch (c) {
         default:
-          llvm::outs() << "[exprToTokens]: Unkown Token '" << c << "'\n";
+          // Print the whole expression and the variable names it was meant to
+          // be read with: an unknown letter almost always means the two
+          // disagree (expression uses more variables than VNames lists).
+          if (Ok) {
+            *Ok = false;
+            return;
+          }
+          llvm::outs() << "[exprToTokens]: Unkown Token '" << c
+                       << "' at offset " << (p - expr.c_str()) << " in '"
+                       << expr << "' (variables:";
+          if (VNames)
+            for (auto &N : *VNames) llvm::outs() << " " << N;
+          else
+            llvm::outs() << " <none>";
+          llvm::outs() << ")\n";
           report_fatal_error("", false);
           break;
         case '(':
@@ -636,6 +676,13 @@ void createLLVMReplacement(llvm::Instruction *InsertionPoint,
               // stackAP.push_back(lhsAP - rhsAP);
               stackAP.push_back(Builder.CreateSub(lhsAP, rhsAP));
               break;
+            case 'U':
+            case 'S':
+              stackAP.push_back(Builder.CreateZExt(
+                  token.str[0] == 'U' ? Builder.CreateICmpULE(lhsAP, rhsAP)
+                                      : Builder.CreateICmpSLE(lhsAP, rhsAP),
+                  lhsAP->getType()));
+              break;
           }
         }
       } break;
@@ -814,6 +861,13 @@ llvm::Function *createLLVMFunction(
               // stackAP.push_back(lhsAP - rhsAP);
               stackAP.push_back(Builder.CreateSub(lhsAP, rhsAP));
               break;
+            case 'U':
+            case 'S':
+              stackAP.push_back(Builder.CreateZExt(
+                  token.str[0] == 'U' ? Builder.CreateICmpULE(lhsAP, rhsAP)
+                                      : Builder.CreateICmpSLE(lhsAP, rhsAP),
+                  lhsAP->getType()));
+              break;
           }
         }
       } break;
@@ -854,7 +908,7 @@ APInt APIntPow(APInt base, APInt exp) {
 }
 
 APInt eval(std::string expr, llvm::SmallVectorImpl<APInt> &par, int BitWidth,
-           int *OperationCount) {
+           int *OperationCount, bool *Ok) {
   // Replace variables with values in expression
   for (int i = 0; i < par.size(); i++) {
     std::string var = "X[" + std::to_string(i) + "]";
@@ -876,7 +930,12 @@ APInt eval(std::string expr, llvm::SmallVectorImpl<APInt> &par, int BitWidth,
   replace_all(expr, "**", "#");
 
   veque::veque<Token> tokens;
-  exprToTokens(expr, tokens);
+  bool TokOk = true;
+  exprToTokens(expr, tokens, false, nullptr, Ok ? &TokOk : nullptr);
+  if (Ok) {
+    *Ok = TokOk;
+    if (!TokOk) return APInt(BitWidth, 0);
+  }
 
   veque::veque<Token> queue;
   shuntingYard(tokens, queue);
@@ -1004,6 +1063,12 @@ APInt eval(std::string expr, llvm::SmallVectorImpl<APInt> &par, int BitWidth,
               break;
             case '#':
               stackAP.push_back(APIntPow(lhsAP, rhsAP));
+              break;
+            case 'U':
+              stackAP.push_back(APInt(BitWidth, lhsAP.ule(rhsAP) ? 1 : 0));
+              break;
+            case 'S':
+              stackAP.push_back(APInt(BitWidth, lhsAP.sle(rhsAP) ? 1 : 0));
               break;
           }
         }
@@ -1142,12 +1207,32 @@ z3::expr getZ3ExprFromString(z3::context &Z3Ctx, std::string &expr,
               // inside Z3_mk_fpa_to_fp_unsigned. Use a real FPA sort that can
               // hold BitWidth-bit values: fpa64 for <= 64 bits, otherwise a
               // custom FPA with a full-mantissa width.
-              auto Sort = (BitWidth <= 64)
-                              ? Z3Ctx.fpa_sort(11, 52)
-                              : Z3Ctx.fpa_sort(16, (unsigned)BitWidth + 1);
-              auto PowExpr = z3::pw(z3::ubv_to_fpa(lhsAP, Sort),
-                                    z3::ubv_to_fpa(rhsAP, Sort));
-              stackAP.push_back(z3::fpa_to_ubv(PowExpr, BitWidth));
+              //
+              // z3::pw is only defined for Int/Real sorts: applied to the FPA
+              // values it threw "Sort mismatch ... (declare-fun ^ (Int Int)
+              // Real)" and, uncaught, aborted the whole lift (Civ7
+              // 0x14041A490). MBA power is integer exponentiation mod
+              // 2^BitWidth, so compute exactly that on the bit-vectors: square-
+              // and-multiply for a constant exponent. A symbolic exponent is
+              // not modelled - use a fresh unconstrained value, so any
+              // equivalence proof involving it fails and the candidate is
+              // rejected rather than wrongly accepted.
+              uint64_t Exp = 0;
+              if (rhsAP.is_numeral_u64(Exp)) {
+                z3::expr Result = Z3Ctx.bv_val(1, BitWidth);
+                z3::expr Base = lhsAP;
+                while (Exp) {
+                  if (Exp & 1) Result = Result * Base;
+                  Exp >>= 1;
+                  if (Exp) Base = Base * Base;
+                }
+                stackAP.push_back(Result.simplify());
+              } else {
+                static unsigned PowCounter = 0;
+                std::string Name = "__pow_unmodelled_" +
+                                   std::to_string(PowCounter++);
+                stackAP.push_back(Z3Ctx.bv_const(Name.c_str(), BitWidth));
+              }
             } break;
             case '/': {
               auto DivExpr = lhsAP / rhsAP;
@@ -1172,6 +1257,14 @@ z3::expr getZ3ExprFromString(z3::context &Z3Ctx, std::string &expr,
             case '-': {
               auto SubExpr = lhsAP - rhsAP;
               stackAP.push_back(SubExpr);
+            } break;
+            case 'U':
+            case 'S': {
+              const unsigned W = lhsAP.get_sort().bv_size();
+              auto Cmp = token.str[0] == 'U' ? z3::ule(lhsAP, rhsAP)
+                                             : z3::sle(lhsAP, rhsAP);
+              stackAP.push_back(z3::ite(Cmp, Z3Ctx.bv_val(1, W),
+                                        Z3Ctx.bv_val(0, W)));
             } break;
           }
         }

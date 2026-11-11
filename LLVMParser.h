@@ -119,6 +119,9 @@ class LLVMParser {
   */
   bool tryCandidateSimplifications(LSiMBA::MBACandidate &Cand, int BitWidth);
 
+  // A step function of one variable (see Piecewise.h), proved with Z3
+  bool tryPiecewise(LSiMBA::MBACandidate &Cand, int BitWidth);
+
   /*
     Local MBA pattern matching: recognize the classic mixed boolean-arithmetic
     identities in the instruction sequence (e.g. a+b-2*(a&b) -> a^b,

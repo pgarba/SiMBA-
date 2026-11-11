@@ -16,7 +16,9 @@
 #include "LLVMParser.h"
 #include "ShuttingYard.h"
 #include "Simplifier.h"
+#include "Piecewise.h"
 #include "SimplifierRouter.h"
+#include "Z3Prover.h"
 
 using namespace std;
 using namespace llvm;
@@ -173,9 +175,68 @@ int main(int argc, char **argv) {
   return 0;
 }
 
+// 0x... constants as decimal, the only numbers eval() and the Z3 string
+// reader take
+static std::string hexToDecimal(const std::string &E) {
+  std::string R;
+  for (size_t i = 0; i < E.size(); i++) {
+    if (E[i] == '0' && i + 2 < E.size() && (E[i + 1] == 'x' || E[i + 1] == 'X') &&
+        isxdigit((unsigned char)E[i + 2]) &&
+        (i == 0 || !isalnum((unsigned char)E[i - 1]))) {
+      size_t j = i + 2;
+      while (j < E.size() && isxdigit((unsigned char)E[j])) j++;
+      R += std::to_string(std::stoull(E.substr(i + 2, j - i - 2), nullptr, 16));
+      i = j - 1;
+    } else {
+      R += E[i];
+    }
+  }
+  return R;
+}
+
+// The expression as a step function of its one variable (see Piecewise.h),
+// always proved with Z3: the step is found on samples
+static bool TrySinglePiecewise(std::string &Out) {
+  std::string E;
+  try {
+    E = hexToDecimal(StrMBA);
+  } catch (...) {
+    return false;  // a constant wider than 64 bits
+  }
+  auto Vars = LSiMBA::Simplifier::getVariables(E);
+  if (Vars.size() != 1) return false;
+  std::string X = E;
+  LSiMBA::Simplifier::replaceAllStrings(X, Vars[0], "X[0]");
+  bool Ok = true;
+  auto F = [&](uint64_t V) -> uint64_t {
+    SmallVector<APInt, 1> Par{APInt(BitCount, V)};
+    bool EOk = true;
+    APInt R = eval(X, Par, BitCount, nullptr, &EOk);
+    Ok &= EOk;
+    return EOk ? R.getZExtValue() : 0;
+  };
+  std::string P = LSiMBA::simplifyPiecewise(F, BitCount, Vars[0]);
+  if (!Ok || P.empty()) return false;
+  std::string E0 = E, E1 = P;
+  if (!proveReplacement(E0, E1, BitCount, Vars)) return false;
+  Out = P;
+  return true;
+}
+
 void SimplifySingleMBA() {
   std::string SimpMBA = "";
   auto start = high_resolution_clock::now();
+
+  // Before reporting a failure: the step-function form
+  auto Piecewise = [&]() {
+    std::string P;
+    if (!TrySinglePiecewise(P)) return false;
+    auto duration =
+        duration_cast<milliseconds>(high_resolution_clock::now() - start);
+    printf("[+] [Simplified MBA] '%s' (piecewise, proved) time: %dms\n",
+           P.c_str(), (int)duration.count());
+    return true;
+  };
 
   // Phase 9: route to the selected simplifier (--simplifier, default auto).
   // The native route keeps the original code path below untouched.
@@ -199,6 +260,7 @@ void SimplifySingleMBA() {
   }
 
   if (R == LSiMBA::RouteResult::FAILED) {
+    if (Piecewise()) return;
     auto stop = high_resolution_clock::now();
     auto duration = duration_cast<milliseconds>(stop - start);
     printf(
@@ -209,6 +271,7 @@ void SimplifySingleMBA() {
   }
 
   if (R == LSiMBA::RouteResult::INVALID) {
+    if (Piecewise()) return;
     auto stop = high_resolution_clock::now();
     auto duration = duration_cast<milliseconds>(stop - start);
     printf(
@@ -233,6 +296,8 @@ void SimplifySingleMBA() {
       Result = true;
     }
   }
+
+  if (Result != true && Piecewise()) return;
 
   auto stop = high_resolution_clock::now();
   auto duration = duration_cast<milliseconds>(stop - start);

@@ -204,7 +204,7 @@ bool evalBVDirect(z3::expr e, const std::vector<std::string> &vars,
       out = (0 - argval(0, ok)) & mask;
       done = true;
     } else if ((n == "bvmul" || n == "bvsmul") && na == 2) {
-      __uint128_t p = (__uint128_t)argval(0, ok) * (__uint128_t)argval(1, ok);
+      uint64_t p = argval(0, ok) * argval(1, ok);  // the low 64 bits are all that is kept
       out = (uint64_t)(p & mask);
       done = true;
     } else if (n == "shl" && na == 2) {
@@ -238,8 +238,14 @@ bool isSemiLinearClass(const std::string &expr, int bitCount,
   std::map<std::string, z3::expr *> varMap;
   std::string q = expr;
   std::vector<std::string> vcopy = vars;
-  z3::expr e = getZ3ExprFromString(c, q, bitCount, vcopy, varTypes, varMap);
-  return semiLin(e);
+  // A Z3 sort error while building the expression means "not in the class",
+  // not a reason to abort the caller (see proveReplacement in Z3Prover.cpp).
+  try {
+    z3::expr e = getZ3ExprFromString(c, q, bitCount, vcopy, varTypes, varMap);
+    return semiLin(e);
+  } catch (const z3::exception &) {
+    return false;
+  }
 }
 
 int proveSemiLinear(const std::string &e0, const std::string &e1,
@@ -255,8 +261,13 @@ int proveSemiLinear(const std::string &e0, const std::string &e1,
   std::map<std::string, z3::expr *> varMap;
   std::string q0 = e0, q1 = e1;
   std::vector<std::string> vcopy = vars;
-  z3::expr s0 = getZ3ExprFromString(c, q0, bitCount, vcopy, varTypes, varMap);
-  z3::expr s1 = getZ3ExprFromString(c, q1, bitCount, vcopy, varTypes, varMap);
+  z3::expr s0 = c.bv_val(0, bitCount), s1 = c.bv_val(0, bitCount);
+  try {
+    s0 = getZ3ExprFromString(c, q0, bitCount, vcopy, varTypes, varMap);
+    s1 = getZ3ExprFromString(c, q1, bitCount, vcopy, varTypes, varMap);
+  } catch (const z3::exception &) {
+    return 2; // abstain
+  }
 
   if (!semiLin(s0) || !semiLin(s1))
     return 2; // abstain: class precondition not met

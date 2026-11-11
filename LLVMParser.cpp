@@ -1,3 +1,4 @@
+#include <unordered_map>
 #include "LLVMParser.h"
 
 #include <functional>
@@ -48,6 +49,7 @@
 
 #include "CSiMBA.h"
 #include "Modulo.h"
+#include "Piecewise.h"
 #include "ShuttingYard.h"
 #include "Simplifier.h"
 #include "SimplifierRouter.h"
@@ -94,6 +96,30 @@ static inline int __builtin_ctz(uint64_t x) {
 #endif
 
 using namespace llvm;
+// A total order on an AST's leaves that is the same on every run:
+// arguments by position, instructions by block number and position,
+// globals by name. Sorting the Value pointers instead named the Z3
+// variables (and the MBA variables) differently from run to run - which
+// value became "a" depended on heap addresses - so Saturn's lifts were not
+// reproducible.
+static bool valueOrderLess(const llvm::Value *A, const llvm::Value *B) {
+  auto Rank = [](const llvm::Value *V) {
+    return llvm::isa<Argument>(V) ? 0 : llvm::isa<Instruction>(V) ? 1 : llvm::isa<GlobalValue>(V) ? 2 : 3;
+  };
+  int RA = Rank(A), RB = Rank(B);
+  if (RA != RB) return RA < RB;
+  if (auto *AA = llvm::dyn_cast<Argument>(A))
+    return AA->getArgNo() < llvm::cast<Argument>(B)->getArgNo();
+  if (auto *IA = llvm::dyn_cast<Instruction>(A)) {
+    auto *IB = llvm::cast<Instruction>(B);
+    if (IA->getParent() != IB->getParent())
+      return IA->getParent()->getNumber() < IB->getParent()->getNumber();
+    return IA != IB && IA->comesBefore(IB);
+  }
+  if (auto *GA = llvm::dyn_cast<GlobalValue>(A))
+    return GA->getName() < llvm::cast<GlobalValue>(B)->getName();
+  return std::less<const llvm::Value *>{}(A, B);
+}
 using namespace std;
 using namespace std::chrono;
 
@@ -226,7 +252,11 @@ LLVMParser::LLVMParser(llvm::Module *M, bool Parallel, bool Verify,
       OptimizeAfter(OptimizeAfter),
       Debug(Debug),
       Prove(Prove),
-      SP64((uint64_t)M),
+      // A fixed seed, not the Module's address: verify()'s random test
+      // values decided which candidates passed, and the address differs
+      // from run to run (ASLR, allocation), so Saturn's lifts were not
+      // reproducible.
+      SP64(0x5a7u),
       TLII(nullptr),
       TLI(nullptr) {
   // Create evaluator
@@ -256,7 +286,11 @@ LLVMParser::LLVMParser(llvm::Function *F, bool Parallel, bool Verify,
       OptimizeAfter(OptimizeAfter),
       Debug(Debug),
       Prove(Prove),
-      SP64((uint64_t)M),
+      // A fixed seed, not the Module's address: verify()'s random test
+      // values decided which candidates passed, and the address differs
+      // from run to run (ASLR, allocation), so Saturn's lifts were not
+      // reproducible.
+      SP64(0x5a7u),
       TLII(nullptr),
       TLI(nullptr) {
   // Create evaluator
@@ -950,6 +984,55 @@ static bool proveWithZ3Guarded(LLVMParser *Self, std::string &SimpExpr,
   return Result;
 }
 
+// Z3 verdicts by exact formula, for the whole process (see verify()).
+static std::unordered_map<std::string, bool> Z3ProofCache;
+
+// An exact, pointer-free rendering of the candidate DAG: every AST node by
+// opcode/predicate/type, every operand as another node, a variable (by
+// index and type) or a constant (width and value). Empty if some operand is
+// none of those - such a candidate is simply not cached.
+static std::string proofCacheKey(llvm::SmallVectorImpl<BFSEntry> &AST,
+                                 llvm::SmallVectorImpl<llvm::Value *> &Variables,
+                                 const std::string &SimpExpr, int BitWidth) {
+  llvm::DenseMap<llvm::Value *, unsigned> Node, Var;
+  for (auto &E : AST) Node.try_emplace(E.I, Node.size());
+  for (unsigned i = 0; i < Variables.size(); i++) Var.try_emplace(Variables[i], i);
+  std::string K;
+  llvm::raw_string_ostream OS(K);
+  OS << BitWidth << '|' << SimpExpr << '|';
+  for (unsigned i = 0; i < Variables.size(); i++) {
+    Variables[i]->getType()->print(OS);
+    OS << ',';
+  }
+  OS << '|';
+  auto TypeOf = [&](llvm::Type *T) { T->print(OS); };
+  llvm::SmallPtrSet<llvm::Instruction *, 16> Done;
+  for (auto &E : AST) {
+    if (!Done.insert(E.I).second) continue;
+    OS << 'n' << Node[E.I] << '=' << E.I->getOpcode();
+    if (auto *C = llvm::dyn_cast<llvm::CmpInst>(E.I)) OS << 'p' << C->getPredicate();
+    OS << ':';
+    TypeOf(E.I->getType());
+    OS << '(';
+    for (auto &Op : E.I->operands()) {
+      llvm::Value *V = Op.get();
+      if (auto It = Node.find(V); It != Node.end()) {
+        OS << 'n' << It->second;
+      } else if (auto It2 = Var.find(V); It2 != Var.end()) {
+        OS << 'v' << It2->second;
+      } else if (auto *CI = llvm::dyn_cast<llvm::ConstantInt>(V)) {
+        OS << 'c' << CI->getBitWidth() << ':' << CI->getValue();
+      } else {
+        return std::string();
+      }
+      OS << ',';
+    }
+    OS << ')';
+  }
+  OS.flush();
+  return K;
+}
+
 bool LLVMParser::verify(int ASTSize, llvm::SmallVectorImpl<BFSEntry> &AST,
                         std::string &SimpExpr,
                         llvm::SmallVectorImpl<llvm::Value *> &Variables,
@@ -1034,8 +1117,17 @@ bool LLVMParser::verify(int ASTSize, llvm::SmallVectorImpl<BFSEntry> &AST,
       return false;
     }
 
-    // Eval replacement
-    auto AP_R1 = eval(Expr1_replVar, par, BitWidth, &Operations);
+    // Eval replacement. A replacement string the tokenizer cannot read (an
+    // intermediate cast that survived rendering, a stray token) is simply not
+    // a valid candidate - reject it instead of aborting the whole lift
+    // (seen on VM-protected Civ7 stubs: "zext[64](...)" with no source width).
+    bool EvalOk = true;
+    auto AP_R1 = eval(Expr1_replVar, par, BitWidth, &Operations, &EvalOk);
+    if (!EvalOk) {
+      if (this->Debug)
+        outs() << "[*] [VERIFY] unparsable '" << SimpExpr << "'\n";
+      return false;
+    }
 
     // Check if replacement is cheaper than original expression
     if (FullASTSize <= Operations) {
@@ -1090,6 +1182,18 @@ bool LLVMParser::verify(int ASTSize, llvm::SmallVectorImpl<BFSEntry> &AST,
     // error case check_error/Z3_THROW is actually designed to catch.
     auto start = high_resolution_clock::now();
 
+    // The same candidate is proved again and again: Saturn re-optimizes
+    // the whole function after every lifted block, and a candidate whose
+    // shape once simplified is re-verified on every cache hit (see
+    // findReplacements). Remember Z3's verdict per exact formula - the
+    // candidate DAG with its variable wiring, constants and widths, plus
+    // the replacement - so each distinct proof (or 5 s timeout) runs once.
+    std::string ProofKey = proofCacheKey(AST, Variables, SimpExpr, BitWidth);
+    if (!ProofKey.empty()) {
+      auto It = Z3ProofCache.find(ProofKey);
+      if (It != Z3ProofCache.end()) return It->second;
+    }
+
     bool Result = false;
     try {
       Result = proveWithZ3Guarded(this, SimpExpr, Vars, AST, Variables,
@@ -1111,6 +1215,7 @@ bool LLVMParser::verify(int ASTSize, llvm::SmallVectorImpl<BFSEntry> &AST,
              << " ms Result (1 == valid): " << Result << "\n";
     }
 
+    if (!ProofKey.empty()) Z3ProofCache[ProofKey] = Result;
     return Result;
   }
 
@@ -1590,6 +1695,81 @@ bool LLVMParser::tryCandidateSimplifications(LSiMBA::MBACandidate &Cand,
   return false;
 }
 
+bool LLVMParser::tryPiecewise(LSiMBA::MBACandidate &Cand, int BitWidth) {
+  if (BitWidth < 8 || BitWidth > 64 || Cand.AST.empty()) return false;
+  auto *Root = Cand.AST.front().I;
+  auto FullWidth = [&](llvm::Value *V) {
+    return V->getType()->isIntegerTy() &&
+           V->getType()->getIntegerBitWidth() == (unsigned)BitWidth;
+  };
+
+  // The variable of the step: the candidate's own, if it has one, else a
+  // cut - a node of the tree every path from the root to a variable goes
+  // through (an obfuscated t6 = f(t5), with t5 computed from two loads).
+  // The step's body is then the part of the tree above the cut.
+  llvm::SmallPtrSet<llvm::Instruction *, 32> InAST;
+  for (auto &E : Cand.AST) InAST.insert(E.I);
+  auto Body = [&](llvm::Value *Cut, llvm::SmallVectorImpl<BFSEntry> &Out) {
+    llvm::SmallPtrSet<llvm::Instruction *, 32> Seen{Root};
+    llvm::SmallVector<llvm::Instruction *, 32> Work{Root};
+    while (!Work.empty()) {
+      auto *I = Work.pop_back_val();
+      for (auto &O : I->operands()) {
+        if (O == Cut || isa<Constant>(O)) continue;
+        auto *OI = dyn_cast<Instruction>(O);
+        if (!OI || !InAST.count(OI)) return false;  // another variable
+        if (Seen.insert(OI).second) Work.push_back(OI);
+      }
+    }
+    for (auto &E : Cand.AST)
+      if (Seen.count(E.I)) Out.push_back(E);
+    return true;
+  };
+  llvm::SmallVector<llvm::Value *, 8> Cuts;
+  if (Cand.Variables.size() == 1) Cuts.push_back(Cand.Variables[0]);
+  // deepest first: the most of the tree in the step
+  for (auto E = Cand.AST.rbegin(); E != Cand.AST.rend(); ++E)
+    if (E->I != Root && !E->I->isCast()) Cuts.push_back(E->I);
+
+  int Tries = 0;
+  for (auto *Cut : Cuts) {
+    llvm::SmallVector<BFSEntry, 16> Sub;
+    if (!FullWidth(Cut) || !Body(Cut, Sub) || getASTSize(Sub) < 3) continue;
+    if (++Tries > 8) break;
+    llvm::SmallVector<llvm::Value *, 1> Var{Cut};
+
+    bool Error = false;
+    auto F = [&](uint64_t X) -> uint64_t {
+      llvm::SmallVector<APInt, 1> Par{APInt(BitWidth, X)};
+      bool E = false;
+      APInt R = this->evaluateAST(Sub, Var, Par, E);
+      Error |= E;
+      return E ? 0 : R.getZExtValue();
+    };
+    std::string P = LSiMBA::simplifyPiecewise(F, BitWidth, "a");
+    if (Error || P.empty()) continue;
+
+    // The step was found on samples, so it is always proved, with or
+    // without --prove
+    const bool SavedProve = this->Prove;
+    this->Prove = true;
+    const bool Ok = this->verify(getASTSize(Sub), Sub, P, Var, BitWidth);
+    this->Prove = SavedProve;
+    if (this->Debug)
+      outs() << "[*] [PIECEWISE] '" << P << "' -> "
+             << (Ok ? "proved" : "rejected") << "\n";
+    if (!Ok) continue;
+
+    Cand.AST.assign(Sub.begin(), Sub.end());
+    Cand.Variables.assign(Var.begin(), Var.end());
+    Cand.ASTSize = getASTSize(Sub);
+    Cand.Replacement = P;
+    Cand.isValid = true;
+    return true;
+  }
+  return false;
+}
+
 namespace {
 // ---------------------------------------------------------------------------
 // Local MBA pattern matching: a small canonical expression tree plus the
@@ -2022,7 +2202,7 @@ MExprPtr mTruncNarrow(const MExprPtr &E,
 // variable's true width. Returns false if the cast's operand is not a Var of
 // known width (or the width is too large to bound with 64-bit math).
 bool castBounds(const MExprPtr &C, const std::map<std::string, int> &VarWidths,
-                long &lo, long &hi) {
+                int64_t &lo, int64_t &hi) {
   if (!C || C->K != MExpr::Cast || (C->Op != "sext" && C->Op != "zext"))
     return false;
   if (!C->L || C->L->K != MExpr::Var) return false;
@@ -2032,10 +2212,10 @@ bool castBounds(const MExprPtr &C, const std::map<std::string, int> &VarWidths,
   int W = It->second;
   if (C->Op == "zext") {
     lo = 0;
-    hi = (1L << W) - 1;
+    hi = (int64_t(1) << W) - 1;
   } else {
-    lo = -(1L << (W - 1));
-    hi = (1L << (W - 1)) - 1;
+    lo = -(int64_t(1) << (W - 1));
+    hi = (int64_t(1) << (W - 1)) - 1;
   }
   return true;
 }
@@ -2102,29 +2282,32 @@ MExprPtr tryAshrFolds(const MExprPtr &E,
           if (Side->K != MExpr::Bin || Side->Op != "<" || !Side->R ||
               Side->R->K != MExpr::Const)
             continue;
-          long K = 0;
+          int64_t K = 0;
           try {
-            K = std::stol(Side->R->S);
+            K = std::stoll(Side->R->S);
           } catch (...) {
             continue;
           }
           if (K != A || K <= 0 || K > 62) continue;
-          long C = 0;
+          int64_t C = 0;
           try {
-            C = std::stol(Cst->S);
+            C = std::stoll(Cst->S);
           } catch (...) {
             continue;
           }
-          if ((C & ((1L << K) - 1)) != 0) continue;  // C must be a multiple of 2^K
+          if ((C & ((int64_t(1) << K) - 1)) != 0) continue;  // C must be a multiple of 2^K
           auto Cast = Side->L;
-          long lo = 0, hi = 0;
+          int64_t lo = 0, hi = 0;
           if (!castBounds(Cast, VarWidths, lo, hi)) continue;
           // Overflow check on the scaled sum (mathematical, signed): the
           // identity holds only when cast*2^K + C does not wrap 64 bits.
-          __int128 Lim = (__int128)1 << 64;
-          if ((__int128)lo << K <= -Lim - C || ((__int128)hi << K) >= Lim - C)
+          const llvm::APInt Lim = llvm::APInt::getOneBitSet(128, 64);
+          const llvm::APInt C128(128, (uint64_t)C, true);
+          const llvm::APInt Lo = llvm::APInt(128, (uint64_t)lo, true).shl((unsigned)K);
+          const llvm::APInt Hi = llvm::APInt(128, (uint64_t)hi, true).shl((unsigned)K);
+          if (Lo.sle(-Lim - C128) || Hi.sge(Lim - C128))
             continue;
-          return mBin("+", Cast, mConst(std::to_string(C / (1L << K))));
+          return mBin("+", Cast, mConst(std::to_string(C / (int64_t(1) << K))));
         }
       }
     }
@@ -2800,6 +2983,9 @@ bool LLVMParser::findReplacements(llvm::DominatorTree *DT,
           Cand.isValid = true; // already verified inside
         }
       }
+      // One variable, a simple base plus a two-valued step: g(a) ^ (a <= T ?
+      // C1 : C0), the comparison hidden as a borrow (see Piecewise.h).
+      if (!Cand.isValid) tryPiecewise(Cand, BitWidth);
     }
 
     // Update cache
@@ -2981,6 +3167,7 @@ bool LLVMParser::walkSubAST(llvm::DominatorTree *DT,
         C.isValid = this->verify(C.ASTSize, C.AST, C.Replacement, C.Variables,
                                  BitWidth);
       }
+      if (!C.isValid) tryPiecewise(C, BitWidth);
 
       if (C.isValid) {
         // Store valid replacement
@@ -3437,14 +3624,133 @@ void LLVMParser::getAST(llvm::DominatorTree *DT, llvm::Instruction *I,
     Variables.push_back(V);
   }
 
-  // Sort
-  std::sort(Variables.begin(), Variables.end());
+  // Sort (valueOrderLess: the same order on every run)
+  std::sort(Variables.begin(), Variables.end(), valueOrderLess);
+}
+
+// Fast path for evaluateAST: the same semantics on plain APInts, without
+// creating a uniqued ConstantInt/ConstantExpr per node and test case
+// (ConstantInt::get's context hash lookups were ~60% of a Civ7 VM lift:
+// verify() evaluates every candidate on NUM_TEST_CASES inputs, and Saturn
+// re-optimizes the whole function after every lifted block). Returns false
+// for anything outside the common subset, and the caller falls back to the
+// Constant-based evaluator, so exotic nodes keep their exact old behaviour.
+static bool evaluateASTFast(llvm::SmallVectorImpl<BFSEntry> &AST,
+                            llvm::SmallVectorImpl<llvm::Value *> &Variables,
+                            llvm::SmallVectorImpl<APInt> &Par, APInt &Out) {
+  llvm::SmallDenseMap<llvm::Value *, APInt, 32> Vals;
+  auto Get = [&](llvm::Value *V, APInt &R) -> bool {
+    if (auto *C = dyn_cast<ConstantInt>(V)) {
+      R = C->getValue();
+      return true;
+    }
+    for (unsigned i = 0; i < Variables.size(); i++) {
+      if (Variables[i] != V) continue;
+      if (i >= Par.size()) return false;
+      if (V->getType()->isPointerTy()) {
+        R = Par[i];
+        return true;
+      }
+      if (!V->getType()->isIntegerTy()) return false;
+      R = Par[i].zextOrTrunc(V->getType()->getIntegerBitWidth());
+      return true;
+    }
+    auto It = Vals.find(V);
+    if (It == Vals.end()) return false;
+    R = It->second;
+    return true;
+  };
+  bool Any = false;
+  for (auto E = AST.rbegin(); E != AST.rend(); ++E) {
+    auto *I = E->I;
+    APInt A, B, C, Res;
+    if (auto *BO = dyn_cast<BinaryOperator>(I)) {
+      if (!BO->getType()->isIntegerTy()) return false;
+      if (!Get(BO->getOperand(0), A) || !Get(BO->getOperand(1), B)) return false;
+      if (A.getBitWidth() != B.getBitWidth()) return false;
+      unsigned W = A.getBitWidth();
+      switch (BO->getOpcode()) {
+        case Instruction::Add: Res = A + B; break;
+        case Instruction::Sub: Res = A - B; break;
+        case Instruction::Mul: Res = A * B; break;
+        case Instruction::And: Res = A & B; break;
+        case Instruction::Or: Res = A | B; break;
+        case Instruction::Xor: Res = A ^ B; break;
+        case Instruction::Shl: Res = A.shl(B); break;
+        case Instruction::LShr: Res = A.lshr(B); break;
+        case Instruction::AShr: Res = A.ashr(B); break;
+        case Instruction::UDiv:
+          Res = B.isZero() ? APInt(W, 0) : A.udiv(B);
+          break;
+        case Instruction::URem:
+          Res = B.isZero() ? APInt(W, 0) : A.urem(B);
+          break;
+        default: return false;
+      }
+    } else if (auto *GEP = dyn_cast<GetElementPtrInst>(I)) {
+      if (GEP->getNumOperands() != 2) return false;
+      if (!Get(GEP->getOperand(0), A) || !Get(GEP->getOperand(1), B)) return false;
+      if (A.getBitWidth() != B.getBitWidth()) return false;
+      Res = A + B;
+    } else if (isa<TruncInst>(I) || isa<ZExtInst>(I) || isa<SExtInst>(I)) {
+      if (!I->getType()->isIntegerTy() || !Get(I->getOperand(0), A)) return false;
+      unsigned W = I->getType()->getIntegerBitWidth();
+      if (isa<TruncInst>(I)) {
+        if (W > A.getBitWidth()) return false;
+        Res = A.trunc(W);
+      } else {
+        if (W < A.getBitWidth()) return false;
+        Res = isa<ZExtInst>(I) ? A.zext(W) : A.sext(W);
+      }
+    } else if (auto *SI = dyn_cast<SelectInst>(I)) {
+      if (!SI->getType()->isIntegerTy()) return false;
+      if (!Get(SI->getOperand(0), A) || A.getBitWidth() != 1) return false;
+      if (!Get(A.isOne() ? SI->getOperand(1) : SI->getOperand(2), Res))
+        return false;
+    } else if (auto *CI = dyn_cast<ICmpInst>(I)) {
+      if (!Get(CI->getOperand(0), A) || !Get(CI->getOperand(1), B)) return false;
+      if (A.getBitWidth() != B.getBitWidth()) return false;
+      Res = APInt(1, ICmpInst::compare(A, B, CI->getPredicate()));
+    } else if (auto *Call = dyn_cast<CallInst>(I)) {
+      auto *Fn = Call->getCalledFunction();
+      if (!Fn) return false;
+      auto ID = Fn->getIntrinsicID();
+      if (ID != Intrinsic::fshl && ID != Intrinsic::fshr) return false;
+      if (!Get(Call->getArgOperand(0), A) || !Get(Call->getArgOperand(1), B) ||
+          !Get(Call->getArgOperand(2), C))
+        return false;
+      unsigned W = A.getBitWidth();
+      if (W > 64 || B.getBitWidth() != W || C.getBitWidth() != W) return false;
+      unsigned Sh = C.urem(W);
+      // Concatenate A:B and shift, as the intrinsic is defined.
+      if (Sh == 0)
+        Res = ID == Intrinsic::fshl ? A : B;
+      else if (ID == Intrinsic::fshl)
+        Res = A.shl(Sh) | B.lshr(W - Sh);
+      else
+        Res = A.shl(W - Sh) | B.lshr(Sh);
+    } else {
+      return false;
+    }
+    Vals[I] = Res;
+    Out = Res;
+    Any = true;
+  }
+  return Any;
 }
 
 llvm::APInt LLVMParser::evaluateAST(
     llvm::SmallVectorImpl<BFSEntry> &AST,
     llvm::SmallVectorImpl<llvm::Value *> &Variables,
     llvm::SmallVectorImpl<APInt> &Par, bool &Error) {
+  {
+    static const bool NoFast = getenv("SIMBA_NO_FAST_EVAL") != nullptr;
+    APInt R;
+    if (!NoFast && evaluateASTFast(AST, Variables, Par, R)) {
+      Error = false;
+      return R;
+    }
+  }
   Constant *InstResult = nullptr;
 
   // has a big performance impact
@@ -3799,10 +4105,11 @@ bool LLVMParser::doesDominateInst(DominatorTree *DT, const Instruction *InstA,
   // operand it needs - and evaluateAST walks the sorted AST assuming the
   // opposite, so getVal hits a value that is not a constant, not a
   // collected variable and not yet on the ValueStack, and aborts with
-  // "V not found!". Tie-break on the block address (via std::less, which is
-  // well defined for unrelated pointers) to make this a total order.
-  return std::less<const BasicBlock *>{}(BA, BB);
+  // "V not found!". Tie-break on the block's number in its function: a
+  // total order, and unlike the block address the same on every run.
+  return BA->getNumber() < BB->getNumber();
 }
+
 
 // Neither z3::expr::bit2bool() nor the C API it wraps (Z3_mk_bit2bool) is
 // available on every Z3 build this needs to compile against (both are
@@ -4197,6 +4504,11 @@ z3::expr LLVMParser::getZ3ExpressionFromAST(
           report_fatal_error("[!] Not supported call instruction!", false);
         }
       }
+    } else if (auto *FR = dyn_cast<FreezeInst>(CurInst)) {
+      // freeze only pins poison/undef to some value; on the concrete values
+      // Z3 models it is the identity (Civ7 0x140309090 aborted here).
+      auto Op0 = getZ3Val(Z3Ctx, FR->getOperand(0), ValueMAP, false);
+      ValueMAP[CurInst] = new z3::expr(*Op0);
     } else {
       CurInst->dump();
       report_fatal_error("[!] Not supported instruction in Z3 parser!", false);

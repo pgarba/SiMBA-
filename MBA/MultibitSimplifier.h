@@ -101,8 +101,16 @@ private:
   // obfuscatorx cases) are a dead end: they burn several seconds before
   // returning "". The budget caps that dead end; genuine semi-linear cases
   // (the msimba dataset, ~ms each) finish far below it. 0 disables.
+  //
+  // Counted in evaluated AST nodes, not milliseconds: a wall-clock budget
+  // made the result depend on machine load (the same expression simplified
+  // on an idle machine and gave up under a parallel batch), so Saturn's
+  // lifts were not reproducible. MBASIMBA_MSIMBA_BUDGET_OPS overrides;
+  // MBASIMBA_MSIMBA_BUDGET_MS=0 still disables.
   double budgetMs = 0;
-  std::chrono::steady_clock::time_point budgetDeadline{};
+  uint64_t budgetOps = 0;
+  mutable uint64_t opsUsed = 0;  // also counted by const checks
+  bool overBudget() const { return budgetOps && opsUsed > budgetOps; }
   bool budgetExceeded = false;
 
   // Subtract a coefficient from the result vector.
