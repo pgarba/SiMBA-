@@ -16,3 +16,16 @@ define i64 @digit(i8 %v) {
   %r = sext i32 %d to i64
   ret i64 %r
 }
+
+; the sign extension as two terms of a sum, among others: (z & 0x7f) -
+; (z & 0x80) with z = zext v is sext(v)
+define i64 @split(i8 %v, i64 %a) {
+  %z = zext i8 %v to i64
+  %lo = and i64 %z, 127
+  %hi = and i64 %z, 128
+  %t = mul i64 %a, 10
+  %u = add i64 %t, -528
+  %w = add i64 %u, %lo
+  %r = sub i64 %w, %hi
+  ret i64 %r
+}

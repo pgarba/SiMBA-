@@ -843,12 +843,79 @@ static bool cancelLinearTerms(llvm::BinaryOperator *Root, bool Debug) {
           It->second += Coef;
       };
   Collect(Root, llvm::APInt(W, 1));
+
+  // Terms that are functions of the same narrow value, as one: with
+  // z = zext i8 v, (z & 0x7f) - (z & 0x80) is sext(v). Their weighted sum
+  // is tried for every value of v, and replaced when it is a * ext(v) + b.
+  llvm::IRBuilder<> B(Root);
+  bool Grouped = false;
+  {
+    llvm::MapVector<llvm::Value *, llvm::SmallVector<NarrowTree, 4>> ByLeaf;
+    for (auto &T : Terms) {
+      auto *I = llvm::dyn_cast<llvm::Instruction>(T.first);
+      if (T.second.isZero() || !I) continue;
+      NarrowTree NT;
+      if ((llvm::isa<llvm::ZExtInst>(I) || llvm::isa<llvm::SExtInst>(I)) &&
+          I->getOperand(0)->getType()->getIntegerBitWidth() > 1 &&
+          I->getOperand(0)->getType()->getIntegerBitWidth() <= 12) {
+        NT.Order.push_back(I);
+        NT.Leaf = I->getOperand(0);
+      } else if (!narrowTree(I, NT)) {
+        continue;
+      }
+      ByLeaf[NT.Leaf].push_back(std::move(NT));
+    }
+    const llvm::DataLayout &DL = Root->getModule()->getDataLayout();
+    for (auto &G : ByLeaf) {
+      if (G.second.size() < 2) continue;
+      llvm::Value *Leaf = G.first;
+      const unsigned LW = Leaf->getType()->getIntegerBitWidth();
+      if (W <= LW) continue;
+      const unsigned Count = 1u << LW;
+      std::vector<llvm::APInt> Sum(Count, llvm::APInt(W, 0));
+      bool Ok = true;
+      for (auto &NT : G.second) {
+        const llvm::APInt Coef = Terms.find(NT.Order.back())->second;
+        for (unsigned X = 0; X < Count && Ok; X++) {
+          auto *CI = llvm::dyn_cast_or_null<llvm::ConstantInt>(
+              narrowEval(NT, X, DL));
+          Ok = CI != nullptr;
+          if (Ok) Sum[X] += Coef * CI->getValue();
+        }
+      }
+      if (!Ok) continue;
+      const llvm::APInt Bias = Sum[0], A = Sum[1] - Bias;
+      for (bool Signed : {true, false}) {
+        bool Fits = true;
+        for (unsigned X = 0; X < Count && Fits; X++) {
+          const llvm::APInt V(LW, X);
+          Fits = Sum[X] == A * (Signed ? V.sext(W) : V.zext(W)) + Bias;
+        }
+        if (!Fits) continue;
+        for (auto &NT : G.second)
+          Terms.find(NT.Order.back())->second = llvm::APInt(W, 0);
+        if (!A.isZero()) {
+          llvm::Value *Ext =
+              Signed ? B.CreateSExt(Leaf, Ty) : B.CreateZExt(Leaf, Ty);
+          auto It = Terms.find(Ext);
+          if (It == Terms.end())
+            Terms.insert({Ext, A});
+          else
+            It->second += A;
+        }
+        K += Bias;
+        Grouped = true;
+        break;
+      }
+    }
+  }
+
   int Left = 0;
   for (auto &T : Terms) Left += !T.second.isZero();
-  if (Left == (int)Terms.size() || Left > 8) return false;  // nothing cancels
+  // nothing cancels, nothing joined
+  if ((!Grouped && Left == (int)Terms.size()) || Left > 8) return false;
 
   // positive terms first, so the sum starts with a value and not 0 - x
-  llvm::IRBuilder<> B(Root);
   llvm::Value *Acc = nullptr;
   for (bool Negative : {false, true})
     for (auto &T : Terms) {
@@ -892,34 +959,350 @@ static int cancelLinearTerms(llvm::Function &F, bool Debug) {
   return Count;
 }
 
-// A mask on a product's operand that only clears bits the product drops:
-// 1234 * (a & 0x7fffffffffffffff) is 1234 * a, as 1234 is even and the top
-// bit of a is multiplied out of the 64. (A simplifier's result can carry
-// such a mask; LLVM keeps it, and moves it through a bswap.)
+// What only changes bits a product drops, under it: 1234 is even, so
+// 1234 * a does not depend on a's top bit, and
+//   1234 * (a & 0x7fffffffffffffff)                 is 1234 * a
+//   1234 * bswap((x & ~0x80) ^ 0x1828d12345bf1)     is 1234 * bswap(x ^ 0x1828d12345b71)
+// (a's top bit is bit 7 of x). A simplifier's result can carry such a mask;
+// LLVM keeps it, moves it through the bswap, and folds it into the
+// constant, where it reads as a bit of the input being forced. Down the
+// product's operand through bswap / and / or / xor with a constant, while
+// the value has no other use: a mask that keeps every demanded bit goes,
+// a constant loses the bits nothing demands.
+static bool dropUndemanded(llvm::Use &U, llvm::APInt D, int Depth = 0) {
+  auto *I = llvm::dyn_cast<llvm::Instruction>(U.get());
+  if (!I || !I->hasOneUse() || Depth > 16 || D.isAllOnes()) return false;
+  if (auto *II = llvm::dyn_cast<llvm::IntrinsicInst>(I)) {
+    if (II->getIntrinsicID() != llvm::Intrinsic::bswap) return false;
+    return dropUndemanded(II->getOperandUse(0), D.byteSwap(), Depth + 1);
+  }
+  auto *BO = llvm::dyn_cast<llvm::BinaryOperator>(I);
+  if (!BO) return false;
+  const unsigned CI = llvm::isa<llvm::ConstantInt>(BO->getOperand(0)) ? 0 : 1;
+  auto *C = llvm::dyn_cast<llvm::ConstantInt>(BO->getOperand(CI));
+  if (!C) return false;
+  llvm::Use &X = BO->getOperandUse(1 - CI);
+  bool Changed = false;
+  switch (BO->getOpcode()) {
+    case llvm::Instruction::And:
+      if (D.isSubsetOf(C->getValue())) {  // keeps all that is demanded
+        llvm::Value *Inner = X.get();
+        U.set(Inner);
+        llvm::RecursivelyDeleteTriviallyDeadInstructions(BO);
+        dropUndemanded(U, D, Depth + 1);
+        return true;
+      }
+      return dropUndemanded(X, D & C->getValue(), Depth + 1);
+    case llvm::Instruction::Or:
+    case llvm::Instruction::Xor: {
+      const llvm::APInt Kept = C->getValue() & D;
+      const bool IsOr = BO->getOpcode() == llvm::Instruction::Or;
+      if (Kept.isZero()) {  // changes nothing that is demanded
+        llvm::Value *Inner = X.get();
+        U.set(Inner);
+        llvm::RecursivelyDeleteTriviallyDeadInstructions(BO);
+        dropUndemanded(U, D, Depth + 1);
+        return true;
+      }
+      if (Kept != C->getValue()) {
+        BO->setOperand(CI, llvm::ConstantInt::get(C->getType(), Kept));
+        // an `or disjoint` promised more than the new constant covers
+        BO->dropPoisonGeneratingFlags();
+        Changed = true;
+      }
+      return dropUndemanded(X, IsOr ? D & ~Kept : D, Depth + 1) || Changed;
+    }
+    default:
+      return false;
+  }
+}
+
 static int dropMasksUnderMul(llvm::Function &F, bool Debug) {
   int Count = 0;
+  llvm::SmallVector<llvm::WeakVH, 16> Muls;
   for (auto &BB : F)
-    for (auto &I : BB) {
-      if (I.getOpcode() != llvm::Instruction::Mul) continue;
-      // either way round: a replacement is built as it was written
-      const unsigned CI = llvm::isa<llvm::ConstantInt>(I.getOperand(0)) ? 0 : 1;
-      auto *C = llvm::dyn_cast<llvm::ConstantInt>(I.getOperand(CI));
-      auto *And = llvm::dyn_cast<llvm::BinaryOperator>(I.getOperand(1 - CI));
-      if (!C || C->isZero() || !And ||
-          And->getOpcode() != llvm::Instruction::And)
-        continue;
-      const unsigned MI = llvm::isa<llvm::ConstantInt>(And->getOperand(0)) ? 0 : 1;
-      auto *M = llvm::dyn_cast<llvm::ConstantInt>(And->getOperand(MI));
-      if (!M) continue;
-      // the operand's bits that reach the product: the low W - tz(C)
-      const unsigned W = C->getBitWidth();
-      const llvm::APInt Kept =
-          llvm::APInt::getLowBitsSet(W, W - C->getValue().countr_zero());
-      if (!Kept.isSubsetOf(M->getValue())) continue;
-      if (Debug) outs() << "[!] Mask under a product dropped\n";
-      I.setOperand(1 - CI, And->getOperand(1 - MI));
-      Count++;
+    for (auto &I : BB)
+      if (I.getOpcode() == llvm::Instruction::Mul) Muls.push_back(&I);
+  for (auto &H : Muls) {
+    auto *I = llvm::dyn_cast_or_null<llvm::BinaryOperator>(H);
+    if (!I) continue;
+    // either way round: a replacement is built as it was written
+    const unsigned CI = llvm::isa<llvm::ConstantInt>(I->getOperand(0)) ? 0 : 1;
+    auto *C = llvm::dyn_cast<llvm::ConstantInt>(I->getOperand(CI));
+    if (!C || C->isZero()) continue;
+    // the operand's bits that reach the product: the low W - tz(C)
+    const unsigned W = C->getBitWidth();
+    const llvm::APInt Kept =
+        llvm::APInt::getLowBitsSet(W, W - C->getValue().countr_zero());
+    if (!dropUndemanded(I->getOperandUse(1 - CI), Kept)) continue;
+    if (Debug) outs() << "[!] Bits a product drops: no longer masked\n";
+    Count++;
+  }
+  return Count;
+}
+
+// A value of one variable whose tree the candidates leave alone because it
+// has a comparison, a select or a funnel shift in it - an average through
+// the carry, as rcr lifts:
+//   fshl(zext(p == -1), p + (p & 1), 63) + (p >> 1)        is p
+// Guessed as a * x + b on samples, and proved by Z3 (its own translation
+// of the tree: the candidates' AST takes an intrinsic call for a variable)
+// before it replaces the tree.
+namespace {
+struct OneVarTree {
+  llvm::SmallVector<llvm::Instruction *, 32> Order;  // post-order
+  llvm::Value *Leaf = nullptr;
+  bool Odd = false;  // a comparison, a select or an intrinsic among them
+};
+
+bool oneVarInner(llvm::Value *V) {
+  auto *I = llvm::dyn_cast<llvm::Instruction>(V);
+  if (!I || !I->getType()->isIntegerTy() ||
+      I->getType()->getIntegerBitWidth() > 64)
+    return false;
+  if (auto *BO = llvm::dyn_cast<llvm::BinaryOperator>(I)) {
+    switch (BO->getOpcode()) {
+      case llvm::Instruction::Add:
+      case llvm::Instruction::Sub:
+      case llvm::Instruction::Mul:
+      case llvm::Instruction::And:
+      case llvm::Instruction::Or:
+      case llvm::Instruction::Xor:
+        return true;
+      case llvm::Instruction::Shl:
+      case llvm::Instruction::LShr:
+      case llvm::Instruction::AShr:  // by a constant in range
+        if (auto *C = llvm::dyn_cast<llvm::ConstantInt>(BO->getOperand(1)))
+          return C->getValue().ult(BO->getType()->getIntegerBitWidth());
+        return false;
+      default:
+        return false;
     }
+  }
+  if (auto *II = llvm::dyn_cast<llvm::IntrinsicInst>(I)) {
+    if (II->getIntrinsicID() != llvm::Intrinsic::fshl &&
+        II->getIntrinsicID() != llvm::Intrinsic::fshr)
+      return false;
+    return llvm::isa<llvm::ConstantInt>(II->getArgOperand(2));
+  }
+  return llvm::isa<llvm::ICmpInst>(I) || llvm::isa<llvm::SelectInst>(I) ||
+         llvm::isa<llvm::ZExtInst>(I) || llvm::isa<llvm::SExtInst>(I) ||
+         llvm::isa<llvm::TruncInst>(I);
+}
+
+bool oneVarTree(llvm::Instruction *Root, OneVarTree &T) {
+  llvm::SmallPtrSet<llvm::Value *, 32> Seen;
+  bool Ok = true;
+  std::function<void(llvm::Value *)> Walk = [&](llvm::Value *V) {
+    if (!Ok || llvm::isa<llvm::ConstantInt>(V) || !Seen.insert(V).second)
+      return;
+    if (llvm::isa<llvm::Constant>(V) || T.Order.size() >= 48) {
+      Ok = false;
+      return;
+    }
+    if (!oneVarInner(V)) {
+      if (T.Leaf && T.Leaf != V) Ok = false;
+      T.Leaf = V;
+      return;
+    }
+    auto *I = llvm::cast<llvm::Instruction>(V);
+    T.Odd |= !llvm::isa<llvm::BinaryOperator>(I) && !llvm::isa<llvm::CastInst>(I);
+    if (auto *II = llvm::dyn_cast<llvm::IntrinsicInst>(I)) {
+      for (auto &A : II->args()) Walk(A.get());
+    } else {
+      for (auto &O : I->operands()) Walk(O.get());
+    }
+    T.Order.push_back(I);
+  };
+  Walk(Root);
+  return Ok && T.Leaf && T.Leaf->getType() == Root->getType();
+}
+
+// The tree's value for the leaf's value X; nullopt where it does not fold
+// (poison included: no don't-cares here, Z3 has the last word anyway)
+std::optional<llvm::APInt> oneVarEval(const OneVarTree &T, const llvm::APInt &X,
+                                      const llvm::DataLayout &DL) {
+  llvm::DenseMap<llvm::Value *, llvm::Constant *> Val;
+  Val[T.Leaf] = llvm::ConstantInt::get(T.Leaf->getType(), X);
+  llvm::Constant *R = nullptr;
+  auto Get = [&](llvm::Value *V) -> llvm::Constant * {
+    auto *C = llvm::dyn_cast<llvm::Constant>(V);
+    return C ? C : Val.lookup(V);
+  };
+  for (auto *I : T.Order) {
+    llvm::SmallVector<llvm::Constant *, 3> Ops;
+    if (auto *II = llvm::dyn_cast<llvm::IntrinsicInst>(I)) {
+      for (auto &A : II->args()) Ops.push_back(Get(A.get()));
+      if (llvm::is_contained(Ops, nullptr)) return std::nullopt;
+      R = llvm::ConstantFoldCall(II, II->getCalledFunction(), Ops);
+    } else {
+      for (auto &O : I->operands()) Ops.push_back(Get(O.get()));
+      if (llvm::is_contained(Ops, nullptr)) return std::nullopt;
+      if (auto *Cmp = llvm::dyn_cast<llvm::ICmpInst>(I))
+        R = llvm::ConstantFoldCompareInstOperands(Cmp->getPredicate(), Ops[0],
+                                                  Ops[1], DL);
+      else
+        R = llvm::ConstantFoldInstOperands(I, Ops, DL);
+    }
+    if (!R || !llvm::isa<llvm::ConstantInt>(R)) return std::nullopt;
+    Val[I] = R;
+  }
+  return llvm::cast<llvm::ConstantInt>(R)->getValue();
+}
+
+// The tree as a Z3 bit-vector term of the leaf X
+z3::expr oneVarZ3(const OneVarTree &T, z3::context &Ctx, const z3::expr &X,
+                  bool &Ok) {
+  std::map<llvm::Value *, z3::expr> Val;
+  Val.emplace(T.Leaf, X);
+  auto Width = [](llvm::Value *V) { return V->getType()->getIntegerBitWidth(); };
+  auto Get = [&](llvm::Value *V) -> z3::expr {
+    if (auto *C = llvm::dyn_cast<llvm::ConstantInt>(V))
+      return Ctx.bv_val((uint64_t)C->getZExtValue(), Width(V));
+    auto It = Val.find(V);
+    if (It == Val.end()) {
+      Ok = false;
+      return Ctx.bv_val(0, Width(V));
+    }
+    return It->second;
+  };
+  auto Bit = [&](const z3::expr &B) {  // a Bool as an i1
+    return z3::ite(B, Ctx.bv_val(1, 1), Ctx.bv_val(0, 1));
+  };
+  z3::expr Last = X;
+  for (auto *I : T.Order) {
+    const unsigned W = Width(I);
+    z3::expr E = Ctx.bv_val(0, W);
+    if (auto *BO = llvm::dyn_cast<llvm::BinaryOperator>(I)) {
+      z3::expr A = Get(BO->getOperand(0)), B = Get(BO->getOperand(1));
+      switch (BO->getOpcode()) {
+        case llvm::Instruction::Add: E = A + B; break;
+        case llvm::Instruction::Sub: E = A - B; break;
+        case llvm::Instruction::Mul: E = A * B; break;
+        case llvm::Instruction::And: E = A & B; break;
+        case llvm::Instruction::Or: E = A | B; break;
+        case llvm::Instruction::Xor: E = A ^ B; break;
+        case llvm::Instruction::Shl: E = z3::shl(A, B); break;
+        case llvm::Instruction::LShr: E = z3::lshr(A, B); break;
+        case llvm::Instruction::AShr: E = z3::ashr(A, B); break;
+        default: Ok = false;
+      }
+    } else if (auto *Cmp = llvm::dyn_cast<llvm::ICmpInst>(I)) {
+      z3::expr A = Get(Cmp->getOperand(0)), B = Get(Cmp->getOperand(1));
+      switch (Cmp->getPredicate()) {
+        case llvm::CmpInst::ICMP_EQ: E = Bit(A == B); break;
+        case llvm::CmpInst::ICMP_NE: E = Bit(A != B); break;
+        case llvm::CmpInst::ICMP_ULT: E = Bit(z3::ult(A, B)); break;
+        case llvm::CmpInst::ICMP_ULE: E = Bit(z3::ule(A, B)); break;
+        case llvm::CmpInst::ICMP_UGT: E = Bit(z3::ugt(A, B)); break;
+        case llvm::CmpInst::ICMP_UGE: E = Bit(z3::uge(A, B)); break;
+        case llvm::CmpInst::ICMP_SLT: E = Bit(z3::slt(A, B)); break;
+        case llvm::CmpInst::ICMP_SLE: E = Bit(z3::sle(A, B)); break;
+        case llvm::CmpInst::ICMP_SGT: E = Bit(z3::sgt(A, B)); break;
+        case llvm::CmpInst::ICMP_SGE: E = Bit(z3::sge(A, B)); break;
+        default: Ok = false;
+      }
+    } else if (auto *Sel = llvm::dyn_cast<llvm::SelectInst>(I)) {
+      E = z3::ite(Get(Sel->getCondition()) == Ctx.bv_val(1, 1),
+                  Get(Sel->getTrueValue()), Get(Sel->getFalseValue()));
+    } else if (llvm::isa<llvm::ZExtInst>(I)) {
+      E = z3::zext(Get(I->getOperand(0)), W - Width(I->getOperand(0)));
+    } else if (llvm::isa<llvm::SExtInst>(I)) {
+      E = z3::sext(Get(I->getOperand(0)), W - Width(I->getOperand(0)));
+    } else if (llvm::isa<llvm::TruncInst>(I)) {
+      E = Get(I->getOperand(0)).extract(W - 1, 0);
+    } else if (auto *II = llvm::dyn_cast<llvm::IntrinsicInst>(I)) {
+      // fshl(a, b, s): the top W bits of (a:b) << s; fshr: the low W of
+      // (a:b) >> s; s a constant, taken modulo W
+      z3::expr AB = z3::concat(Get(II->getArgOperand(0)),
+                               Get(II->getArgOperand(1)));
+      const unsigned S =
+          llvm::cast<llvm::ConstantInt>(II->getArgOperand(2))
+              ->getValue()
+              .urem(W);
+      E = II->getIntrinsicID() == llvm::Intrinsic::fshl
+              ? AB.extract(2 * W - 1 - S, W - S)
+              : AB.extract(W - 1 + S, S);
+    } else {
+      Ok = false;
+    }
+    Val.insert_or_assign(I, E);
+    Last = E;
+  }
+  return Last;
+}
+}  // namespace
+
+static int foldAffineOfOne(llvm::Function &F, SplitMix64 &Rng, bool Debug) {
+  llvm::SmallVector<llvm::WeakVH, 32> Roots;
+  for (auto &BB : F)
+    for (auto &I : BB)
+      if (llvm::isa<llvm::BinaryOperator>(&I) && I.getType()->isIntegerTy() &&
+          I.getType()->getIntegerBitWidth() >= 8 &&
+          I.getType()->getIntegerBitWidth() <= 64)
+        Roots.push_back(&I);
+  const llvm::DataLayout &DL = F.getParent()->getDataLayout();
+  int Count = 0, Proofs = 0;
+  // the last ones first: a whole expression before its parts
+  for (auto R = Roots.rbegin(); R != Roots.rend(); ++R) {
+    auto *I = llvm::dyn_cast_or_null<llvm::Instruction>(*R);
+    if (!I) continue;
+    OneVarTree T;
+    if (!oneVarTree(I, T) || !T.Odd || T.Order.size() < 4) continue;
+    const unsigned W = I->getType()->getIntegerBitWidth();
+    const auto F0 = oneVarEval(T, llvm::APInt(W, 0), DL);
+    const auto F1 = oneVarEval(T, llvm::APInt(W, 1), DL);
+    if (!F0 || !F1) continue;
+    const llvm::APInt B = *F0, A = *F1 - B;
+    bool Fits = true;
+    for (int S = 0; S < 40 && Fits; S++) {
+      const llvm::APInt X =
+          S == 0   ? llvm::APInt::getAllOnes(W)
+          : S == 1 ? llvm::APInt::getSignedMinValue(W)
+          : S == 2 ? llvm::APInt::getSignedMaxValue(W)
+          : S == 3 ? llvm::APInt(W, 2)
+                   : llvm::APInt(64, Rng.next()).zextOrTrunc(W);
+      const auto V = oneVarEval(T, X, DL);
+      Fits = V && *V == A * X + B;
+    }
+    if (!Fits || Proofs++ >= 16) continue;
+
+    bool Proved = false;
+    try {
+      z3::context Ctx;
+      z3::expr X = Ctx.bv_const("x", W);
+      bool Ok = true;
+      z3::expr Tree = oneVarZ3(T, Ctx, X, Ok);
+      if (Ok) {
+        z3::solver Solver(Ctx);
+        z3::params Params(Ctx);
+        Params.set("timeout", 5000u);
+        Solver.set(Params);
+        Solver.add(Tree != Ctx.bv_val((uint64_t)A.getZExtValue(), W) * X +
+                               Ctx.bv_val((uint64_t)B.getZExtValue(), W));
+        Proved = Solver.check() == z3::unsat;
+      }
+    } catch (const z3::exception &) {
+      Proved = false;
+    }
+    if (Debug) {
+      outs() << "[*] [AFFINE] " << A << " * x + " << B << " -> "
+             << (Proved ? "proved" : "rejected") << "\n";
+    }
+    if (!Proved) continue;
+
+    auto *Ty = llvm::cast<llvm::IntegerType>(I->getType());
+    llvm::IRBuilder<> Bld(I);
+    llvm::Value *New = llvm::ConstantInt::get(Ty, B);
+    if (!A.isZero()) {
+      New = A.isOne() ? T.Leaf
+                      : Bld.CreateMul(T.Leaf, llvm::ConstantInt::get(Ty, A));
+      if (!B.isZero()) New = Bld.CreateAdd(New, llvm::ConstantInt::get(Ty, B));
+    }
+    I->replaceAllUsesWith(New);
+    llvm::RecursivelyDeleteTriviallyDeadInstructions(I);
+    Count++;
+  }
   return Count;
 }
 
@@ -1087,6 +1470,7 @@ int LLVMParser::extractAndSimplify() {
     // narrow value, and sums whose terms cancel across shared values
     if (int N = foldNarrowCompares(*F, this->Debug) +
                 foldNarrowValues(*F, this->Debug) +
+                foldAffineOfOne(*F, SP64, this->Debug) +
                 cancelLinearTerms(*F, this->Debug) +
                 dropMasksUnderMul(*F, this->Debug)) {
       MBASimplified += N;
