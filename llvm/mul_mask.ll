@@ -14,3 +14,15 @@ define i64 @plain(i64 %a) {
   %x = mul i64 %m, 1234
   ret i64 %x
 }
+
+; the same mask after LLVM moved it through a bswap and into the constant:
+; bit 7 of x is the product's dropped top bit
+define i64 @swapped(i64 %x) {
+  %m = and i64 %x, -129
+  %k = xor i64 %m, 425017384131569
+  %b = tail call i64 @llvm.bswap.i64(i64 %k)
+  %p = mul i64 %b, 1234
+  ret i64 %p
+}
+
+declare i64 @llvm.bswap.i64(i64)
