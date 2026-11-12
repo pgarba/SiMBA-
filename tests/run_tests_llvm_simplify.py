@@ -31,7 +31,8 @@ PASSED = True
 filenames = ["MBA_OP.ll", "mba_comb.ll", "mbas.ll",
              "vm_obf.ll", "scramble4.ll", "xor_op_pred.ll",
              "remill_flat_mba_add.ll", "piecewise_step.ll", "cmp_boundary.ll",
-             "piecewise_around.ll", "narrow_compare.ll", "linear_cancel.ll"]
+             "piecewise_around.ll", "narrow_compare.ll", "linear_cancel.ll",
+             "mul_mask.ll"]
 
 # Text the simplified output must contain, for files where "some MBA was
 # replaced" is not enough (the wrong subtree can be replaced instead).
@@ -51,6 +52,8 @@ expected_in_output = {
 
 # Text the simplified output must not contain: known wrong simplifications
 forbidden_in_output = {
+    # 1234 * (a & 0x7fffffffffffffff): the mask clears a bit the product drops
+    "mul_mask.ll": "9223372036854775807",
     # the comparisons dropped (random inputs never reach x <= 1000000)
     "cmp_boundary.ll": "xor i64 %x, 12345",
 }
