@@ -542,13 +542,14 @@ static int rewriteNullByteRoundabouts(llvm::Function &F, bool Debug) {
   return Count;
 }
 
-// A comparison whose operands depend on one narrow value (up to 12 bits: a
-// byte widened, shifted, masked and put together again) is a predicate on
-// that value: every value is tried, which is the proof, and the comparison
-// rewritten as the plain one with the same truth table -
-//   icmp eq (or (and (lshr (ashr (shl (zext v), 56), 55), 1), 255), ...), 0
-// is icmp eq i8 v, 0. Inputs the tree is poison for are don't-cares.
-static bool foldNarrowCompare(llvm::ICmpInst *Root, bool Debug) {
+// A tree of integer operations that depends on one narrow value (up to 12
+// bits): its instructions in post-order, and that value.
+struct NarrowTree {
+  llvm::SmallVector<llvm::Instruction *, 32> Order;
+  llvm::Value *Leaf = nullptr;
+};
+
+static bool narrowTree(llvm::Instruction *Root, NarrowTree &T) {
   auto Narrow = [](llvm::Value *V) {
     return V->getType()->isIntegerTy() &&
            V->getType()->getIntegerBitWidth() > 1 &&
@@ -563,9 +564,8 @@ static bool foldNarrowCompare(llvm::ICmpInst *Root, bool Debug) {
     return llvm::isa<llvm::ZExtInst>(I) || llvm::isa<llvm::SExtInst>(I) ||
            llvm::isa<llvm::TruncInst>(I);
   };
-  // The tree in post-order, down to its leaves. CutNarrow: a narrow value
-  // is a leaf even when it is computed (zext (trunc x) depends on 8 bits)
-  llvm::SmallVector<llvm::Instruction *, 32> Order;
+  // Down to the leaves. CutNarrow: a narrow value is a leaf even when it is
+  // computed (zext (trunc x) depends on 8 bits)
   llvm::SmallVector<llvm::Value *, 4> Leaves;
   llvm::SmallPtrSet<llvm::Value *, 32> Seen;
   bool Ok = true;
@@ -573,7 +573,7 @@ static bool foldNarrowCompare(llvm::ICmpInst *Root, bool Debug) {
                                                       bool CutNarrow) {
     if (!Ok || llvm::isa<llvm::ConstantInt>(V) || !Seen.insert(V).second)
       return;
-    if (llvm::isa<llvm::Constant>(V) || Order.size() >= 48) {
+    if (llvm::isa<llvm::Constant>(V) || T.Order.size() >= 48) {
       Ok = false;
       return;
     }
@@ -583,10 +583,11 @@ static bool foldNarrowCompare(llvm::ICmpInst *Root, bool Debug) {
     }
     auto *I = llvm::cast<llvm::Instruction>(V);
     for (auto &O : I->operands()) Walk(O.get(), CutNarrow);
-    Order.push_back(I);
+    T.Order.push_back(I);
   };
+  if (!Inner(Root)) return false;
   for (bool CutNarrow : {false, true}) {
-    Order.clear();
+    T.Order.clear();
     Leaves.clear();
     Seen.clear();
     Ok = true;
@@ -594,8 +595,48 @@ static bool foldNarrowCompare(llvm::ICmpInst *Root, bool Debug) {
     if (Ok && Leaves.size() == 1 && Narrow(Leaves[0])) break;
     Ok = false;
   }
-  if (!Ok || Order.size() < 2) return false;
-  llvm::Value *Leaf = Leaves[0];
+  if (!Ok || T.Order.size() < 2) return false;
+  T.Leaf = Leaves[0];
+  return true;
+}
+
+// The tree's value for the leaf's value X: a ConstantInt, poison, or null
+// when it does not fold
+static llvm::Constant *narrowEval(const NarrowTree &T, unsigned X,
+                                  const llvm::DataLayout &DL) {
+  llvm::DenseMap<llvm::Value *, llvm::Constant *> Val;
+  Val[T.Leaf] = llvm::ConstantInt::get(T.Leaf->getType(), X);
+  llvm::Constant *R = nullptr;
+  for (auto *I : T.Order) {
+    llvm::SmallVector<llvm::Constant *, 3> Ops;
+    for (auto &O : I->operands()) {
+      auto *C = llvm::dyn_cast<llvm::Constant>(O.get());
+      Ops.push_back(C ? C : Val.lookup(O.get()));
+      if (!Ops.back()) return nullptr;
+    }
+    if (auto *Cmp = llvm::dyn_cast<llvm::ICmpInst>(I))
+      R = llvm::ConstantFoldCompareInstOperands(Cmp->getPredicate(), Ops[0],
+                                                Ops[1], DL);
+    else
+      R = llvm::ConstantFoldInstOperands(I, Ops, DL);
+    if (!R) return nullptr;
+    Val[I] = R;
+  }
+  return llvm::isa<llvm::ConstantInt>(R) || llvm::isa<llvm::PoisonValue>(R)
+             ? R
+             : nullptr;
+}
+
+// A comparison whose operands depend on one narrow value (up to 12 bits: a
+// byte widened, shifted, masked and put together again) is a predicate on
+// that value: every value is tried, which is the proof, and the comparison
+// rewritten as the plain one with the same truth table -
+//   icmp eq (or (and (lshr (ashr (shl (zext v), 56), 55), 1), 255), ...), 0
+// is icmp eq i8 v, 0. Inputs the tree is poison for are don't-cares.
+static bool foldNarrowCompare(llvm::ICmpInst *Root, bool Debug) {
+  NarrowTree T;
+  if (!narrowTree(Root, T)) return false;
+  llvm::Value *Leaf = T.Leaf;
   // already a comparison of the leaf with a constant
   if ((Root->getOperand(0) == Leaf &&
        llvm::isa<llvm::ConstantInt>(Root->getOperand(1))))
@@ -606,32 +647,11 @@ static bool foldNarrowCompare(llvm::ICmpInst *Root, bool Debug) {
   const unsigned Count = 1u << W;
   const llvm::DataLayout &DL = Root->getModule()->getDataLayout();
   std::vector<uint8_t> Table(Count);
-  llvm::DenseMap<llvm::Value *, llvm::Constant *> Val;
   for (unsigned X = 0; X < Count; X++) {
-    Val.clear();
-    Val[Leaf] = llvm::ConstantInt::get(Leaf->getType(), X);
-    llvm::Constant *R = nullptr;
-    for (auto *I : Order) {
-      llvm::SmallVector<llvm::Constant *, 3> Ops;
-      for (auto &O : I->operands()) {
-        auto *C = llvm::dyn_cast<llvm::Constant>(O.get());
-        Ops.push_back(C ? C : Val.lookup(O.get()));
-        if (!Ops.back()) return false;
-      }
-      if (auto *Cmp = llvm::dyn_cast<llvm::ICmpInst>(I))
-        R = llvm::ConstantFoldCompareInstOperands(Cmp->getPredicate(), Ops[0],
-                                                  Ops[1], DL);
-      else
-        R = llvm::ConstantFoldInstOperands(I, Ops, DL);
-      if (!R) return false;
-      Val[I] = R;
-    }
-    if (auto *CI = llvm::dyn_cast<llvm::ConstantInt>(R))
-      Table[X] = CI->isOne();
-    else if (llvm::isa<llvm::PoisonValue>(R))
-      Table[X] = 2;
-    else
-      return false;
+    llvm::Constant *R = narrowEval(T, X, DL);
+    if (!R) return false;
+    auto *CI = llvm::dyn_cast<llvm::ConstantInt>(R);
+    Table[X] = CI ? CI->isOne() : 2;
   }
 
   // The plain predicate with that table
@@ -696,6 +716,77 @@ static int foldNarrowCompares(llvm::Function &F, bool Debug) {
   for (auto R = Roots.rbegin(); R != Roots.rend(); ++R)
     if (auto *IC = llvm::dyn_cast_or_null<llvm::ICmpInst>(*R))
       if (foldNarrowCompare(IC, Debug)) Count++;
+  return Count;
+}
+
+// A wider value that depends on one narrow value the same way: when it is
+// a * ext(v) + b for every v (sign- or zero-extended), it is written so -
+//   sext (i8 v | 0xcf) - ((v s< 0 ? 0xffffff00 : 0) | ((v & 0xcf) ^ 0xcf)) ^ ..
+// is sext(v) - 48. Every value of v is tried; poison is a don't-care.
+static bool foldNarrowValue(llvm::Instruction *Root, bool Debug) {
+  auto *Ty = llvm::dyn_cast<llvm::IntegerType>(Root->getType());
+  if (!Ty || Ty->getBitWidth() < 2 || Ty->getBitWidth() > 64) return false;
+  NarrowTree T;
+  if (!narrowTree(Root, T) || T.Order.size() < 4) return false;
+  const unsigned LW = T.Leaf->getType()->getIntegerBitWidth();
+  const unsigned W = Ty->getBitWidth();
+  if (W <= LW) return false;
+  const unsigned Count = 1u << LW;
+  const llvm::DataLayout &DL = Root->getModule()->getDataLayout();
+  std::vector<std::optional<llvm::APInt>> Table(Count);
+  for (unsigned X = 0; X < Count; X++) {
+    llvm::Constant *R = narrowEval(T, X, DL);
+    if (!R) return false;
+    if (auto *CI = llvm::dyn_cast<llvm::ConstantInt>(R))
+      Table[X] = CI->getValue();
+  }
+  if (!Table[0] || !Table[1]) return false;
+  // f(0) = b and f(1) = a + b, whichever the extension
+  const llvm::APInt B = *Table[0], A = *Table[1] - B;
+  for (bool Signed : {true, false}) {
+    bool Fits = true;
+    for (unsigned X = 0; X < Count && Fits; X++) {
+      if (!Table[X]) continue;
+      const llvm::APInt V(LW, X);
+      Fits = *Table[X] == A * (Signed ? V.sext(W) : V.zext(W)) + B;
+    }
+    if (!Fits) continue;
+    // ext, and a multiplication and an addition where they are needed
+    const unsigned NewCount = (A.isZero() ? 0 : 1 + !A.isOne()) + !B.isZero();
+    if (NewCount >= T.Order.size()) return false;
+    llvm::IRBuilder<> Bld(Root);
+    llvm::Value *New = nullptr;
+    if (A.isZero()) {
+      New = llvm::ConstantInt::get(Ty, B);
+    } else {
+      New = Signed ? Bld.CreateSExt(T.Leaf, Ty) : Bld.CreateZExt(T.Leaf, Ty);
+      if (!A.isOne()) New = Bld.CreateMul(New, llvm::ConstantInt::get(Ty, A));
+      if (!B.isZero()) New = Bld.CreateAdd(New, llvm::ConstantInt::get(Ty, B));
+    }
+    if (Debug) {
+      outs() << "[!] Narrow value (" << Count << " inputs tried): ";
+      New->print(outs());
+      outs() << "\n";
+    }
+    Root->replaceAllUsesWith(New);
+    llvm::RecursivelyDeleteTriviallyDeadInstructions(Root);
+    return true;
+  }
+  return false;
+}
+
+static int foldNarrowValues(llvm::Function &F, bool Debug) {
+  llvm::SmallVector<llvm::WeakVH, 32> Roots;
+  for (auto &BB : F)
+    for (auto &I : BB)
+      if (I.getType()->isIntegerTy() && !I.getType()->isIntegerTy(1) &&
+          !llvm::isa<llvm::PHINode>(&I))
+        Roots.push_back(&I);
+  int Count = 0;
+  // the last ones first: a whole expression before its parts
+  for (auto R = Roots.rbegin(); R != Roots.rend(); ++R)
+    if (auto *I = llvm::dyn_cast_or_null<llvm::Instruction>(*R))
+      if (foldNarrowValue(I, Debug)) Count++;
   return Count;
 }
 
@@ -995,6 +1086,7 @@ int LLVMParser::extractAndSimplify() {
     // What the candidates don't cover: a comparison that depends on one
     // narrow value, and sums whose terms cancel across shared values
     if (int N = foldNarrowCompares(*F, this->Debug) +
+                foldNarrowValues(*F, this->Debug) +
                 cancelLinearTerms(*F, this->Debug) +
                 dropMasksUnderMul(*F, this->Debug)) {
       MBASimplified += N;
