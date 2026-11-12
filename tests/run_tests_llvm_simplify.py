@@ -32,7 +32,8 @@ filenames = ["MBA_OP.ll", "mba_comb.ll", "mbas.ll",
              "vm_obf.ll", "scramble4.ll", "xor_op_pred.ll",
              "remill_flat_mba_add.ll", "piecewise_step.ll", "cmp_boundary.ll",
              "piecewise_around.ll", "narrow_compare.ll", "linear_cancel.ll",
-             "mul_mask.ll", "narrow_value.ll"]
+             "mul_mask.ll", "narrow_value.ll",
+             "affine_rcr.ll"]
 
 # Text the simplified output must contain, for files where "some MBA was
 # replaced" is not enough (the wrong subtree can be replaced instead).
@@ -56,6 +57,10 @@ expected_in_output = {
 forbidden_in_output = {
     # 1234 * (a & 0x7fffffffffffffff): the mask clears a bit the product drops
     "mul_mask.ll": "9223372036854775807",
+    # ceil(p / 2) + floor(p / 2) through the carry: p
+    "affine_rcr.ll": "call i64 @llvm.fshl",
+    # (z & 0x7f) - (z & 0x80): the halves of a sign extension
+    "narrow_value.ll": "and i64",
     # the comparisons dropped (random inputs never reach x <= 1000000)
     "cmp_boundary.ll": "xor i64 %x, 12345",
 }
