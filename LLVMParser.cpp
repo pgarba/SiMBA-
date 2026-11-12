@@ -801,6 +801,37 @@ static int cancelLinearTerms(llvm::Function &F, bool Debug) {
   return Count;
 }
 
+// A mask on a product's operand that only clears bits the product drops:
+// 1234 * (a & 0x7fffffffffffffff) is 1234 * a, as 1234 is even and the top
+// bit of a is multiplied out of the 64. (A simplifier's result can carry
+// such a mask; LLVM keeps it, and moves it through a bswap.)
+static int dropMasksUnderMul(llvm::Function &F, bool Debug) {
+  int Count = 0;
+  for (auto &BB : F)
+    for (auto &I : BB) {
+      if (I.getOpcode() != llvm::Instruction::Mul) continue;
+      // either way round: a replacement is built as it was written
+      const unsigned CI = llvm::isa<llvm::ConstantInt>(I.getOperand(0)) ? 0 : 1;
+      auto *C = llvm::dyn_cast<llvm::ConstantInt>(I.getOperand(CI));
+      auto *And = llvm::dyn_cast<llvm::BinaryOperator>(I.getOperand(1 - CI));
+      if (!C || C->isZero() || !And ||
+          And->getOpcode() != llvm::Instruction::And)
+        continue;
+      const unsigned MI = llvm::isa<llvm::ConstantInt>(And->getOperand(0)) ? 0 : 1;
+      auto *M = llvm::dyn_cast<llvm::ConstantInt>(And->getOperand(MI));
+      if (!M) continue;
+      // the operand's bits that reach the product: the low W - tz(C)
+      const unsigned W = C->getBitWidth();
+      const llvm::APInt Kept =
+          llvm::APInt::getLowBitsSet(W, W - C->getValue().countr_zero());
+      if (!Kept.isSubsetOf(M->getValue())) continue;
+      if (Debug) outs() << "[!] Mask under a product dropped\n";
+      I.setOperand(1 - CI, And->getOperand(1 - MI));
+      Count++;
+    }
+  return Count;
+}
+
 int LLVMParser::extractAndSimplify() {
   int MBASimplified = 0;
 
@@ -964,7 +995,8 @@ int LLVMParser::extractAndSimplify() {
     // What the candidates don't cover: a comparison that depends on one
     // narrow value, and sums whose terms cancel across shared values
     if (int N = foldNarrowCompares(*F, this->Debug) +
-                cancelLinearTerms(*F, this->Debug)) {
+                cancelLinearTerms(*F, this->Debug) +
+                dropMasksUnderMul(*F, this->Debug)) {
       MBASimplified += N;
       MBACount += N;
       MBACountStats += N;
