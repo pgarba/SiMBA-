@@ -2038,6 +2038,9 @@ bool LLVMParser::isSupportedInstruction(llvm::Value *V) {
     if (BO->getOpcode() == Instruction::Shl ||
         BO->getOpcode() == Instruction::Or ||
         BO->getOpcode() == Instruction::And ||
+        // LLVM 20 dropped mul as well: without it a product was cut as a
+        // free variable (t = 10 * sx8(u) + ... lost that it is even)
+        BO->getOpcode() == Instruction::Mul ||
         BO->getOpcode() == Instruction::LShr ||
         BO->getOpcode() == Instruction::AShr ||
         BO->getOpcode() == Instruction::UDiv ||
@@ -2717,6 +2720,16 @@ bool LLVMParser::tryPiecewise(llvm::DominatorTree *DT,
       for (auto &[Old, NewI] : Swap) NewI->replaceAllUsesWith(Old);
       for (auto I = New.rbegin(); I != New.rend(); ++I) (*I)->eraseFromParent();
     };
+    // cut & M is defined after the cut: a user that comes before the cut (a
+    // subtree around it that was expanded, computed earlier in the block)
+    // cannot read it - the rewrite gave IR whose definition did not dominate
+    // its use, and evaluateAST aborted with "V not found!".
+    for (auto &[Old, NewI] : Swap)
+      for (auto &U : Old->uses()) {
+        auto *UI = dyn_cast<Instruction>(U.getUser());
+        if (!UI || !(Above.count(UI) || Expanded.count(UI))) continue;
+        if (isa<PHINode>(UI) || !DT->dominates(NewI, UI)) Ok = false;
+      }
     if (!Ok) {
       Undo();
       continue;
@@ -3851,6 +3864,35 @@ bool LLVMParser::findReplacements(llvm::DominatorTree *DT,
 
       // Skip non valid candidates
       if (Cand.isValid == false) continue;
+    }
+
+    // An earlier candidate's piecewise stage may have rewritten nodes this
+    // tree shares with it (tryPiecewise's "around the cut": a node's operand
+    // becomes a new `cut & M`), which this AST, collected before, does not
+    // hold - evaluateAST then aborted with "V not found!". Collect it again.
+    {
+      llvm::SmallPtrSet<llvm::Value *, 32> Known(Cand.Variables.begin(),
+                                                 Cand.Variables.end());
+      for (auto &E : Cand.AST) Known.insert(E.I);
+      bool Stale = false;
+      for (auto &E : Cand.AST) {
+        for (auto &O : E.I->operands())
+          if (isa<Instruction>(O.get()) && !Known.count(O.get())) Stale = true;
+        if (Stale) break;
+      }
+      if (Stale) {
+        Cand.AST.clear();
+        Cand.Variables.clear();
+        this->getAST(DT, Cand.Candidate, Cand.AST, Cand.Variables, true);
+        Cand.ASTSize = getASTSize(Cand.AST);
+        if (Cand.AST.empty()) {
+          Cand.isValid = false;
+          continue;
+        }
+        Hash = calculateHash(Cand.AST);
+        AlreadyProved = false;
+        Cand.isValid = false;
+      }
     }
 
     auto Modulus = getModulus(BitWidth);
