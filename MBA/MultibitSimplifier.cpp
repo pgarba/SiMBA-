@@ -288,6 +288,18 @@ bool MultibitSimplifier::isLinearResultVector() const {
   // Set vidx for the new AST's variables so eval() works.
   linearExpr->enumerateVariables(variables);
   const uint64_t linearNodes = std::max(1, linearExpr->countNodes());
+  // The check below costs linearNodes * 2^varCount * bitCount node visits,
+  // and the budget was only consulted once per bit row: with 13 variables a
+  // row alone was ~1.6e9 visits of a 8000-deep SUM chain (Saturn on Civ7
+  // 0x140836640 with its ret oracle: minutes per candidate). Refuse up front
+  // when the whole check would exceed what is left of the budget.
+  if (budgetOps) {
+    const uint64_t remaining = opsUsed < budgetOps ? budgetOps - opsUsed : 0;
+    const uint64_t perRow = linearNodes * numCombinations;
+    if (perRow / numCombinations != linearNodes ||
+        perRow > remaining / std::max(1, bitCount))
+      return false;
+  }
 
   // Build the multi-bit vector for the linear expression.
   std::vector<uint64_t> otherVec(numCombinations * static_cast<size_t>(bitCount), 0);
@@ -307,6 +319,8 @@ bool MultibitSimplifier::isLinearResultVector() const {
       }
       uint64_t eval = linearExpr->eval(values);
       opsUsed += linearNodes;
+      if (overBudget())
+        return false;
       eval = moduloMask & eval;
       eval >>= bitIndex;
       otherVec[bitIndex * numCombinations + comb] = eval;
