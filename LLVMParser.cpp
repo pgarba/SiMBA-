@@ -202,6 +202,7 @@ static bool ASTContainsArithmeticShift(llvm::SmallVectorImpl<BFSEntry> &AST);
 
 // Defined below (before getASTAsString); used earlier in the routing path.
 static bool ASTHasUnrenderableInstruction(llvm::SmallVectorImpl<BFSEntry> &AST);
+static bool ASTRenderTooLarge(llvm::SmallVectorImpl<BFSEntry> &AST);
 
 int MBACountStats = 0;
 
@@ -1563,7 +1564,7 @@ int LLVMParser::simplifyMBAModule() {
       if (auto Root = dyn_cast<Instruction>(Terminator->getOperand(0)))
         this->getAST(&DT, Root, AST, RoutedVars, true);
 
-      if (!RoutedVars.empty()) {
+      if (!RoutedVars.empty() && !ASTRenderTooLarge(AST)) {
         // Reorder the used variables into the original declaration order so
         // the letter mapping is deterministic ('a' = first declared used
         // argument, ...).
@@ -3992,7 +3993,8 @@ bool LLVMParser::findReplacements(llvm::DominatorTree *DT,
       // Auto-fallback: native produced nothing (e.g. checkLinear classified
       // the expression as linear but the native simplifier cannot reduce it,
       // while msimba/general could). Try the other routes before giving up.
-      if (Cand.Replacement.empty() && LSiMBA::autoFallbackActive()) {
+      if (Cand.Replacement.empty() && LSiMBA::autoFallbackActive() &&
+          !ASTRenderTooLarge(Cand.AST)) {
         auto Expr = getASTAsString(Cand.AST, Cand.Variables);
         std::string fb;
         if (LSiMBA::TryAutoFallback(Expr, fb, BitWidth, this->Prove, false,
@@ -4360,6 +4362,29 @@ static bool isUnrenderableInstruction(llvm::Value *V) {
 static bool ASTHasUnrenderableInstruction(llvm::SmallVectorImpl<BFSEntry> &AST) {
   for (auto &E : AST) {
     if (isUnrenderableInstruction(E.I)) return true;
+  }
+  return ASTRenderTooLarge(AST);
+}
+
+// True iff getASTAsString's text would exceed SIMBA_MAX_RENDER_BYTES (default
+// 1 MiB). It expands the DAG into a tree - every use of a shared
+// subexpression copies its text - so a DAG of a few hundred nodes can render
+// to gigabytes (Saturn, Civ7 0x140836640: OOM at 7 GB inside
+// getASTAsString). Mirrors the renderer's order: operands come later in AST.
+static bool ASTRenderTooLarge(llvm::SmallVectorImpl<BFSEntry> &AST) {
+  static const uint64_t Limit = getenv("SIMBA_MAX_RENDER_BYTES")
+                                    ? strtoull(getenv("SIMBA_MAX_RENDER_BYTES"), nullptr, 0)
+                                    : (1u << 20);
+  std::unordered_map<llvm::Value *, uint64_t> Size;
+  for (auto E = AST.rbegin(); E != AST.rend(); ++E) {
+    uint64_t S = 8;
+    if (auto *I = llvm::dyn_cast<llvm::Instruction>(E->I))
+      for (auto &Op : I->operands()) {
+        auto It = Size.find(Op.get());
+        S += It != Size.end() ? It->second : 24;
+        if (S > Limit) return true;
+      }
+    Size[E->I] = S;
   }
   return false;
 }
