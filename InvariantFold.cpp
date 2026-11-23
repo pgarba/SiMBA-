@@ -2,8 +2,12 @@
 // InvariantFold.h.
 #include "InvariantFold.h"
 
+#include <bitset>
 #include <cstdint>
+#include <tuple>
 #include <cstdlib>
+#include <map>
+#include <optional>
 #include <random>
 #include <string>
 #include <vector>
@@ -327,6 +331,7 @@ class Folder {
 
   int run();
   int forwarded = 0;  // loads rebuilt from the stores that wrote them
+  int linear = 0;     // values rebuilt as XOR-affine functions of an rsp+c value
 
  private:
   struct ArgSample {
@@ -336,6 +341,10 @@ class Folder {
   };
 
   bool eval(Instruction &I, APInt &out);
+  int synthesizeLinear(const std::vector<uint8_t> &state, uint8_t differs, const std::vector<int> &slot,
+                       const std::vector<uint64_t> &samp, const std::vector<uint8_t> &sampOk, int samples,
+                       const std::vector<std::vector<uint64_t>> &argSamp, size_t nargs);
+  std::vector<Value *> argsOf;  // the sampled arguments, in argSamp's order
   bool val(Value *V, const Shape &s, APInt &out);
 
   Function &F;
@@ -605,6 +614,157 @@ bool Folder::eval(Instruction &I, APInt &out) {
   return false;  // loads, calls, phis, floating point: not evaluated
 }
 
+// A value that is an XOR-affine function of the bits of one "rsp + c" value L
+// in its operand tree -- out = c ^ XOR over the L bits in a mask, per output
+// bit -- rebuilt as c ^ XOR_d ((L >> d) & m_d). The obfuscator computes a
+// byte-wise XOR by spreading bits apart (x * 0x0101.. & 0x8040.. *
+// 0x0102..), adding (no carry crosses a gap) and keeping every other bit; LLVM
+// sees multiplies and adds. The function is found by Gaussian elimination
+// over GF(2) on the samples (all of them: more rows than unknowns, so the rest
+// check it), and kept only when it is fully determined, consistent, and much
+// smaller than the code it replaces.
+int Folder::synthesizeLinear(const std::vector<uint8_t> &state, uint8_t differs, const std::vector<int> &slot,
+                             const std::vector<uint64_t> &samp, const std::vector<uint8_t> &sampOk, int samples,
+                             const std::vector<std::vector<uint64_t>> &argSamp, size_t nargs) {
+  const unsigned n = unsigned(order.size());
+  auto S = [&](int sl, int k) { return samp[size_t(sl) * size_t(samples) + size_t(k)]; };
+  auto widthMask = [](unsigned w) { return w >= 64 ? ~0ULL : ((1ULL << w) - 1); };
+  // the leaves: values that are (a pointer argument + a constant) mod 2^w,
+  // one class per (argument, width, constant): the same value however many
+  // instructions compute it
+  struct Leaf {
+    size_t arg;
+    unsigned width;
+    uint64_t off;
+    int rep;  // an instruction computing it (for its samples)
+  };
+  std::vector<Leaf> leaves;
+  std::map<std::tuple<size_t, unsigned, uint64_t>, int> leafClass;
+  std::vector<int> leafId(n, -1);
+  for (unsigned i = 0; i < n; ++i) {
+    const int sl = slot[i];
+    if (sl < 0 || !sampOk[size_t(sl)] || state[i] != differs) continue;
+    const unsigned w = shapes[i].width;
+    const uint64_t m = widthMask(w);
+    for (size_t a = 0; a < nargs; ++a) {
+      if (argSamp[a].empty() || argSamp[a][0] == argSamp[a][1]) continue;
+      const uint64_t d0 = (S(sl, 0) - argSamp[a][0]) & m;
+      bool leaf = true;
+      for (int k = 1; k < samples && leaf; ++k) leaf = ((S(sl, k) - argSamp[a][size_t(k)]) & m) == d0;
+      if (!leaf) continue;
+      auto key = std::make_tuple(a, w, d0);
+      auto it = leafClass.find(key);
+      if (it == leafClass.end()) {
+        if (leaves.size() >= 256) break;
+        it = leafClass.emplace(key, int(leaves.size())).first;
+        leaves.push_back({a, w, d0, sl});
+      }
+      leafId[i] = it->second;
+      break;
+    }
+  }
+  if (leaves.empty()) return 0;
+  // which leaf classes each value's operand tree holds, and a size estimate
+  std::vector<std::bitset<256>> cone(n);
+  std::vector<double> weight(n, 1);
+  for (unsigned i = 0; i < n; ++i) {
+    for (Value *Op : order[i]->operands())
+      if (auto *OI = dyn_cast<Instruction>(Op))
+        if (auto it = index.find(OI); it != index.end() && it->second < i) {
+          cone[i] |= cone[it->second];
+          weight[i] = std::min(1e12, weight[i] + weight[it->second]);
+        }
+    if (leafId[i] >= 0) cone[i].set(size_t(leafId[i]));
+  }
+  // the size of a leaf's own computation, for the "smaller" test
+  std::vector<double> leafWeight(leaves.size(), 1e12);
+  for (unsigned i = 0; i < n; ++i)
+    if (leafId[i] >= 0) leafWeight[size_t(leafId[i])] = std::min(leafWeight[size_t(leafId[i])], weight[i]);
+  int replaced = 0;
+  for (unsigned i = 0; i < n; ++i) {
+    Instruction *I = order[i];
+    const int sl = slot[i];
+    if (sl < 0 || !sampOk[size_t(sl)] || state[i] != differs || leafId[i] >= 0 || I->use_empty() || cone[i].none())
+      continue;
+    const unsigned w = shapes[i].width;
+    struct Fit {
+      unsigned leaf;
+      uint64_t c;
+      std::vector<std::pair<int, uint64_t>> diag;  // shift d (output bit j <- L bit j+d), mask
+    };
+    std::optional<Fit> best;
+    for (unsigned li = 0; li < leaves.size(); ++li) {
+      if (!cone[i].test(li)) continue;
+      const unsigned L = li;
+      const int lsl = leaves[li].rep;
+      const unsigned lw = leaves[li].width;
+      // the bits of L that vary over the samples are the unknowns, plus the constant
+      uint64_t lor = 0, land = ~0ULL;
+      for (int k = 0; k < samples; ++k) { lor |= S(lsl, k); land &= S(lsl, k); }
+      const uint64_t vary = (lor & ~land) & widthMask(lw);
+      std::vector<int> vb;
+      for (int b = 0; b < 64; ++b)
+        if (vary >> b & 1) vb.push_back(b);
+      const int nv = int(vb.size()) + 1;
+      if (nv > 64 || samples < nv + 16) continue;
+      // rows: the unknowns' bits (bit nv-1: the constant), and the value
+      std::vector<std::pair<uint64_t, uint64_t>> rows(static_cast<size_t>(samples));
+      for (int k = 0; k < samples; ++k) {
+        uint64_t x = 0;
+        for (int t = 0; t < int(vb.size()); ++t) x |= ((S(lsl, k) >> vb[size_t(t)]) & 1ULL) << t;
+        x |= 1ULL << (nv - 1);
+        rows[size_t(k)] = {x, S(sl, k) & widthMask(w)};
+      }
+      std::vector<int> pivotRow(size_t(nv), -1);
+      int r = 0;
+      for (int col = 0; col < nv && r < samples; ++col) {
+        int p = -1;
+        for (int k = r; k < samples; ++k)
+          if (rows[size_t(k)].first >> col & 1) { p = k; break; }
+        if (p < 0) continue;
+        std::swap(rows[size_t(r)], rows[size_t(p)]);
+        for (int k = 0; k < samples; ++k)
+          if (k != r && (rows[size_t(k)].first >> col & 1)) {
+            rows[size_t(k)].first ^= rows[size_t(r)].first;
+            rows[size_t(k)].second ^= rows[size_t(r)].second;
+          }
+        pivotRow[size_t(col)] = r++;
+      }
+      if (r < nv) continue;  // not determined by the samples
+      bool consistent = true;
+      for (int k = r; k < samples && consistent; ++k) consistent = rows[size_t(k)].second == 0;
+      if (!consistent) continue;  // not XOR-affine in L
+      Fit f{L, rows[size_t(pivotRow[size_t(nv - 1)])].second, {}};
+      std::map<int, uint64_t> diag;
+      for (int t = 0; t < int(vb.size()); ++t) {
+        const uint64_t outs = rows[size_t(pivotRow[size_t(t)])].second;  // output bits fed by L bit vb[t]
+        for (unsigned j = 0; j < w; ++j)
+          if (outs >> j & 1) diag[vb[size_t(t)] - int(j)] |= 1ULL << j;
+      }
+      f.diag.assign(diag.begin(), diag.end());
+      if (!best || f.diag.size() < best->diag.size()) best = f;
+    }
+    if (!best || best->diag.size() > 8) continue;
+    if (weight[i] - leafWeight[best->leaf] <= 4.0 * double(best->diag.size()) + 4) continue;  // no smaller
+    IRBuilder<> B(I);
+    // L from the argument itself (it dominates everything): (arg + off) mod 2^width
+    const Leaf &lf = leaves[best->leaf];
+    Value *A = argsOf[lf.arg];
+    Value *L64 = A->getType()->isPointerTy() ? B.CreatePtrToInt(A, B.getInt64Ty()) : B.CreateZExtOrTrunc(A, B.getInt64Ty());
+    L64 = B.CreateAdd(L64, B.getInt64(lf.off));
+    if (lf.width < 64) L64 = B.CreateAnd(L64, B.getInt64(widthMask(lf.width)));
+    Value *res = B.getInt64(best->c);
+    for (auto [d, m] : best->diag) {
+      Value *t = d >= 0 ? B.CreateLShr(L64, uint64_t(d)) : B.CreateShl(L64, uint64_t(-d));
+      res = B.CreateXor(res, B.CreateAnd(t, B.getInt64(m)));
+    }
+    if (w < 64) res = B.CreateTrunc(res, I->getType());
+    I->replaceAllUsesWith(res);
+    ++replaced;
+  }
+  return replaced;
+}
+
 int Folder::run() {
   if (F.isDeclaration()) return 0;
   forwarded = forwardPartialLoads(F);
@@ -651,6 +811,15 @@ int Folder::run() {
   vals.assign(n, APInt());
   known.assign(n, 0);
   const int samples = std::max(2, int(FoldInvariantSamples));
+  // every scalar integer value of at most 64 bits, sample by sample, for the
+  // bit-linear synthesis below; and the pointer arguments' samples
+  std::vector<int> slot(n, -1);
+  int slots = 0;
+  for (unsigned i = 0; i < n; ++i)
+    if (order[i]->getType()->isIntegerTy() && shapes[i].ok && shapes[i].width <= 64) slot[i] = slots++;
+  std::vector<uint64_t> samp(size_t(slots) * size_t(samples));
+  std::vector<uint8_t> sampOk(size_t(slots), 1);
+  std::vector<std::vector<uint64_t>> argSamp(args.size(), std::vector<uint64_t>(size_t(samples)));
   for (int k = 0; k < samples; ++k) {
     argVals.clear();
     for (const ArgSample &as : args) {
@@ -669,6 +838,7 @@ int Folder::run() {
         v = (v & ~APInt(as.s.bits(), as.align - 1)) | APInt(as.s.bits(), as.rem);
       }
       argVals[as.A] = v;
+      if (as.s.lanes == 1 && as.s.width == 64) argSamp[size_t(&as - args.data())][size_t(k)] = v.getZExtValue();
     }
     for (unsigned i = 0; i < n; ++i) {
       known[i] = 0;
@@ -677,6 +847,7 @@ int Folder::run() {
       if (!order[i]->getType()->isVoidTy() && eval(*order[i], r)) {
         vals[i] = r;
         known[i] = 1;
+        if (slot[i] >= 0) samp[size_t(slot[i]) * size_t(samples) + size_t(k)] = r.getZExtValue();
         if (state[i] == Unseen) {
           state[i] = Same;
           first[i] = r;
@@ -685,6 +856,7 @@ int Folder::run() {
         }
       } else {
         state[i] = Differs;  // unknown in some sample: never folded
+        if (slot[i] >= 0) sampOk[size_t(slot[i])] = 0;
         if (k == 0 && Debug) {
           // what the evaluator couldn't do: an instruction none of whose
           // operands is the reason (each one known, or a constant)
@@ -722,6 +894,9 @@ int Folder::run() {
     I->replaceAllUsesWith(bitsConst(T, shapes[i], first[i]));
     ++folded;
   }
+  for (const ArgSample &as : args) argsOf.push_back(as.A);
+  linear = synthesizeLinear(state, Differs, slot, samp, sampOk, samples, argSamp, args.size());
+  folded += linear;
   if (folded) {
     SmallVector<WeakTrackingVH, 64> dead;
     for (Instruction *I : order)
@@ -737,16 +912,18 @@ bool LSiMBA::foldInvariantsOnly() { return FoldInvariant && FoldInvariantOnly; }
 
 int LSiMBA::foldInvariantsIfEnabled(Module &M, Function *F) {
   if (!FoldInvariant) return 0;
-  int folded = 0, forwarded = 0;
+  int folded = 0, forwarded = 0, linear = 0;
   for (Function &Fn : M) {
     if (F && &Fn != F) continue;
     if (Fn.isDeclaration()) continue;
     Folder fo(Fn);
     folded += fo.run();
     forwarded += fo.forwarded;
+    linear += fo.linear;
   }
   // (the count includes the forwarded loads: both are changes worth an opt)
   outs() << "[+] Loads forwarded from the stores that wrote them: '" << forwarded << "'\n";
+  outs() << "[+] Values rebuilt as XOR-affine in an rsp+c value: '" << linear << "'\n";
   outs() << "[+] Invariant values folded: '" << folded + forwarded << "' (" << folded
          << " sampled over " << std::max(2, int(FoldInvariantSamples)) << " input values, not proved)\n";
   return folded + forwarded;
