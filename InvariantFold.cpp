@@ -28,6 +28,7 @@
 #include <llvm/IR/IntrinsicInst.h>
 #include <llvm/IR/Module.h>
 #include <llvm/Support/CommandLine.h>
+#include <llvm/Support/MemoryBuffer.h>
 #include <llvm/Support/raw_ostream.h>
 #include <llvm/Transforms/Utils/Local.h>
 
@@ -55,6 +56,14 @@ static cl::list<std::string> FoldInvariantArg(
     "fold-invariant-arg", cl::ZeroOrMore,
     cl::desc("NAME:ALIGN:REM -- the argument NAME is always REM modulo ALIGN "
              "(a power of two), e.g. RSP:16:8 at a function's entry"));
+
+static cl::opt<std::string> FoldInvariantMem(
+    "fold-invariant-mem", cl::Optional,
+    cl::desc("The memory at the function's entry that is known: lines 'ARG OFF HEX16' "
+             "(the qword at ARG+OFF) or 'ARG OFF ptr DELTA' (it holds ARG+DELTA). A load "
+             "that reads only such memory (no store before it writes its bytes) becomes "
+             "that value; the rest stays a load (symbolic)"),
+    cl::init(""));
 
 static cl::opt<unsigned> FoldInvariantSeed(
     "fold-invariant-seed", cl::Optional,
@@ -176,9 +185,102 @@ Constant *bitsConst(Type *T, const Shape &s, const APInt &v) {
 // gives up at a write it can't place (a store through another pointer, a
 // call that writes memory). Little-endian targets only. Returns how many
 // loads it replaced.
+// $SIMBA_FOLD_SAMPLES / -fold-invariant-samples-file: real runs, one per
+// sample -- the arguments' values ("ARG RSP 7fff...") and the memory at entry
+// that differs between them ("MEM RBP -10836 <hex16>"), each sample begun by
+// a line "S". The fold then evaluates with run k's arguments and memory, so a
+// value made from both (an opaque predicate: one half stored long before,
+// the other computed from RSP) is seen to be the same in every run.
+struct RunSample {
+  std::map<std::string, uint64_t> args;
+  std::map<std::pair<std::string, int64_t>, uint8_t> bytes;
+};
+static cl::opt<std::string> FoldInvariantSamplesFile(
+    "fold-invariant-samples-file", cl::Optional,
+    cl::desc("Real runs to sample the free inputs from (see InvariantFold.cpp)"), cl::init(""));
+const std::vector<RunSample> &runSamples() {
+  static std::vector<RunSample> runs;
+  static bool loaded = false;
+  if (loaded) return runs;
+  loaded = true;
+  std::string path = FoldInvariantSamplesFile;
+  if (path.empty())
+    if (const char *e = getenv("SIMBA_FOLD_SAMPLES")) path = e;
+  if (path.empty()) return runs;
+  auto buf = MemoryBuffer::getFile(path);
+  if (!buf) {
+    errs() << "[!] fold samples: can't read " << path << "\n";
+    return runs;
+  }
+  SmallVector<StringRef, 0> lines;
+  (*buf)->getBuffer().split(lines, '\n');
+  for (StringRef l : lines) {
+    SmallVector<StringRef, 4> f;
+    l.trim().split(f, ' ', -1, false);
+    if (f.empty()) continue;
+    if (f[0] == "S") {
+      runs.emplace_back();
+      continue;
+    }
+    if (runs.empty()) continue;
+    uint64_t v = 0;
+    int64_t off = 0;
+    if (f[0] == "ARG" && f.size() == 3 && !f[2].getAsInteger(16, v)) runs.back().args[f[1].str()] = v;
+    if (f[0] == "MEM" && f.size() == 4 && !f[2].getAsInteger(0, off) && !f[3].getAsInteger(16, v))
+      for (int b = 0; b < 8; ++b) runs.back().bytes[{f[1].str(), off + b}] = uint8_t(v >> (8 * b));
+  }
+  errs() << "[+] fold samples: " << runs.size() << " real run(s)\n";
+  return runs;
+}
+
+struct InitialMem {
+  std::map<int64_t, uint8_t> bytes;  // ARG+offset -> byte
+  std::map<int64_t, int64_t> ptrs;   // ARG+offset (a qword) -> it holds ARG+delta
+};
+// -fold-invariant-mem, by argument name
+const StringMap<InitialMem> &initialMem() {
+  static StringMap<InitialMem> mem;
+  static bool loaded = false;
+  if (loaded) return mem;
+  loaded = true;
+  // (or $SIMBA_FOLD_MEM: a caller that runs SiMBA++ with its own arguments)
+  std::string path = FoldInvariantMem;
+  if (path.empty())
+    if (const char *e = getenv("SIMBA_FOLD_MEM")) path = e;
+  if (path.empty()) return mem;
+  auto buf = MemoryBuffer::getFile(path);
+  if (!buf) {
+    errs() << "[!] -fold-invariant-mem: can't read " << path << "\n";
+    return mem;
+  }
+  SmallVector<StringRef, 0> lines;
+  (*buf)->getBuffer().split(lines, '\n');
+  size_t n = 0;
+  for (StringRef l : lines) {
+    SmallVector<StringRef, 4> f;
+    l.trim().split(f, ' ', -1, false);
+    if (f.size() < 3) continue;
+    int64_t off = 0;
+    if (f[1].getAsInteger(0, off)) continue;
+    InitialMem &m = mem[f[0]];
+    if (f[2] == "ptr" && f.size() >= 4) {
+      int64_t d = 0;
+      if (!f[3].getAsInteger(0, d)) m.ptrs[off] = d, ++n;
+      continue;
+    }
+    uint64_t q = 0;
+    if (f[2].getAsInteger(16, q)) continue;
+    for (int b = 0; b < 8; ++b) m.bytes[off + b] = uint8_t(q >> (8 * b));
+    ++n;
+  }
+  errs() << "[+] -fold-invariant-mem: " << n << " qword(s) known at entry\n";
+  return mem;
+}
+
 int forwardPartialLoads(Function &F) {
   const DataLayout &DL = F.getParent()->getDataLayout();
   if (!DL.isLittleEndian()) return 0;
+  const StringMap<InitialMem> &imem = initialMem();
   auto noaliasArg = [](Value *V) {
     auto *A = dyn_cast<Argument>(V);
     return A && A->hasNoAliasAttr();
@@ -209,11 +311,38 @@ int forwardPartialLoads(Function &F) {
     std::vector<int> fill(lsize, -1);                                     // byte -> a memset's byte
     uint64_t remaining = lsize;
     bool fail = false;
+    std::optional<int64_t> entryPtr;  // the load reads a known pointer qword: ARG + this
     BasicBlock *BB = LI->getParent();
     BasicBlock::iterator it = LI->getIterator();
     SmallPtrSet<BasicBlock *, 8> seen;
     while (remaining && !fail) {
       if (it == BB->begin()) {
+        if (BB == &F.getEntryBlock()) {
+          // the rest is the memory at entry: known, or not
+          auto mi = imem.find(lbase->getName());
+          if (mi == imem.end()) {
+            fail = true;
+            break;
+          }
+          // a pointer qword read whole: ARG + delta
+          if (remaining == lsize && lsize == 8)
+            if (auto pi = mi->second.ptrs.find(loff); pi != mi->second.ptrs.end()) {
+              entryPtr = pi->second;
+              remaining = 0;
+              break;
+            }
+          for (uint64_t b = 0; b < lsize; ++b) {
+            if (src[b].first || fill[b] >= 0) continue;
+            auto bi = mi->second.bytes.find(loff + int64_t(b));
+            if (bi == mi->second.bytes.end()) {
+              fail = true;
+              break;
+            }
+            fill[b] = bi->second;
+            --remaining;
+          }
+          break;
+        }
         BB = BB->getSinglePredecessor();
         if (!BB || !seen.insert(BB).second) {
           fail = true;
@@ -280,6 +409,17 @@ int forwardPartialLoads(Function &F) {
       if (X.mayWriteToMemory()) fail = true;
     }
     if (fail || remaining) continue;
+    if (entryPtr) {
+      IRBuilder<> B(LI);
+      Value *v = B.CreateAdd(B.CreatePtrToInt(lbase, B.getInt64Ty()), B.getInt64(uint64_t(*entryPtr)));
+      Value *res = LI->getType()->isPointerTy() ? B.CreateIntToPtr(v, LI->getType())
+                   : LI->getType()->isIntegerTy(64) ? v
+                                                    : B.CreateBitCast(v, LI->getType());
+      LI->replaceAllUsesWith(res);
+      LI->eraseFromParent();
+      ++n;
+      continue;
+    }
     // one store of the same type at the same place: GVN's job, not ours
     if (src[0].first && src[0].second == 0 && src[0].first->getType() == LI->getType()) {
       bool one = true;
@@ -345,6 +485,11 @@ class Folder {
                        const std::vector<uint64_t> &samp, const std::vector<uint8_t> &sampOk, int samples,
                        const std::vector<std::vector<uint64_t>> &argSamp, size_t nargs);
   std::vector<Value *> argsOf;  // the sampled arguments, in argSamp's order
+  // loads that read only memory at entry (no store before writes their
+  // bytes): base argument name and offset; evaluated from a run sample
+  DenseMap<LoadInst *, std::pair<std::string, int64_t>> entryLoads;
+  const RunSample *curRun = nullptr;
+  void findEntryLoads();
   bool val(Value *V, const Shape &s, APInt &out);
 
   Function &F;
@@ -611,7 +756,21 @@ bool Folder::eval(Instruction &I, APInt &out) {
     }
   }
 
-  return false;  // loads, calls, phis, floating point: not evaluated
+  if (auto *LI = dyn_cast<LoadInst>(&I)) {
+    if (!curRun) return false;
+    auto it = entryLoads.find(LI);
+    if (it == entryLoads.end()) return false;
+    const unsigned bytes = s.bits() / 8;
+    if (s.bits() % 8) return false;
+    out = APInt(s.bits(), 0);
+    for (unsigned b = 0; b < bytes; ++b) {
+      auto bi = curRun->bytes.find({it->second.first, it->second.second + int64_t(b)});
+      if (bi == curRun->bytes.end()) return false;
+      out.insertBits(APInt(8, bi->second), 8 * b);
+    }
+    return true;
+  }
+  return false;  // loads not from entry memory, calls, phis, floating point: not evaluated
 }
 
 // A value that is an XOR-affine function of the bits of one "rsp + c" value L
@@ -765,6 +924,62 @@ int Folder::synthesizeLinear(const std::vector<uint8_t> &state, uint8_t differs,
   return replaced;
 }
 
+void Folder::findEntryLoads() {
+  for (BasicBlock &BB0 : F)
+    for (Instruction &I0 : BB0) {
+      auto *LI = dyn_cast<LoadInst>(&I0);
+      if (!LI || !LI->isSimple()) continue;
+      int64_t loff = 0;
+      Value *lbase = GetPointerBaseWithConstantOffset(LI->getPointerOperand(), loff, DL);
+      auto *A = dyn_cast<Argument>(lbase);
+      if (!A || !A->hasNoAliasAttr()) continue;
+      const int64_t lsize = int64_t(DL.getTypeStoreSize(LI->getType()).getFixedValue());
+      BasicBlock *BB = LI->getParent();
+      BasicBlock::iterator it = LI->getIterator();
+      SmallPtrSet<BasicBlock *, 8> seen;
+      bool ok = false;
+      for (;;) {
+        if (it == BB->begin()) {
+          if (BB == &F.getEntryBlock()) { ok = true; break; }
+          BB = BB->getSinglePredecessor();
+          if (!BB || !seen.insert(BB).second) break;
+          it = BB->end();
+          continue;
+        }
+        --it;
+        Instruction &X = *it;
+        if (auto *II = dyn_cast<IntrinsicInst>(&X)) {
+          const Intrinsic::ID id = II->getIntrinsicID();
+          if (id == Intrinsic::experimental_noalias_scope_decl || id == Intrinsic::trap ||
+              II->isAssumeLikeIntrinsic() || II->isLifetimeStartOrEnd())
+            continue;
+        }
+        if (!X.mayWriteToMemory()) continue;
+        Value *P = nullptr;
+        int64_t ssize = 0;
+        if (auto *SI = dyn_cast<StoreInst>(&X)) {
+          P = SI->getPointerOperand();
+          ssize = int64_t(DL.getTypeStoreSize(SI->getValueOperand()->getType()).getFixedValue());
+        } else if (auto *MS = dyn_cast<MemSetInst>(&X)) {
+          auto *Len = dyn_cast<ConstantInt>(MS->getLength());
+          if (!Len) break;
+          P = MS->getDest();
+          ssize = int64_t(Len->getZExtValue());
+        } else {
+          break;  // a call that writes memory: anything
+        }
+        int64_t soff = 0;
+        Value *sbase = GetPointerBaseWithConstantOffset(P, soff, DL);
+        if (sbase != lbase) {
+          if (auto *SA = dyn_cast<Argument>(sbase); SA && SA->hasNoAliasAttr()) continue;
+          break;
+        }
+        if (soff < loff + lsize && loff < soff + ssize) break;  // it writes the load's bytes
+      }
+      if (ok) entryLoads[LI] = {A->getName().str(), loff};
+    }
+}
+
 int Folder::run() {
   if (F.isDeclaration()) return 0;
   forwarded = forwardPartialLoads(F);
@@ -810,7 +1025,9 @@ int Folder::run() {
   std::vector<APInt> first(n);
   vals.assign(n, APInt());
   known.assign(n, 0);
-  const int samples = std::max(2, int(FoldInvariantSamples));
+  const std::vector<RunSample> &runs = runSamples();
+  if (!runs.empty()) findEntryLoads();
+  const int samples = runs.empty() ? std::max(2, int(FoldInvariantSamples)) : int(runs.size());
   // every scalar integer value of at most 64 bits, sample by sample, for the
   // bit-linear synthesis below; and the pointer arguments' samples
   std::vector<int> slot(n, -1);
@@ -822,6 +1039,7 @@ int Folder::run() {
   std::vector<std::vector<uint64_t>> argSamp(args.size(), std::vector<uint64_t>(size_t(samples)));
   for (int k = 0; k < samples; ++k) {
     argVals.clear();
+    curRun = runs.empty() ? nullptr : &runs[size_t(k)];
     for (const ArgSample &as : args) {
       APInt v(as.s.bits(), 0);
       for (unsigned w = 0; w < as.s.bits(); w += 64)
@@ -837,6 +1055,9 @@ int Folder::run() {
       } else if (as.align > 1 && as.s.lanes == 1) {
         v = (v & ~APInt(as.s.bits(), as.align - 1)) | APInt(as.s.bits(), as.rem);
       }
+      if (curRun)
+        if (auto ra = curRun->args.find(as.A->getName().str()); ra != curRun->args.end())
+          v = APInt(as.s.bits(), ra->second);  // the run's own value
       argVals[as.A] = v;
       if (as.s.lanes == 1 && as.s.width == 64) argSamp[size_t(&as - args.data())][size_t(k)] = v.getZExtValue();
     }
@@ -924,7 +1145,8 @@ int LSiMBA::foldInvariantsIfEnabled(Module &M, Function *F) {
   // (the count includes the forwarded loads: both are changes worth an opt)
   outs() << "[+] Loads forwarded from the stores that wrote them: '" << forwarded << "'\n";
   outs() << "[+] Values rebuilt as XOR-affine in an rsp+c value: '" << linear << "'\n";
-  outs() << "[+] Invariant values folded: '" << folded + forwarded << "' (" << folded
-         << " sampled over " << std::max(2, int(FoldInvariantSamples)) << " input values, not proved)\n";
+  const size_t nsamp = runSamples().empty() ? size_t(std::max(2, int(FoldInvariantSamples))) : runSamples().size();
+  outs() << "[+] Invariant values folded: '" << folded + forwarded << "' (" << folded << " sampled over " << nsamp
+         << (runSamples().empty() ? " input values" : " real runs") << ", not proved)\n";
   return folded + forwarded;
 }
