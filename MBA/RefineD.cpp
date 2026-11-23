@@ -301,11 +301,11 @@ Node::PatternRefine Node::refineAfterSubstitutionDetail() {
   // so getCopy propagates the cached fingerprint and unchanged subtrees of a
   // candidate remain skippable.
   fold(static_cast<uint64_t>(type));
-  fold(constant.getZExtValue());
+  fold(MBAOps::toLow64(constant, 64));
   fold(constant.shl(64).getZExtValue());
   for (auto &c : children) {
     fold(static_cast<uint64_t>(c->type));
-    fold(c->constant.getZExtValue());
+    fold(MBAOps::toLow64(c->constant, 64));
     fold(c->constant.shl(64).getZExtValue());
   }
 

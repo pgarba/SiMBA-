@@ -2797,7 +2797,6 @@ bool LLVMParser::tryPiecewiseCuts(
       outs() << "[*] [PIECEWISE] '" << P << "' -> "
              << (Ok ? "proved" : "rejected") << "\n";
     if (!Ok) continue;
-
     Cand.AST.assign(Sub.begin(), Sub.end());
     Cand.Variables.assign(Var.begin(), Var.end());
     Cand.ASTSize = getASTSize(Sub);
@@ -4843,6 +4842,14 @@ llvm::APInt LLVMParser::evaluateAST(
     }
   }
   Constant *InstResult = nullptr;
+  // an intrinsic's operand as an integer; a non-integer constant (poison,
+  // undef, a constant expression) sets NonInt, and the result is discarded
+  bool NonInt = false;
+  auto intOperand = [&NonInt](Constant *C) -> uint64_t {
+    if (auto *CI = dyn_cast_or_null<ConstantInt>(C)) return CI->getZExtValue();
+    NonInt = true;
+    return 1;  // (not 0: ctz/clz of 0 is undefined)
+  };
 
   // has a big performance impact
   llvm::SmallDenseMap<llvm::Value *, llvm::Constant *, 16> ValueStack;
@@ -4855,6 +4862,14 @@ llvm::APInt LLVMParser::evaluateAST(
           getVal(BO->getOperand(0), ValueStack, Variables, Par));
       ConstantInt *Op1 = dyn_cast<ConstantInt>(
           getVal(BO->getOperand(1), ValueStack, Variables, Par));
+      if (!Op0 || !Op1) {
+        // An operand folded to a constant that isn't a plain integer: poison
+        // or undef (a lifter's undefined flags), a constant expression, ...
+        // Not evaluable here; fail through the Error contract (as the GEP
+        // case below does) instead of dereferencing a null ConstantInt*.
+        Error = true;
+        return APInt(1, 0);
+      }
 
       switch (BO->getOpcode()) {
         case Instruction::Shl:
@@ -4958,9 +4973,9 @@ llvm::APInt LLVMParser::evaluateAST(
           auto Op2 = getVal(Call->getArgOperand(2), ValueStack, Variables, Par);
 
           // Get constant value
-          auto a = dyn_cast<ConstantInt>(Op0)->getZExtValue();
-          auto b = dyn_cast<ConstantInt>(Op1)->getZExtValue();
-          auto c = dyn_cast<ConstantInt>(Op2)->getZExtValue();
+          auto a = intOperand(Op0);
+          auto b = intOperand(Op1);
+          auto c = intOperand(Op2);
 
           auto width = Op0->getType()->getIntegerBitWidth();
           auto c_mod_width = c % width;
@@ -4978,9 +4993,9 @@ llvm::APInt LLVMParser::evaluateAST(
           auto Op2 = getVal(Call->getArgOperand(2), ValueStack, Variables, Par);
 
           // Get constant value
-          auto a = dyn_cast<ConstantInt>(Op0)->getZExtValue();
-          auto b = dyn_cast<ConstantInt>(Op1)->getZExtValue();
-          auto c = dyn_cast<ConstantInt>(Op2)->getZExtValue();
+          auto a = intOperand(Op0);
+          auto b = intOperand(Op1);
+          auto c = intOperand(Op2);
 
           auto width = Op0->getType()->getIntegerBitWidth();
           auto c_mod_width = c % width;
@@ -4993,7 +5008,7 @@ llvm::APInt LLVMParser::evaluateAST(
         } break;
         case Intrinsic::bitreverse: {
           auto Op0 = getVal(Call->getArgOperand(0), ValueStack, Variables, Par);
-          auto a = dyn_cast<ConstantInt>(Op0)->getZExtValue();
+          auto a = intOperand(Op0);
 
           switch (Op0->getType()->getIntegerBitWidth()) {
             case 16: {
@@ -5017,13 +5032,13 @@ llvm::APInt LLVMParser::evaluateAST(
         } break;
         case Intrinsic::ctpop: {
           auto Op0 = getVal(Call->getArgOperand(0), ValueStack, Variables, Par);
-          auto a = dyn_cast<ConstantInt>(Op0)->getZExtValue();
+          auto a = intOperand(Op0);
           auto r = __builtin_popcount(a);
           InstResult = ConstantInt::get(Op0->getType(), r);
         } break;
         case Intrinsic::bswap: {
           auto Op0 = getVal(Call->getArgOperand(0), ValueStack, Variables, Par);
-          auto a = dyn_cast<ConstantInt>(Op0)->getZExtValue();
+          auto a = intOperand(Op0);
           switch (Op0->getType()->getIntegerBitWidth()) {
             case 16: {
               auto r = __builtin_bswap16(a);
@@ -5083,13 +5098,13 @@ llvm::APInt LLVMParser::evaluateAST(
         } break;
         case Intrinsic::abs: {
           auto Op0 = getVal(Call->getArgOperand(0), ValueStack, Variables, Par);
-          auto a = dyn_cast<ConstantInt>(Op0)->getZExtValue();
+          auto a = intOperand(Op0);
           auto r = __builtin_abs(a);
           InstResult = ConstantInt::get(Op0->getType(), r);
         } break;
         case Intrinsic::cttz: {
           auto Op0 = getVal(Call->getArgOperand(0), ValueStack, Variables, Par);
-          auto a = dyn_cast<ConstantInt>(Op0)->getZExtValue();
+          auto a = intOperand(Op0);
           auto r = __builtin_ctz(a);
           InstResult = ConstantInt::get(Op0->getType(), r);
         } break;
@@ -5105,6 +5120,10 @@ llvm::APInt LLVMParser::evaluateAST(
     }
 
   Done:
+    if (NonInt) {
+      Error = true;
+      return APInt(1, 0);
+    }
     ValueStack[CurInst] = InstResult;
   }
 

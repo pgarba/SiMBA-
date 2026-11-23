@@ -54,7 +54,7 @@ void mlAssertConsistent(const Node &n, const char *where) {
     std::string s;
     std::function<void(const Node &)> rec = [&](const Node &m) {
       s += "[" + std::to_string((int)m.type) + ":" + std::to_string((int)m.state) +
-          ":" + m.vname + ":" + std::to_string((int)m.constant.getSExtValue()) + ":";
+          ":" + m.vname + ":" + std::to_string((int)static_cast<std::int64_t>(MBAOps::toLow64(m.constant, 64))) + ":";
       for (auto &cc : m.children)
         rec(*cc);
       s += "]";
@@ -595,7 +595,7 @@ bool Node::markLinearFast() {
     h2 = mlFnv1a64(h2, x ^ 0x9E3779B97F4A7C15ULL);
   };
   mlFold(static_cast<uint64_t>(type));
-  mlFold(constant.getZExtValue());
+  mlFold(MBAOps::toLow64(constant, 64));
   mlFold(constant.shl(64).getZExtValue());
   for (auto &c : children) {
     mlFold(static_cast<uint64_t>(c->type));
@@ -607,7 +607,7 @@ bool Node::markLinearFast() {
   if (mlCheckMode) {
     ctxVec.reserve(3 + 2 * children.size());
     ctxVec.push_back(static_cast<uint64_t>(type));
-    ctxVec.push_back(constant.getZExtValue());
+    ctxVec.push_back(MBAOps::toLow64(constant, 64));
     ctxVec.push_back(constant.shl(64).getZExtValue());
     for (auto &c : children) {
       ctxVec.push_back(static_cast<uint64_t>(c->type));
@@ -653,7 +653,7 @@ bool Node::markLinearFast() {
         std::function<void(const Node &)> rec = [&](const Node &m) {
           s += "[" + std::to_string((int)m.type) + ":" + std::to_string((int)m.state) +
               ":" + std::to_string(m.linearEnd) + ":" + m.vname +
-              ":" + std::to_string((int)m.constant.getSExtValue()) + ":";
+              ":" + std::to_string((int)static_cast<std::int64_t>(MBAOps::toLow64(m.constant, 64))) + ":";
           for (auto &cc : m.children)
             rec(*cc);
           s += "]";

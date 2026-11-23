@@ -24,7 +24,7 @@ void ConstantSubstituter::collect(const std::shared_ptr<Node> &node,
     for (size_t i = 0; i < node->children.size(); i++) {
       auto &child = node->children[i];
       if (child->type == NodeType::CONSTANT) {
-        add(userMapping, child->constant.getSExtValue(), node, static_cast<int>(i));
+        add(userMapping, static_cast<std::int64_t>(MBAOps::toLow64(child->constant, 64)), node, static_cast<int>(i));
       } else {
         collect(child, userMapping, true, atLimit);
       }
@@ -32,7 +32,7 @@ void ConstantSubstituter::collect(const std::shared_ptr<Node> &node,
   } else if (kind == NodeType::NEGATION && inBitwise) {
     auto &single = node->children[0];
     if (single->type == NodeType::CONSTANT) {
-      add(userMapping, single->constant.getSExtValue(), node, 0);
+      add(userMapping, static_cast<std::int64_t>(MBAOps::toLow64(single->constant, 64)), node, 0);
     } else {
       collect(single, userMapping, inBitwise, atLimit);
     }

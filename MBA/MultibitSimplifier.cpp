@@ -644,7 +644,7 @@ std::string MultibitSimplifier::simplifyGeneric() {
       continue;
     if (ti->children[0]->type != NodeType::CONSTANT)
       continue;
-    uint64_t coeffI = static_cast<uint64_t>(ti->children[0]->constant.getSExtValue());
+    uint64_t coeffI = MBAOps::toLow64(ti->children[0]->constant, 64);
     if (coeffI == 0)
       continue;
     for (size_t j = i + 1; j < terms.size() && !xor3Found; j++) {
@@ -653,7 +653,7 @@ std::string MultibitSimplifier::simplifyGeneric() {
         continue;
       if (tj->children[0]->type != NodeType::CONSTANT)
         continue;
-      uint64_t coeffJ = static_cast<uint64_t>(tj->children[0]->constant.getSExtValue());
+      uint64_t coeffJ = MBAOps::toLow64(tj->children[0]->constant, 64);
       if (coeffJ != coeffI)
         continue;
       uint64_t neg2Coeff = moduloMask & (moduloMask * (2 * coeffI));
@@ -665,7 +665,7 @@ std::string MultibitSimplifier::simplifyGeneric() {
           continue;
         if (tk->children[0]->type != NodeType::CONSTANT)
           continue;
-        uint64_t coeffK = static_cast<uint64_t>(tk->children[0]->constant.getSExtValue());
+        uint64_t coeffK = MBAOps::toLow64(tk->children[0]->constant, 64);
         if (coeffK != neg2Coeff)
           continue;
         // Check varK == varI & varJ.
@@ -836,7 +836,7 @@ std::shared_ptr<Node> MultibitSimplifier::rewriteXorToAnd(
         varChild = child;
     }
     if (constChild && varChild) {
-      uint64_t C = constChild->constant.getZExtValue() & moduloMask;
+      uint64_t C = MBAOps::toLow64(constChild->constant, 64) & moduloMask;
       int bw = node->bitCount;
 
       // Build: x + C + (-2) * (x&C)
@@ -973,8 +973,8 @@ std::shared_ptr<Node> MultibitSimplifier::normalizeNegatedSum(
 
   // Check: constChild == prodConst (mod 2^N), i.e. -c + (-c*x) pattern.
   // In this case, -c + (-c*x) = c*~x.
-  uint64_t a = constChild->constant.getZExtValue() & moduloMask;
-  uint64_t b = prodConst->constant.getZExtValue() & moduloMask;
+  uint64_t a = MBAOps::toLow64(constChild->constant, 64) & moduloMask;
+  uint64_t b = MBAOps::toLow64(prodConst->constant, 64) & moduloMask;
   if (a != b)
     return node;
   // The result coefficient is -b (mod 2^N), since -c + (-c*x) = c*~x

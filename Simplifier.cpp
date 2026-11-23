@@ -517,15 +517,18 @@ bool Simplifier::probably_equivalent_parallel(std::string &expr0,
 
 bool Simplifier::is_double_modulo(llvm::APInt &a, llvm::APInt &b) {
   // return ((2 * b) == a) || ((2 * b) == (a + this->modulus));
-
-  if ((2 * b) == a) return true;
-
-  auto A = a.sextOrTrunc(this->modulus.getBitWidth());
-  auto B = b.sextOrTrunc(this->modulus.getBitWidth());
-
-  if ((2 * A) == (B + this->modulus)) return true;
-
-  return false;
+  //
+  // a and b are residues mod `modulus` but may come with different bit
+  // widths (comparing those asserts, and reads past a word without
+  // assertions), and the second test used to add the modulus to b instead of
+  // a. Both sides are taken as residues in one width that holds 2*b and
+  // a + modulus.
+  const unsigned W = this->modulus.getBitWidth() + 1;
+  const llvm::APInt M = this->modulus.zextOrTrunc(W);
+  const llvm::APInt A = a.zextOrTrunc(std::max(W, a.getBitWidth())).urem(M.zextOrTrunc(std::max(W, a.getBitWidth()))).zextOrTrunc(W);
+  const llvm::APInt B = b.zextOrTrunc(std::max(W, b.getBitWidth())).urem(M.zextOrTrunc(std::max(W, b.getBitWidth()))).zextOrTrunc(W);
+  const llvm::APInt B2 = B.shl(1);
+  return B2 == A || B2 == A + M;
 }
 
 std::string Simplifier::append_term_refinement(
