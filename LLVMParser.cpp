@@ -1,5 +1,6 @@
 #include <unordered_map>
 #include "LLVMParser.h"
+#include "InvariantFold.h"
 
 #include <functional>
 
@@ -320,8 +321,12 @@ LLVMParser::LLVMParser(llvm::Function *F, bool Parallel, bool Verify,
 LLVMParser::~LLVMParser() {}
 
 int LLVMParser::simplify() {
+  // Opaque values of the free inputs first (-fold-invariant): what they
+  // guarded folds with them, and the MBAs left are smaller
+  this->InvariantsFolded = foldInvariantsIfEnabled(*M, F);
+
   // Simplify MBAs
-  auto Count = this->extractAndSimplify();
+  auto Count = foldInvariantsOnly() ? 0 : this->extractAndSimplify();
 
   if (this->CountInstructions) {
     this->InstructionCountAfter = getInstructionCount(M);

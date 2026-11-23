@@ -163,6 +163,7 @@ class LLVMParser {
   int InstructionCountBefore = 0;
 
   int InstructionCountAfter = 0;
+  int InvariantsFolded = 0;  // -fold-invariant: values replaced by constants
 
   static llvm::LLVMContext Context;
 
