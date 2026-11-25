@@ -617,7 +617,7 @@ void createLLVMReplacement(llvm::Instruction *InsertionPoint,
               break;
             case '>':
               // stackAP.push_back(lhsAP >> rhsAP);
-              stackAP.push_back(Builder.CreateAShr(lhsAP, rhsAP));
+              stackAP.push_back(Builder.CreateLShr(lhsAP, rhsAP));
               break;
             case '<':
               // stackAP.push_back(lhsAP << rhsAP);
@@ -830,6 +830,10 @@ llvm::Function *createLLVMFunction(
             case '&':
               // stackAP.push_back(lhsAP & rhsAP);
               stackAP.push_back(Builder.CreateAnd(lhsAP, rhsAP));
+              break;
+            case '>':
+              // stackAP.push_back(lhsAP >> rhsAP);
+              stackAP.push_back(Builder.CreateLShr(lhsAP, rhsAP));
               break;
             case '<':
               // stackAP.push_back(lhsAP << rhsAP);
