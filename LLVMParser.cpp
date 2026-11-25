@@ -320,6 +320,7 @@ LLVMParser::LLVMParser(llvm::Function *F, bool Parallel, bool Verify,
 
 LLVMParser::~LLVMParser() {}
 
+static llvm::Function *gPiecewiseDumpFn = nullptr;
 int LLVMParser::simplify() {
   // Opaque values of the free inputs first (-fold-invariant): what they
   // guarded folds with them, and the MBAs left are smaller
@@ -327,6 +328,12 @@ int LLVMParser::simplify() {
 
   // Simplify MBAs
   auto Count = foldInvariantsOnly() ? 0 : this->extractAndSimplify();
+  if (gPiecewiseDumpFn) {
+    std::error_code EC;
+    llvm::raw_fd_ostream OS("pw_post.ll", EC);
+    if (!EC) gPiecewiseDumpFn->print(OS);
+    gPiecewiseDumpFn = nullptr;
+  }
 
   if (this->CountInstructions) {
     this->InstructionCountAfter = getInstructionCount(M);
@@ -2513,6 +2520,8 @@ bool LLVMParser::tryCandidateSimplifications(LSiMBA::MBACandidate &Cand,
 bool LLVMParser::tryPiecewise(llvm::DominatorTree *DT,
                               LSiMBA::MBACandidate &Cand, int BitWidth) {
   if (BitWidth < 8 || BitWidth > 64 || Cand.AST.empty()) return false;
+  static const bool NoPiecewise = getenv("SIMBA_NO_PIECEWISE") != nullptr;
+  if (NoPiecewise) return false;
   auto *Root = Cand.AST.front().I;
   auto FullWidth = [&](llvm::Value *V) {
     return V->getType()->isIntegerTy() &&
@@ -2802,6 +2811,30 @@ bool LLVMParser::tryPiecewiseCuts(
       outs() << "[*] [PIECEWISE] '" << P << "' -> "
              << (Ok ? "proved" : "rejected") << "\n";
     if (!Ok) continue;
+    if (const char *Lim = getenv("SIMBA_PIECEWISE_LIMIT")) {
+      static int Count = 0;
+      if (Count++ >= atoi(Lim)) return false;
+      if (Count == atoi(Lim) && getenv("SIMBA_PIECEWISE_DUMP")) {
+        std::error_code EC;
+        llvm::raw_fd_ostream OS("pw_pre.ll", EC);
+        if (!EC) Cand.AST.front().I->getFunction()->print(OS);
+        gPiecewiseDumpFn = Cand.AST.front().I->getFunction();
+        outs() << "[PIECEWISE-DUMP] root ";
+        Cand.AST.front().I->print(outs());
+        outs() << "\n";
+      }
+    }
+    if (getenv("SIMBA_LOG_PIECEWISE")) {
+      outs() << "[PIECEWISE-LOG] '" << P << "' a=";
+      Cut->print(outs());
+      outs() << "\n";
+      for (auto &E : Sub) {
+        outs() << "    ";
+        E.I->print(outs());
+        outs() << "\n";
+      }
+    }
+
     Cand.AST.assign(Sub.begin(), Sub.end());
     Cand.Variables.assign(Var.begin(), Var.end());
     Cand.ASTSize = getASTSize(Sub);
