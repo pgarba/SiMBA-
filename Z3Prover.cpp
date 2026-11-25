@@ -4,6 +4,7 @@
 #include <cstdlib>
 #include <iostream>
 #include <map>
+#include <tuple>
 
 #include "ShuttingYard.h"
 
@@ -82,6 +83,117 @@ void abandonZ3Solver() { Solver = nullptr; }
 // Work budget per check (see prove()).
 static unsigned proverRlimit() { return (unsigned)timeout * 3000u * 1000u; }
 
+// Multiplication by a constant, abstracted for a cheap first attempt.
+//
+// Candidates from MBA-obfuscated code often look like
+//   (x | 153237471) + (x & 153237470) == (a & 0x7fff...ffff) * 1234 + 153237471
+// with x = a * 1234 (sample-normal 0x14001a017). Both sides are equal - x is
+// even, and bit 63 of a does not change a*1234 mod 2^64 - but Z3 compares
+// two 64-bit multiplier circuits and gives up (unknown after the full
+// budget, 3-6 s each; 30 s standalone). Replacing every t*C by one fresh
+// variable per (t, C), constrained to have ctz(C) low zero bits, proves the
+// same query in milliseconds. The rewrite over-approximates (the fresh
+// variable may take any value t*C can, and more), so unsat for it means
+// unsat for the original; anything else falls back to the original query.
+//   - (t & M) * C is keyed like t * C when the bits M clears are all at or
+//     above w - ctz(C): they contribute multiples of 2^w.
+//   - t * C and t * -C share a variable (the second as its negation).
+// SIMBA_NO_MUL_ABSTRACTION=1 disables it.
+namespace {
+struct MulAbstraction {
+  z3::context &c;
+  z3::expr_vector Side;
+  std::map<unsigned, z3::expr> Done;  // AST id -> rewritten
+  std::map<std::tuple<unsigned, uint64_t, unsigned>, z3::expr> Vars;
+  unsigned Count = 0;
+
+  explicit MulAbstraction(z3::context &c) : c(c), Side(c) {}
+
+  static bool numeral64(const z3::expr &E, uint64_t &V) {
+    return E.is_numeral() && E.is_bv() && E.get_sort().bv_size() <= 64 &&
+           E.is_numeral_u64(V);
+  }
+
+  z3::expr mul(z3::expr T, uint64_t C, unsigned W) {
+    uint64_t Mask = W == 64 ? ~0ull : ((1ull << W) - 1);
+    C &= Mask;
+    if (C == 0) return c.bv_val(0, W);
+    unsigned TZ = __builtin_ctzll(C);
+    // Drop masks that only clear bits the product cannot see.
+    uint64_t Low = (W - TZ) >= 64 ? ~0ull : ((1ull << (W - TZ)) - 1);
+    for (;;) {
+      if (!(T.is_app() && T.decl().decl_kind() == Z3_OP_BAND &&
+            T.num_args() == 2))
+        break;
+      uint64_t M;
+      if (numeral64(T.arg(1), M) && (~M & Low & Mask) == 0)
+        T = T.arg(0);
+      else if (numeral64(T.arg(0), M) && (~M & Low & Mask) == 0)
+        T = T.arg(1);
+      else
+        break;
+    }
+    uint64_t Neg = (0 - C) & Mask;
+    bool Negate = Neg < C;
+    uint64_t Key = Negate ? Neg : C;
+    auto K = std::make_tuple(T.id(), Key, W);
+    auto It = Vars.find(K);
+    if (It == Vars.end()) {
+      z3::expr X =
+          c.bv_const(("__simba_mul" + std::to_string(Count++)).c_str(), W);
+      if (TZ) Side.push_back(X.extract(TZ - 1, 0) == c.bv_val(0, TZ));
+      It = Vars.emplace(K, X).first;
+    }
+    return Negate ? -It->second : It->second;
+  }
+
+  z3::expr rewrite(const z3::expr &E) {
+    if (!E.is_app()) return E;
+    auto D = Done.find(E.id());
+    if (D != Done.end()) return D->second;
+    z3::expr_vector Args(c);
+    bool Changed = false;
+    for (unsigned I = 0; I < E.num_args(); ++I) {
+      z3::expr A = rewrite(E.arg(I));
+      Changed |= !z3::eq(A, E.arg(I));
+      Args.push_back(A);
+    }
+    z3::expr R = Changed ? E.decl()(Args) : E;
+    if (R.decl().decl_kind() == Z3_OP_BMUL && R.num_args() == 2) {
+      uint64_t C;
+      unsigned W = R.get_sort().bv_size();
+      if (numeral64(R.arg(1), C) && !R.arg(0).is_numeral())
+        R = mul(R.arg(0), C, W);
+      else if (numeral64(R.arg(0), C) && !R.arg(1).is_numeral())
+        R = mul(R.arg(1), C, W);
+    }
+    Done.emplace(E.id(), R);
+    return R;
+  }
+};
+}  // namespace
+
+static bool proveAbstracted(z3::solver &S, const z3::expr &Conjecture,
+                            unsigned Rlimit) {
+  static const bool Off = getenv("SIMBA_NO_MUL_ABSTRACTION") != nullptr;
+  if (Off) return false;
+  MulAbstraction A(Conjecture.ctx());
+  z3::expr R = A.rewrite(Conjecture);
+  if (A.Count == 0) return false;
+  S.reset();
+  S.set("rlimit", Rlimit);
+  S.add(R);
+  for (unsigned I = 0; I < A.Side.size(); ++I) S.add(A.Side[I]);
+  auto T0 = std::chrono::steady_clock::now();
+  bool Unsat = S.check() == z3::unsat;
+  if (getenv("SIMBA_RLIMIT_STATS"))
+    fprintf(stderr, "[z3-mulabs] vars=%u unsat=%d ms=%.3f\n", A.Count,
+            (int)Unsat,
+            std::chrono::duration<double, std::milli>(
+                std::chrono::steady_clock::now() - T0).count());
+  return Unsat;
+}
+
 bool prove(z3::expr conjecture) {
   z3::context &c = conjecture.ctx();
 
@@ -117,6 +229,9 @@ bool prove(z3::expr conjecture) {
     Solver->set("model", false);
     Solver->set("proof", false);
   }
+
+  // Cheap first attempt (a tenth of the budget); see MulAbstraction.
+  if (proveAbstracted(*Solver, conjecture, proverRlimit() / 10)) return true;
 
   // reset and add
   Solver->reset();
