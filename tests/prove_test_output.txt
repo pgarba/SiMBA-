@@ -1,0 +1,64 @@
+Z3 proving tests (N=1/file, workers=1)
+
+[1/3] SiMBA native (data/*.txt)
+  simba (native, 32-bit): 3/17 proved, 3/17 solved [140.2s]
+    e1_2vars.txt                1/1    proved     1/1    solved
+    e1_3vars.txt                0/1    proved     0/1    solved
+    e1_4vars.txt                0/1    proved     0/1    solved
+    e1_5vars.txt                0/1    proved     0/1    solved
+    e2_2vars.txt                0/1    proved     0/1    solved
+    e2_3vars.txt                0/1    proved     0/1    solved
+    e2_4vars.txt                0/1    proved     0/1    solved
+    e3_2vars.txt                0/1    proved     0/1    solved
+    e3_3vars.txt                1/1    proved     1/1    solved
+    e3_4vars.txt                0/1    proved     0/1    solved
+    e4_2vars.txt                0/1    proved     0/1    solved
+    e4_3vars.txt                0/1    proved     0/1    solved
+    e4_4vars.txt                0/1    proved     0/1    solved
+    e5_2vars.txt                0/1    proved     0/1    solved
+    e5_3vars.txt                0/1    proved     0/1    solved
+    e5_4vars.txt                0/1    proved     0/1    solved
+    pldi_dataset_linear_MBA.txt    1/1    proved     1/1    solved
+
+[2/3] MSiMBA (data/MSiMBA/*.txt)
+  msimba (msimba, 32-bit): 19/19 proved, 19/19 solved [0.4s]
+    e1_2vars.txt                1/1    proved     1/1    solved
+    e1_3vars.txt                1/1    proved     1/1    solved
+    e1_4vars.txt                1/1    proved     1/1    solved
+    e1_5vars.txt                1/1    proved     1/1    solved
+    e1_6vars.txt                1/1    proved     1/1    solved
+    e2_2vars.txt                1/1    proved     1/1    solved
+    e2_3vars.txt                1/1    proved     1/1    solved
+    e2_4vars.txt                1/1    proved     1/1    solved
+    e3_2vars.txt                1/1    proved     1/1    solved
+    e3_3vars.txt                1/1    proved     1/1    solved
+    e3_4vars.txt                1/1    proved     1/1    solved
+    e4_2vars.txt                1/1    proved     1/1    solved
+    e4_3vars.txt                1/1    proved     1/1    solved
+    e4_4vars.txt                1/1    proved     1/1    solved
+    e5_2vars.txt                1/1    proved     1/1    solved
+    e5_3vars.txt                1/1    proved     1/1    solved
+    e5_4vars.txt                1/1    proved     1/1    solved
+    mba_obf_linear.txt          1/1    proved     1/1    solved
+    msimba.txt                  1/1    proved     1/1    solved
+
+[3/3] GAMBA (data/GAMBA/*.txt)
+  gamba (general, 8-bit): 7/7 proved, 7/7 solved [1.8s]
+    loki_tiny.txt               1/1    proved     1/1    solved
+    mba_flatten.txt             1/1    proved     1/1    solved
+    mba_obf_linear.txt          1/1    proved     1/1    solved
+    mba_obf_nonlinear.txt       1/1    proved     1/1    solved
+    neureduce.txt               1/1    proved     1/1    solved
+    qsynth_ea.txt               1/1    proved     1/1    solved
+    syntia.txt                  1/1    proved     1/1    solved
+
+============================================================
+SUMMARY
+============================================================
+dataset        proved     solved      total
+------------------------------------------------------------
+simba          3/17       3/17           17
+msimba        19/19      19/19           19
+gamba          7/7        7/7             7
+------------------------------------------------------------
+TOTAL         29/43      29/43           43

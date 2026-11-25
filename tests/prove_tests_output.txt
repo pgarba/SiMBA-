@@ -1,0 +1,3 @@
+Z3 proving tests (N=100/file, workers=4)
+
+[1/3] SiMBA native (data/*.txt)
