@@ -45,8 +45,34 @@ std::string simplifyPiecewise(const std::function<uint64_t(uint64_t)> &F,
     Samples.push_back(X & Mask);
     Samples.push_back((X >> (Rng.next() % Width)) & Mask);
   }
+  // Every residual below (F against one of the 7 base/op pairs) must take at
+  // most two values on the samples. Stop sampling as soon as all 7 have shown
+  // three: the answer is "no step" then, and F (a whole AST evaluation per
+  // call) is not run on the rest. Same samples, same order: no other change.
   std::vector<uint64_t> FS;
-  for (auto X : Samples) FS.push_back(F(X) & Mask);
+  FS.reserve(Samples.size());
+  {
+    uint64_t Seen[7][3];
+    int NSeen[7] = {0};
+    int Alive = 7;
+    for (auto X : Samples) {
+      const uint64_t FX = F(X) & Mask;
+      FS.push_back(FX);
+      const uint64_t Rs[7] = {FX,           FX ^ X,       FX - X,
+                              FX ^ ~X,      FX + X + 1,   FX ^ (0 - X),
+                              FX + X};
+      for (int k = 0; k < 7; k++) {
+        if (NSeen[k] > 2) continue;
+        const uint64_t Y = Rs[k] & Mask;
+        bool Known = false;
+        for (int j = 0; j < NSeen[k]; j++) Known |= Seen[k][j] == Y;
+        if (Known) continue;
+        Seen[k][NSeen[k]++] = Y;
+        if (NSeen[k] > 2) --Alive;
+      }
+      if (!Alive) return "";
+    }
+  }
 
   struct Base {
     std::string S;
