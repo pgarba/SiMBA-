@@ -81,7 +81,15 @@ void resetZ3Solver() {
 void abandonZ3Solver() { Solver = nullptr; }
 
 // Work budget per check (see prove()).
-static unsigned proverRlimit() { return (unsigned)timeout * 3000u * 1000u; }
+// ProverRlimitDivisor scales it down for a candidate that is likely to
+// end unknown (see verify()); LastProveVerdict: 0 proved, 1 refuted,
+// 2 unknown, for the last prove().
+unsigned ProverRlimitDivisor = 1;
+int LastProveVerdict = 0;
+static unsigned proverRlimit() {
+  return (unsigned)timeout * 3000u * 1000u /
+         (ProverRlimitDivisor ? ProverRlimitDivisor : 1);
+}
 
 // Multiplication by a constant, abstracted for a cheap first attempt.
 //
@@ -196,6 +204,7 @@ static bool proveAbstracted(z3::solver &S, const z3::expr &Conjecture,
 
 bool prove(z3::expr conjecture) {
   z3::context &c = conjecture.ctx();
+  LastProveVerdict = 0;
 
   // A solver cached from another (still live) context cannot be reused for
   // this conjecture - drop it and build one for the right context.
@@ -251,6 +260,7 @@ bool prove(z3::expr conjecture) {
   static const bool RlimitStats = getenv("SIMBA_RLIMIT_STATS") != nullptr;
   auto StatT0 = std::chrono::steady_clock::now();
   auto R = Solver->check();
+  LastProveVerdict = R == z3::unsat ? 0 : R == z3::sat ? 1 : 2;
   if (R == z3::unknown && getenv("SATURN_DEBUG_LIMITS"))
     fprintf(stderr, "[limit] SiMBA Z3 unknown: %s\n",
             Solver->reason_unknown().c_str());

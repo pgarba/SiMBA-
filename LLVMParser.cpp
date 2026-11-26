@@ -129,6 +129,10 @@ static bool valueOrderLess(const llvm::Value *A, const llvm::Value *B) {
 using namespace std;
 using namespace std::chrono;
 
+// Z3Prover.cpp: work-budget divisor and verdict of the last prove().
+extern unsigned ProverRlimitDivisor;
+extern int LastProveVerdict;
+
 // Global z3 context to speed to things
 z3::context *Z3CtxGlobal = nullptr;
 
@@ -1782,6 +1786,44 @@ static bool proveWithZ3Guarded(LLVMParser *Self, std::string &SimpExpr,
 // Z3 verdicts by exact formula, for the whole process (see verify()).
 static std::unordered_map<std::string, bool> Z3ProofCache;
 
+// Candidates Z3 could not decide (unknown after the full work budget,
+// 2-5 s each). Their sub-trees in the same function, and
+// trees of the same shape in later calls (constants ignored: Saturn's chain
+// re-optimizations rebuild the same tree with other constants), get 1/16
+// of the budget - still about 20x what decided proofs needed on Civ7
+// 0x140836640 - so a dozen of them no longer cost a minute per call. Still
+// proved or rejected, never accepted unproven. SIMBA_NO_UNKNOWN_DISCOUNT=1
+// disables.
+static std::unordered_set<std::string> UnknownShapes;
+static llvm::DenseSet<llvm::Value *> UnknownNodes;
+static const llvm::Function *UnknownNodesF = nullptr;
+
+static std::string proofShapeKey(llvm::SmallVectorImpl<BFSEntry> &AST,
+                                 llvm::SmallVectorImpl<llvm::Value *> &Variables,
+                                 int BitWidth) {
+  llvm::DenseMap<llvm::Value *, unsigned> Node, Var;
+  for (auto &E : AST) Node.try_emplace(E.I, Node.size());
+  for (unsigned i = 0; i < Variables.size(); i++) Var.try_emplace(Variables[i], i);
+  std::string K;
+  llvm::raw_string_ostream OS(K);
+  OS << BitWidth << '|' << Variables.size() << '|';
+  for (auto &E : AST) {
+    OS << E.I->getOpcode();
+    if (auto *C = dyn_cast<CmpInst>(E.I)) OS << 'p' << C->getPredicate();
+    E.I->getType()->print(OS);
+    OS << '(';
+    for (auto &Op : E.I->operands()) {
+      if (auto It = Node.find(Op.get()); It != Node.end()) OS << 'n' << It->second;
+      else if (auto It2 = Var.find(Op.get()); It2 != Var.end()) OS << 'v' << It2->second;
+      else if (isa<ConstantInt>(Op.get())) OS << 'c';
+      else OS << '?';
+      OS << ',';
+    }
+    OS << ')';
+  }
+  return OS.str();
+}
+
 // An exact, pointer-free rendering of the candidate DAG: every AST node by
 // opcode/predicate/type, every operand as another node, a variable (by
 // index and type) or a constant (width and value). Empty if some operand is
@@ -2014,6 +2056,22 @@ bool LLVMParser::verify(int ASTSize, llvm::SmallVectorImpl<BFSEntry> &AST,
       if (It != Z3ProofCache.end()) return It->second;
     }
 
+    static const bool NoUnknownDiscount =
+        getenv("SIMBA_NO_UNKNOWN_DISCOUNT") != nullptr;
+    std::string ShapeKey;
+    bool Discount = false;
+    if (!NoUnknownDiscount && !AST.empty()) {
+      const llvm::Function *CurF = AST.front().I->getFunction();
+      if (CurF != UnknownNodesF) {
+        UnknownNodes.clear();
+        UnknownNodesF = CurF;
+      }
+      ShapeKey = proofShapeKey(AST, Variables, BitWidth);
+      Discount = UnknownNodes.count(AST.front().I) || UnknownShapes.count(ShapeKey);
+    }
+    ProverRlimitDivisor = Discount ? 16 : 1;
+    LastProveVerdict = 0;
+
     bool Result = false;
     try {
       Result = proveWithZ3Guarded(this, SimpExpr, Vars, AST, Variables,
@@ -2026,13 +2084,20 @@ bool LLVMParser::verify(int ASTSize, llvm::SmallVectorImpl<BFSEntry> &AST,
       Result = false;
     }
 
+    ProverRlimitDivisor = 1;
+    if (!Result && LastProveVerdict == 2 && !ShapeKey.empty()) {
+      for (auto &E : AST) UnknownNodes.insert(E.I);
+      if (UnknownShapes.size() < 8192) UnknownShapes.insert(ShapeKey);
+    }
+
     auto stop = high_resolution_clock::now();
 
     if (this->Debug) {
       auto duration = duration_cast<milliseconds>(stop - start);
 
       outs() << "[Z3] Proved in " << duration.count()
-             << " ms Result (1 == valid): " << Result << "\n";
+             << " ms Result (1 == valid): " << Result
+             << (Discount ? " [reduced budget]" : "") << "\n";
     }
 
     if (!ProofKey.empty()) Z3ProofCache[ProofKey] = Result;
