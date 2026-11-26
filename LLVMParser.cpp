@@ -1,3 +1,4 @@
+#include "llvm/IR/Verifier.h"
 #include <unordered_map>
 #include "LLVMParser.h"
 #include "InvariantFold.h"
@@ -5996,12 +5997,12 @@ z3::expr LLVMParser::getOptimizedZ3Expression(
 
   // Cast Ptr to Int if needed
   if (V->getType()->isPointerTy()) {
-    V = new PtrToIntInst(dyn_cast<Instruction>(V), Int64Ty, "",
+    V = new PtrToIntInst(V, Int64Ty, "",
                          F->getEntryBlock().getTerminator());
   }
 
   if (LastInstType->isPointerTy()) {
-    LastInst = new PtrToIntInst(dyn_cast<Instruction>(LastInst), Int64Ty, "",
+    LastInst = new PtrToIntInst(LastInst, Int64Ty, "",
                                 F->getEntryBlock().getTerminator());
   }
 
@@ -6023,6 +6024,16 @@ z3::expr LLVMParser::getOptimizedZ3Expression(
   }
 
   RetInst->setOperand(0, NewI);
+
+  static const bool DbgVerifyIR = getenv("SIMBA_DBG_VERIFY_IR") != nullptr;
+  if (DbgVerifyIR && llvm::verifyFunction(*F, &llvm::errs())) {
+    llvm::errs() << "[simba-verify] broken MBA_Simp for '" << SimpExpr << "'\n";
+    F->print(llvm::errs());
+    llvm::errs() << "[simba-verify] AST:\n";
+    for (auto &E : AST) llvm::errs() << "  " << *E.I << "\n";
+    llvm::errs() << "[simba-verify] vars:\n";
+    for (auto *V : Variables) llvm::errs() << "  " << *V << "\n";
+  }
 
   // Now optimize
   optimizeFunction(*F);
