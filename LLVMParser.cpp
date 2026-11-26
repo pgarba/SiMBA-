@@ -2932,6 +2932,32 @@ std::string mStr(const MExprPtr &E) {
   return "?";
 }
 
+// mStr(a) == mStr(b) without rendering: the rendering is fully
+// parenthesized, so it is equal exactly when the trees are. Rendering both
+// trees at every node of mSimplify's recursion to detect the fixed point was
+// quadratic in the tree size, and a subtree shared by several parents was
+// rendered once per path (Civ7 0x14011C4F0: most of a 10 s SiMBA call in
+// mStr and memcpy). Identical nodes compare in O(1).
+bool mEq(const MExprPtr &A, const MExprPtr &B) {
+  if (A == B) return true;
+  if (!A || !B) return false;
+  if (A->K != B->K) return false;
+  switch (A->K) {
+  case MExpr::Var:
+  case MExpr::Const:
+    return A->S == B->S;
+  case MExpr::Not:
+    return mEq(A->L, B->L);
+  case MExpr::Cast:
+    return A->Op == B->Op && A->S == B->S &&
+           (A->SW > 0 ? A->SW : 0) == (B->SW > 0 ? B->SW : 0) &&
+           mEq(A->L, B->L);
+  case MExpr::Bin:
+    return A->Op == B->Op && mEq(A->L, B->L) && mEq(A->R, B->R);
+  }
+  return false;
+}
+
 // Number of operators (binary + unary) in the tree.
 int mOps(const MExprPtr &E) {
   if (!E) return 0;
@@ -2997,7 +3023,7 @@ bool isConstVal(const MExprPtr &E, const std::string &v) {
 }
 
 bool sameExpr(const MExprPtr &a, const MExprPtr &b) {
-  return mStr(a) == mStr(b);
+  return mEq(a, b);
 }
 
 // If E is "base * 2" or "base << 1" (either operand order for mul), return
@@ -3230,7 +3256,7 @@ MExprPtr mSimplify(const MExprPtr &E) {
   MExprPtr Result = T;
   for (int i = 0; i < 16; i++) {
     MExprPtr Next = mIdentities(Result);
-    if (mStr(Next) == mStr(Result)) {  // fixed point
+    if (mEq(Next, Result)) {  // fixed point
       Result = Next;
       break;
     }
@@ -3564,7 +3590,7 @@ MExprPtr mFoldAshrShl(const MExprPtr &E,
   for (int i = 0; i < 16; ++i) {
     MExprPtr Next = mFoldAshrShlOnce(cur, VarWidths);
     Next = mFoldBitSplitOnce(Next, VarWidths);
-    if (mStr(Next) == mStr(cur)) return Next;
+    if (mEq(Next, cur)) return Next;
     cur = Next;
   }
   return cur;
@@ -3787,6 +3813,58 @@ bool LLVMParser::tryMBAPatterns(LSiMBA::MBACandidate &Cand, int BitWidth) {
   }
 
   return true;
+}
+
+// The instructions a replacement of Cand actually removes: the root, and
+// every AST node whose users are all removed. A node shared with code
+// outside the tree survives the replacement (e.g. a sum that is both a
+// result and the input of the flag computation that is this tree) --
+// marking it too would block the smaller candidate rooted at it, and the
+// program would end up with the simplified tree *and* the old obfuscated
+// chain.
+static llvm::SmallPtrSet<llvm::Instruction *, 16>
+ownedByReplacement(LSiMBA::MBACandidate &Cand) {
+  llvm::SmallPtrSet<llvm::Instruction *, 16> Owned;
+  Owned.insert(Cand.Candidate);
+  for (bool Grew = true; Grew;) {
+    Grew = false;
+    for (auto &E : Cand.AST) {
+      if (Owned.count(E.I) || E.I->use_empty()) continue;
+      bool AllUsersOwned = true;
+      for (auto *U : E.I->users()) {
+        auto *UI = llvm::dyn_cast<llvm::Instruction>(U);
+        if (!UI || !Owned.count(UI)) {
+          AllUsersOwned = false;
+          break;
+        }
+      }
+      if (AllUsersOwned) {
+        Owned.insert(E.I);
+        Grew = true;
+      }
+    }
+  }
+  return Owned;
+}
+
+// When the tree shares nodes with other code, the replacement only removes
+// the owned part, so it must not cost more than that (e.g. the byte a parity
+// flag reads, trunc(sum), replaced by trunc(a) + trunc(b) while the sum
+// itself stays: three instructions for one). An unshared tree (the classic
+// MBA case) is accepted as before.
+static bool sharedTreeTooCostly(LSiMBA::MBACandidate &Cand, int &Removed,
+                                int &Added) {
+  auto Owned = ownedByReplacement(Cand);
+  llvm::SmallPtrSet<llvm::Instruction *, 32> Distinct;
+  for (auto &E : Cand.AST) Distinct.insert(E.I);
+  if (Owned.size() >= Distinct.size()) return false;
+  Removed = 0;
+  for (auto *I : Owned)
+    if (!I->isCast()) Removed++;
+  Added = countOperators(Cand.Replacement);
+  for (auto *V : Cand.Variables)
+    if (V->getType() != Cand.Candidate->getType()) Added++;  // a cast
+  return Added > Removed;
 }
 
 bool LLVMParser::findReplacements(llvm::DominatorTree *DT,
@@ -4044,6 +4122,31 @@ bool LLVMParser::findReplacements(llvm::DominatorTree *DT,
       }
     }
 
+    // A replacement of a tree that shares nodes with other code is dropped
+    // below when it costs more than what it removes - decided only after
+    // verify() proved it. When a loop is unrolled, hundreds of roots
+    // `S + k` share one obfuscated S (Civ7 0x14011C4F0: ~470 roots, each
+    // routed, proved by Z3 in ~13 ms, then dropped: 6 s of Z3 for nothing).
+    // Decide it first. Only when the cheap value test already passes, so a
+    // replacement verify() would reject still goes to the fallbacks below
+    // exactly as before. SIMBA_NO_EARLY_SHARED_SKIP=1 restores the old order.
+    static const bool NoEarlySharedSkip =
+        getenv("SIMBA_NO_EARLY_SHARED_SKIP") != nullptr;
+    if (!SkipVerify && !NoEarlySharedSkip && !Cand.Replacement.empty()) {
+      int Removed = 0, Added = 0;
+      if (sharedTreeTooCostly(Cand, Removed, Added) &&
+          this->verify(Cand.ASTSize, Cand.AST, Cand.Replacement,
+                       Cand.Variables, BitWidth, /*DoZ3=*/false)) {
+        if (this->Debug) {
+          outs() << "[*] Skipping a replacement of a shared tree (before "
+                    "proving): it removes "
+                 << Removed << " operator(s) but adds " << Added << "\n";
+        }
+        Cand.isValid = false;
+        continue;
+      }
+    }
+
     // Verify replacement is valid. NOTE (local patch, mba-residuals.md):
     // run this even on MBACache hits (AlreadyProved). The cache records
     // that this candidate SHAPE once had a valid replacement, but the
@@ -4107,55 +4210,19 @@ bool LLVMParser::findReplacements(llvm::DominatorTree *DT,
       }
 
       // Mark the instructions this replacement will actually remove, so they
-      // are not solved again: the root, and every AST node whose users are
-      // all marked. A node shared with code outside the tree survives the
-      // replacement (e.g. a sum that is both a result and the input of the
-      // flag computation that is this tree) -- marking it too would block the
-      // smaller candidate rooted at it, and the program would end up with
-      // the simplified tree *and* the old obfuscated chain.
-      llvm::SmallPtrSet<llvm::Instruction *, 16> Owned;
-      Owned.insert(Cand.Candidate);
-      for (bool Grew = true; Grew;) {
-        Grew = false;
-        for (auto &E : Cand.AST) {
-          if (Owned.count(E.I) || E.I->use_empty()) continue;
-          bool AllUsersOwned = true;
-          for (auto *U : E.I->users()) {
-            auto *UI = dyn_cast<Instruction>(U);
-            if (!UI || !Owned.count(UI)) {
-              AllUsersOwned = false;
-              break;
-            }
-          }
-          if (AllUsersOwned) {
-            Owned.insert(E.I);
-            Grew = true;
-          }
+      // are not solved again (see ownedByReplacement). When the tree shares
+      // nodes with other code, the replacement only removes the owned part,
+      // so it must not cost more than that (sharedTreeTooCostly).
+      int Removed = 0, Added = 0;
+      if (sharedTreeTooCostly(Cand, Removed, Added)) {
+        if (this->Debug) {
+          outs() << "[*] Skipping a replacement of a shared tree: it removes "
+                 << Removed << " operator(s) but adds " << Added << "\n";
         }
+        Cand.isValid = false;
+        continue;
       }
-      // When the tree shares nodes with other code, the replacement only
-      // removes the owned part, so it must not cost more than that (e.g. the
-      // byte a parity flag reads, trunc(sum), replaced by trunc(a) + trunc(b)
-      // while the sum itself stays: three instructions for one). An
-      // unshared tree (the classic MBA case) is accepted as before.
-      llvm::SmallPtrSet<llvm::Instruction *, 32> Distinct;
-      for (auto &E : Cand.AST) Distinct.insert(E.I);
-      if (Owned.size() < Distinct.size()) {
-        int Removed = 0;
-        for (auto *I : Owned)
-          if (!I->isCast()) Removed++;
-        int Added = countOperators(Cand.Replacement);
-        for (auto *V : Cand.Variables)
-          if (V->getType() != Cand.Candidate->getType()) Added++;  // a cast
-        if (Added > Removed) {
-          if (this->Debug) {
-            outs() << "[*] Skipping a replacement of a shared tree: it removes "
-                   << Removed << " operator(s) but adds " << Added << "\n";
-          }
-          Cand.isValid = false;
-          continue;
-        }
-      }
+      auto Owned = ownedByReplacement(Cand);
       for (auto *I : Owned) ReplacedInstructions.insert(I);
 
       ReplacementFound |= true;
