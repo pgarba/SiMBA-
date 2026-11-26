@@ -2571,6 +2571,25 @@ bool LLVMParser::tryPiecewise(llvm::DominatorTree *DT,
 
   if (tryPiecewiseCuts(Cand, BitWidth, Cuts, Body, Hints)) return true;
 
+  // Below, a cut needs operands "around" it: a non-constant operand of a node
+  // above the cut that is neither the cut nor above it. When no node has more
+  // than one non-constant operand (a chain such as ((x ^ K) + C1) ^ K ...),
+  // a node above the cut reaches it through its only one, so there are none
+  // for any cut; skip the O(n) scan per cut (O(n^2) per candidate).
+  {
+    bool Chain = true;
+    for (auto &E : Cand.AST) {
+      int NonConst = 0;
+      for (auto &O : E.I->operands())
+        if (!isa<Constant>(O.get())) ++NonConst;
+      if (NonConst > 1) {
+        Chain = false;
+        break;
+      }
+    }
+    if (Chain) return false;
+  }
+
   // A cut but for a few subtrees around it - (uint64_t)(v & 1) next to
   // t = sx8(u) * 10 - 528 + sx8(v), which is t & 1: if each such subtree is
   // cut & M on samples, and Z3 proves it, the subtree's uses in the
@@ -3241,18 +3260,48 @@ MExprPtr mIdentities(const MExprPtr &E) {
 // produce a node that another identity (on a different Kind) then rewrites —
 // e.g. the sign-extension fold produces a Cast node that the distribute
 // identity then reduces.
+// mSimplify is a pure function of its input tree. tryMBAPatterns simplifies
+// every node of a candidate over its already-simplified children, and
+// mSimplify recursed into those again: O(n^2) on a deep chain. While a memo is
+// installed, results are reused by input node; the memo holds the input too,
+// so its address cannot be reused while the entry lives.
+struct MSimplifyMemo {
+  std::unordered_map<const MExpr *, std::pair<MExprPtr, MExprPtr>> Map;
+};
+static thread_local MSimplifyMemo *gMSimplifyMemo = nullptr;
+struct MSimplifyMemoScope {
+  MSimplifyMemo Memo;
+  MSimplifyMemo *Prev;
+  MSimplifyMemoScope() : Prev(gMSimplifyMemo) { gMSimplifyMemo = &Memo; }
+  ~MSimplifyMemoScope() { gMSimplifyMemo = Prev; }
+};
+
+MExprPtr mSimplifyImpl(const MExprPtr &E);
 MExprPtr mSimplify(const MExprPtr &E) {
   if (!E) return nullptr;
   if (E->K == MExpr::Var || E->K == MExpr::Const) return E;
+  static const bool NoMemo = getenv("SIMBA_NO_MSIMPLIFY_MEMO") != nullptr;
+  if (!gMSimplifyMemo || NoMemo) return mSimplifyImpl(E);
+  auto It = gMSimplifyMemo->Map.find(E.get());
+  if (It != gMSimplifyMemo->Map.end()) return It->second.second;
+  MExprPtr R = mSimplifyImpl(E);
+  gMSimplifyMemo->Map.emplace(E.get(), std::make_pair(E, R));
+  return R;
+}
+
+MExprPtr mSimplifyImpl(const MExprPtr &E) {
   auto L = mSimplify(E->L);
   MExprPtr T;
+  // Unchanged children: E itself is the node mNot/mCast/mBin would rebuild
+  // (a cast only when SW is 0, which mCast below would reset it to). Keeping
+  // the pointer lets the memo and mEq's pointer check see the fixed point.
   if (E->K == MExpr::Not) {
-    T = mNot(L);
+    T = L == E->L ? E : mNot(L);
   } else if (E->K == MExpr::Cast) {
-    T = mCast(E->Op, L, E->S);
+    T = (L == E->L && E->SW == 0) ? E : mCast(E->Op, L, E->S);
   } else {
     auto R = mSimplify(E->R);
-    T = mBin(E->Op, L, R);
+    T = (L == E->L && R == E->R) ? E : mBin(E->Op, L, R);
   }
   MExprPtr Result = T;
   for (int i = 0; i < 16; i++) {
@@ -3620,6 +3669,7 @@ bool LLVMParser::tryMBAPatterns(LSiMBA::MBACandidate &Cand, int BitWidth) {
   // instructions are already built by the time we reach them.
   llvm::DenseMap<llvm::Value *, MExprPtr> Orig;
   llvm::DenseMap<llvm::Value *, MExprPtr> Simp;
+  MSimplifyMemoScope SimplifyMemo;
 
   auto makeConst = [](llvm::Value *V) -> MExprPtr {
     auto *CI = llvm::dyn_cast<llvm::ConstantInt>(V);
