@@ -172,7 +172,8 @@ static void abandonZ3CtxGlobal() {
   Z3CtxGlobal = new z3::context;
 }
 
-cl::OptionCategory SiMBAOpt("SiMBA++ Options");
+// Defined in CoreOptions.cpp (shared with the SiMBACore library).
+extern cl::OptionCategory SiMBAOpt;
 
 llvm::cl::opt<std::string> UseExternalSimplifier(
     "external-simplifier", cl::Optional,
@@ -180,20 +181,9 @@ llvm::cl::opt<std::string> UseExternalSimplifier(
              "simplification (Supports: SiMBA/GAMBA)"),
     cl::value_desc("external-simplifier"), cl::init(""), cl::cat(SiMBAOpt));
 
-llvm::cl::opt<int> MaxVarCount(
-    "max-var-count", cl::Optional,
-    cl::desc("Max variable count for simplification"),
-    cl::value_desc("max-var-count"), cl::init(10), cl::cat(SiMBAOpt));
-
-llvm::cl::opt<int> MinASTSize("min-ast-size", cl::Optional,
-                              cl::desc("Minimum AST size for simplification"),
-                              cl::value_desc("min-ast-size"), cl::init(3),
-                              cl::cat(SiMBAOpt));
-
-llvm::cl::opt<bool> ShouldWalkSubAST(
-    "walk-sub-ast", cl::Optional,
-    cl::desc("Walk sub AST if full AST does not match"),
-    cl::value_desc("walk-sub-ast"), cl::init(false), cl::cat(SiMBAOpt));
+extern llvm::cl::opt<int> MaxVarCount;       // CoreOptions.cpp
+extern llvm::cl::opt<int> MinASTSize;        // CoreOptions.cpp
+extern llvm::cl::opt<bool> ShouldWalkSubAST; // CoreOptions.cpp
 
 llvm::cl::opt<int> MaxMBAGlobal(
     "max-mbas", cl::Optional,

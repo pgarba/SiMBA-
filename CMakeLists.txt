@@ -181,7 +181,43 @@ set(MBA_SOURCES
     "MBA/ConstantSubstituter.cpp"
     "MBA/SemiLinearProver.cpp" "MBA/SemiLinearProver.h")
 
-add_executable(SiMBA++ "CSiMBA.cpp" "CSiMBA.h" "LLVMParser.cpp" "LLVMParser.h" "Simplifier.h" "MBAChecker.cpp" "MBAChecker.h" "Simplifier.cpp" "ShuttingYard.cpp" "Modulo.cpp" "Modulo.h" "Z3Prover.cpp" "Z3Prover.h" "SimplifierRouter.cpp" "SimplifierRouter.h" "Piecewise.cpp" "Piecewise.h" "InvariantFold.cpp" "InvariantFold.h" ${MBA_SOURCES})
+# SiMBACore: the simplifiers without the LLVM-IR front end (LLVMParser,
+# InvariantFold, the pass and the CLI), with the tree API in
+# include/simba/Core.h. Other front ends (e.g. an MLIR lifter) link this.
+# -DSIMBA_CORE_ONLY=ON builds just this library and its test, which is what
+# an embedding project wants.
+option(SIMBA_CORE_ONLY "Build only the SiMBACore library" OFF)
+set(SIMBA_CORE_SOURCES
+    "CoreOptions.cpp" "SiMBACore.cpp" "include/simba/Core.h"
+    "Simplifier.cpp" "Simplifier.h" "MBAChecker.cpp" "MBAChecker.h"
+    "Modulo.cpp" "Modulo.h" "Piecewise.cpp" "Piecewise.h"
+    "ShuttingYard.cpp" "ShuttingYard.h" "Z3Prover.cpp" "Z3Prover.h"
+    "SimplifierRouter.cpp" "SimplifierRouter.h" ${MBA_SOURCES})
+add_library(SiMBACore STATIC ${SIMBA_CORE_SOURCES})
+target_include_directories(SiMBACore PUBLIC
+    "${CMAKE_CURRENT_SOURCE_DIR}/include" "${CMAKE_CURRENT_SOURCE_DIR}"
+    ${LLVM_INCLUDE_DIRS} ${Z3_CXX_INCLUDE_DIRS})
+target_compile_definitions(SiMBACore PRIVATE MBA_HAS_Z3)
+if(TARGET z3::libz3)
+    set(SIMBA_CORE_Z3 z3::libz3)
+else()
+    set(SIMBA_CORE_Z3 ${Z3_LIBRARIES})
+endif()
+target_link_libraries(SiMBACore PUBLIC
+    LLVMIRReader LLVMAsmParser LLVMBitReader LLVMCore LLVMSupport
+    ${SIMBA_CORE_Z3})
+set_target_properties(SiMBACore PROPERTIES POSITION_INDEPENDENT_CODE ON)
+
+add_executable(simba_core_test "tests/core_api_test.cpp")
+target_link_libraries(simba_core_test SiMBACore)
+enable_testing()
+add_test(NAME SiMBACore_API COMMAND simba_core_test)
+
+if(SIMBA_CORE_ONLY)
+    return()
+endif()
+
+add_executable(SiMBA++ "CoreOptions.cpp" "CSiMBA.cpp" "CSiMBA.h" "LLVMParser.cpp" "LLVMParser.h" "Simplifier.h" "MBAChecker.cpp" "MBAChecker.h" "Simplifier.cpp" "ShuttingYard.cpp" "Modulo.cpp" "Modulo.h" "Z3Prover.cpp" "Z3Prover.h" "SimplifierRouter.cpp" "SimplifierRouter.h" "Piecewise.cpp" "Piecewise.h" "InvariantFold.cpp" "InvariantFold.h" ${MBA_SOURCES})
 target_compile_definitions(SiMBA++ PRIVATE MBA_HAS_Z3)
 
 #set_target_properties(SiMBA++ PROPERTIES
@@ -231,7 +267,7 @@ if(WIN32)
 endif()
 
 # SiMBA++ static
-add_library(LSiMBA++ STATIC  "Z3Prover.cpp" "Z3Prover.h" "LLVMParser.cpp" "LLVMParser.h" "Simplifier.h" "MBAChecker.cpp" "MBAChecker.h" "Simplifier.cpp" "ShuttingYard.cpp" "Modulo.cpp" "Modulo.h" "SimplifierRouter.cpp" "SimplifierRouter.h" "Piecewise.cpp" "Piecewise.h" "InvariantFold.cpp" "InvariantFold.h" ${MBA_SOURCES})
+add_library(LSiMBA++ STATIC  "CoreOptions.cpp" "Z3Prover.cpp" "Z3Prover.h" "LLVMParser.cpp" "LLVMParser.h" "Simplifier.h" "MBAChecker.cpp" "MBAChecker.h" "Simplifier.cpp" "ShuttingYard.cpp" "Modulo.cpp" "Modulo.h" "SimplifierRouter.cpp" "SimplifierRouter.h" "Piecewise.cpp" "Piecewise.h" "InvariantFold.cpp" "InvariantFold.h" ${MBA_SOURCES})
 target_compile_definitions(LSiMBA++ PRIVATE MBA_HAS_Z3)
 
 # No rtti
@@ -261,7 +297,7 @@ add_test(NAME MBAs_Linear_64bit_unsigned_llvm
         WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/tests)
 
 # SiMBAPass
-add_library(SiMBAPass SHARED Z3Prover.h Z3Prover.cpp Simplifier.h Simplifier.cpp SiMBAPass.cpp SiMBAPass.h LLVMParser.cpp LLVMParser.h Simplifier.h Simplifier.cpp ShuttingYard.cpp MBAChecker.cpp MBAChecker.h Modulo.cpp Modulo.h SimplifierRouter.cpp SimplifierRouter.h Piecewise.cpp Piecewise.h InvariantFold.cpp InvariantFold.h ${MBA_SOURCES})
+add_library(SiMBAPass SHARED CoreOptions.cpp Z3Prover.h Z3Prover.cpp Simplifier.h Simplifier.cpp SiMBAPass.cpp SiMBAPass.h LLVMParser.cpp LLVMParser.h Simplifier.h Simplifier.cpp ShuttingYard.cpp MBAChecker.cpp MBAChecker.h Modulo.cpp Modulo.h SimplifierRouter.cpp SimplifierRouter.h Piecewise.cpp Piecewise.h InvariantFold.cpp InvariantFold.h ${MBA_SOURCES})
 
 # No rtti
 set_target_properties(SiMBAPass PROPERTIES

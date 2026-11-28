@@ -17,6 +17,41 @@
 Ported from:
 https://github.com/DenuvoSoftwareSolutions/SiMBA
 
+# SiMBA as a library (SiMBACore)
+
+`SiMBACore` is the simplifier without the LLVM-IR front end (`LLVMParser`,
+`InvariantFold`, the pass and the CLI). It links LLVM's Support/Core and Z3
+and exposes a tree API in `include/simba/Core.h`, so other front ends (an MLIR
+lifter, a decompiler) can call SiMBA without going through LLVM IR:
+
+```c++
+#include "simba/Core.h"
+
+simba::ExprBuilder b(64);
+simba::Expr x = b.variable(0), y = b.variable(1);
+simba::Expr mba = b.add(b.bitXor(x, y), b.mul(b.constant(2), b.bitAnd(x, y)));
+simba::Result r = simba::simplify(mba);
+// r.status == Simplified, r.expr is x0 + x1,
+// r.guarantee == Construction (linear MBA, exact by the truth-table method)
+```
+
+`Result::guarantee` says how the result is known to be equivalent:
+`Construction` (linear MBA), `Proven` (Z3, with `Options::prove`) or `Sampled`
+(random inputs only). The result is a tree the caller walks (`Expr::kind`,
+`operand`, `constant`, `variable`) to rebuild it in its own IR. Inputs are
+1-64 bits wide; the general (nonlinear) route runs up to 16 bits, as in the
+CLI. The core prints to stdout; `simplify` silences that unless
+`Options::quiet` is false.
+
+Build only the core (e.g. from another project):
+
+```
+cmake -S . -B build-core -DSIMBA_CORE_ONLY=ON -DLLVM_DIR=... -DZ3_DIR=...
+cmake --build build-core --target SiMBACore simba_core_test
+```
+
+`simba_core_test` checks the API against an independent evaluator.
+
 # Multithreading
 
 MBA evaluation and verification will be run in parallel, if the MBA has more than 3 variables.
