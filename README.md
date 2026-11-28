@@ -43,6 +43,21 @@ simba::Result r = simba::simplify(mba);
 CLI. The core prints to stdout; `simplify` silences that unless
 `Options::quiet` is false.
 
+`proveEquivalent(a, b, timeoutMs)` proves two trees equal at their width:
+first by exact algebra (purely bitwise subtrees become linear combinations of
+conjunctions of the variables, the arithmetic around them a polynomial over
+those conjunctions; equal polynomials mean equal functions), then by Z3 with
+the trees encoded directly as bit-vector terms. `ExprBuilder::import(e)`
+rebuilds a tree at another width (constants sign-extended), so a nonlinear MBA
+can be simplified at 16 bits and the candidate proven at 64:
+
+```c++
+simba::ExprBuilder b64(64), b16(16);
+simba::Result r = simba::simplify(b16.import(mba64));
+simba::Expr candidate = b64.import(r.expr);
+bool ok = simba::proveEquivalent(mba64, candidate);
+```
+
 Build only the core (e.g. from another project):
 
 ```

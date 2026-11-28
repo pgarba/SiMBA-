@@ -100,6 +100,10 @@ public:
   Expr udiv(Expr a, Expr b);
   Expr urem(Expr a, Expr b);
 
+  /// `e` rebuilt at this builder's width; constants are sign-extended or
+  /// truncated (a coefficient of -1 stays -1).
+  Expr import(const Expr &e);
+
 private:
   Expr binary(Kind k, Expr a, Expr b);
   unsigned width;
@@ -146,6 +150,11 @@ struct Result {
 
 /// Simplifies `e`. The result uses the same variable numbers.
 Result simplify(const Expr &e, const Options &options = {});
+
+/// Proves `a == b` for all inputs at their (common) width with Z3 (the trees
+/// are encoded directly as bit-vector terms). False if not proven: different,
+/// unknown within `timeoutMs` (0: no limit), or the widths differ.
+bool proveEquivalent(const Expr &a, const Expr &b, unsigned timeoutMs = 10000);
 
 } // namespace simba
 

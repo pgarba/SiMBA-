@@ -7,6 +7,11 @@
 #include "Simplifier.h"
 #include "SimplifierRouter.h"
 
+#include "MBA/Verify.h"
+#include <z3++.h>
+#include <algorithm>
+#include <map>
+#include <vector>
 #include "MBAChecker.h"
 
 #include "llvm/Support/CommandLine.h"
@@ -145,6 +150,25 @@ Expr ExprBuilder::lshr(Expr a, Expr b) { return binary(Kind::LShr, a, b); }
 Expr ExprBuilder::udiv(Expr a, Expr b) { return binary(Kind::UDiv, a, b); }
 Expr ExprBuilder::urem(Expr a, Expr b) { return binary(Kind::URem, a, b); }
 
+Expr ExprBuilder::import(const Expr &e) {
+  switch (e.kind()) {
+  case Kind::Constant: {
+    llvm::APInt c = e.constant();
+    return constant(c.sextOrTrunc(width));
+  }
+  case Kind::Variable:
+    return variable(e.variable());
+  case Kind::Not:
+    return bitNot(import(e.operand(0)));
+  default:
+    break;
+  }
+  auto n = std::make_shared<Node>(nodeType(e.kind()), width);
+  for (unsigned i = 0; i < e.numOperands(); ++i)
+    n->children.push_back(import(e.operand(i)).raw());
+  return Expr::fromRaw(n);
+}
+
 //===--- simplify ----------------------------------------------------------===//
 
 namespace {
@@ -255,6 +279,274 @@ Result simplify(const Expr &e, const Options &options) {
   r.status = Status::Simplified;
   r.expr = Expr::fromRaw(tree);
   return r;
+}
+
+namespace {
+/// `e` as a Z3 bit-vector term (tree-native; no string round trip).
+z3::expr toZ3(z3::context &ctx, const Expr &e,
+              std::map<unsigned, z3::expr> &vars) {
+  unsigned w = e.bitWidth();
+  auto op = [&](unsigned i) { return toZ3(ctx, e.operand(i), vars); };
+  auto fold = [&](auto f) {
+    z3::expr acc = op(0);
+    for (unsigned i = 1; i < e.numOperands(); ++i)
+      acc = f(acc, op(i));
+    return acc;
+  };
+  switch (e.kind()) {
+  case Kind::Constant:
+    return ctx.bv_val(
+        std::to_string(e.constant().zextOrTrunc(w).getZExtValue()).c_str(), w);
+  case Kind::Variable: {
+    auto it = vars.find(e.variable());
+    if (it == vars.end())
+      it = vars
+               .emplace(e.variable(),
+                        ctx.bv_const(("x" + std::to_string(e.variable())).c_str(),
+                                     w))
+               .first;
+    return it->second;
+  }
+  case Kind::Add: return fold([](z3::expr a, z3::expr b) { return a + b; });
+  case Kind::Mul: return fold([](z3::expr a, z3::expr b) { return a * b; });
+  case Kind::And: return fold([](z3::expr a, z3::expr b) { return a & b; });
+  case Kind::Or: return fold([](z3::expr a, z3::expr b) { return a | b; });
+  case Kind::Xor: return fold([](z3::expr a, z3::expr b) { return a ^ b; });
+  case Kind::Not: return ~op(0);
+  case Kind::LShr: return z3::lshr(op(0), op(1));
+  case Kind::UDiv: return z3::udiv(op(0), op(1));
+  case Kind::URem: return z3::urem(op(0), op(1));
+  case Kind::Pow: {
+    uint64_t k = e.operand(1).constant().getZExtValue();
+    z3::expr base = op(0), acc = ctx.bv_val(1, w);
+    for (uint64_t i = 0; i < k && i < 64; ++i)
+      acc = acc * base;
+    return acc;
+  }
+  }
+  return ctx.bv_val(0, w);
+}
+} // namespace
+
+namespace {
+/// Polynomial over "atoms" (conjunctions of variables, as variable bit
+/// masks) with coefficients mod 2^w; a monomial is a sorted multiset of
+/// atoms, the empty monomial is the constant term.
+using Monomial = std::vector<uint32_t>;
+using Poly = std::map<Monomial, llvm::APInt>;
+
+struct Algebra {
+  unsigned w;
+  size_t maxTerms = 20000;
+  bool failed = false;
+
+  void addTerm(Poly &p, const Monomial &m, const llvm::APInt &c) {
+    if (c.isZero())
+      return;
+    auto [it, inserted] = p.try_emplace(m, c);
+    if (!inserted) {
+      it->second += c;
+      if (it->second.isZero())
+        p.erase(it);
+    }
+    if (p.size() > maxTerms)
+      failed = true;
+  }
+  Poly constant(const llvm::APInt &c) {
+    Poly p;
+    addTerm(p, {}, c);
+    return p;
+  }
+  Poly add(const Poly &a, const Poly &b) {
+    Poly r = a;
+    for (auto &[m, c] : b)
+      addTerm(r, m, c);
+    return r;
+  }
+  Poly mul(const Poly &a, const Poly &b) {
+    Poly r;
+    for (auto &[ma, ca] : a)
+      for (auto &[mb, cb] : b) {
+        if (failed)
+          return r;
+        Monomial m = ma;
+        m.insert(m.end(), mb.begin(), mb.end());
+        std::sort(m.begin(), m.end());
+        addTerm(r, m, ca * cb);
+      }
+    return r;
+  }
+
+  /// Variables of a purely bitwise tree (constants only 0 and -1), or
+  /// false if it is not one.
+  bool bitwiseVars(const Expr &e, std::vector<unsigned> &vars) {
+    switch (e.kind()) {
+    case Kind::Variable:
+      if (!llvm::is_contained(vars, e.variable()))
+        vars.push_back(e.variable());
+      return true;
+    case Kind::Constant:
+      return e.constant().isZero() || e.constant().isAllOnes();
+    case Kind::Not:
+    case Kind::And:
+    case Kind::Or:
+    case Kind::Xor:
+      for (unsigned i = 0; i < e.numOperands(); ++i)
+        if (!bitwiseVars(e.operand(i), vars))
+          return false;
+      return true;
+    default:
+      return false;
+    }
+  }
+  /// One bit of a purely bitwise tree under a 0/1 assignment.
+  bool evalBit(const Expr &e, const std::vector<unsigned> &vars,
+               uint32_t assign) {
+    switch (e.kind()) {
+    case Kind::Variable: {
+      auto pos = llvm::find(vars, e.variable()) - vars.begin();
+      return (assign >> pos) & 1;
+    }
+    case Kind::Constant:
+      return e.constant().isAllOnes();
+    case Kind::Not:
+      return !evalBit(e.operand(0), vars, assign);
+    case Kind::And: {
+      bool r = true;
+      for (unsigned i = 0; i < e.numOperands(); ++i)
+        r = r && evalBit(e.operand(i), vars, assign);
+      return r;
+    }
+    case Kind::Or: {
+      bool r = false;
+      for (unsigned i = 0; i < e.numOperands(); ++i)
+        r = r || evalBit(e.operand(i), vars, assign);
+      return r;
+    }
+    case Kind::Xor: {
+      bool r = false;
+      for (unsigned i = 0; i < e.numOperands(); ++i)
+        r = r != evalBit(e.operand(i), vars, assign);
+      return r;
+    }
+    default:
+      return false;
+    }
+  }
+
+  /// A bitwise tree as a linear combination of conjunctions (Moebius
+  /// inversion of its truth table); the empty conjunction is all ones, -1.
+  Poly linearize(const Expr &e, const std::vector<unsigned> &vars) {
+    unsigned k = vars.size();
+    std::vector<int64_t> coef(size_t(1) << k);
+    for (uint32_t s = 0; s < (1u << k); ++s) {
+      int64_t c = 0;
+      for (uint32_t t = s;; t = (t - 1) & s) {
+        int sign = (__builtin_popcount(s ^ t) & 1) ? -1 : 1;
+        c += sign * int64_t(evalBit(e, vars, t));
+        if (!t)
+          break;
+      }
+      coef[s] = c;
+    }
+    Poly p;
+    for (uint32_t s = 0; s < (1u << k); ++s) {
+      if (!coef[s])
+        continue;
+      llvm::APInt c(w, uint64_t(coef[s]), /*isSigned=*/true);
+      if (!s) {
+        addTerm(p, {}, -c); // the all-ones conjunction is -1
+        continue;
+      }
+      uint32_t mask = 0;
+      for (unsigned i = 0; i < k; ++i)
+        if ((s >> i) & 1)
+          mask |= 1u << vars[i];
+      addTerm(p, {mask}, c);
+    }
+    return p;
+  }
+
+  Poly canonical(const Expr &e) {
+    if (failed)
+      return {};
+    switch (e.kind()) {
+    case Kind::Constant:
+      return constant(e.constant().zextOrTrunc(w));
+    case Kind::Variable:
+      if (e.variable() >= 32) {
+        failed = true;
+        return {};
+      }
+      return Poly{{Monomial{1u << e.variable()}, llvm::APInt(w, 1)}};
+    case Kind::Add: {
+      Poly r;
+      for (unsigned i = 0; i < e.numOperands(); ++i)
+        r = add(r, canonical(e.operand(i)));
+      return r;
+    }
+    case Kind::Mul: {
+      Poly r = constant(llvm::APInt(w, 1));
+      for (unsigned i = 0; i < e.numOperands(); ++i)
+        r = mul(r, canonical(e.operand(i)));
+      return r;
+    }
+    case Kind::Pow: {
+      uint64_t k = e.operand(1).constant().getZExtValue();
+      if (k > 16) {
+        failed = true;
+        return {};
+      }
+      Poly base = canonical(e.operand(0)), r = constant(llvm::APInt(w, 1));
+      for (uint64_t i = 0; i < k; ++i)
+        r = mul(r, base);
+      return r;
+    }
+    case Kind::Not:
+    case Kind::And:
+    case Kind::Or:
+    case Kind::Xor: {
+      std::vector<unsigned> vars;
+      if (!bitwiseVars(e, vars) || vars.size() > 12) {
+        failed = true;
+        return {};
+      }
+      return linearize(e, vars);
+    }
+    default:
+      failed = true;
+      return {};
+    }
+  }
+};
+} // namespace
+
+bool proveEquivalent(const Expr &a, const Expr &b, unsigned timeoutMs) {
+  if (!a || !b || a.bitWidth() != b.bitWidth() || a.bitWidth() > 64)
+    return false;
+  // Exact algebra first: both sides as polynomials over conjunctions of
+  // variables. Equal polynomials mean equal functions (the converse need
+  // not hold, so a difference falls through to Z3).
+  {
+    Algebra alg{a.bitWidth()};
+    Poly pa = alg.canonical(a), pb = alg.canonical(b);
+    if (!alg.failed && pa == pb)
+      return true;
+  }
+  try {
+    z3::context ctx;
+    std::map<unsigned, z3::expr> vars;
+    z3::expr ea = toZ3(ctx, a, vars), eb = toZ3(ctx, b, vars);
+    z3::solver solver(ctx, "QF_BV");
+    z3::params p(ctx);
+    if (timeoutMs)
+      p.set("timeout", timeoutMs);
+    solver.set(p);
+    solver.add(ea != eb);
+    return solver.check() == z3::unsat;
+  } catch (const z3::exception &) {
+    return false;
+  }
 }
 
 } // namespace simba

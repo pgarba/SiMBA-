@@ -124,6 +124,26 @@ int main() {
         b32.sub(b32.add(a, c), b32.mul(b32.constant(2), b32.bitAnd(a, c))), 2,
         simba::Guarantee::Construction);
 
+  // Nonlinear at 64 bits: simplify at 16, import the result back, prove it.
+  {
+    Expr in64 = b.add(b.mul(b.bitAnd(x, y), b.bitOr(x, y)),
+                      b.mul(b.bitAnd(x, b.bitNot(y)), b.bitAnd(b.bitNot(x), y)));
+    simba::Result r16 = simba::simplify(b16.import(in64));
+    Expr back = r16.expr ? b.import(r16.expr) : Expr();
+    bool ok = back && simba::proveEquivalent(in64, back) &&
+              sameOnRandomInputs(in64, back, 2);
+    std::printf("%s import+prove: %s -> %s\n", ok ? "PASS" : "FAIL",
+                in64.str().c_str(), back ? back.str().c_str() : "-");
+    failures += !ok;
+    bool neq = !simba::proveEquivalent(b.add(x, y), b.sub(x, y)) &&
+               // One product term missing: the algebra sees a difference
+               // and Z3 cannot prove it either.
+               !simba::proveEquivalent(b.mul(b.bitAnd(x, y), b.bitOr(x, y)),
+                                       b.mul(x, y), 1000);
+    std::printf("%s prove rejects x+y == x-y\n", neq ? "PASS" : "FAIL");
+    failures += !neq;
+  }
+
   // Wider than the core handles.
   simba::ExprBuilder b128(128);
   simba::Result wide = simba::simplify(b128.add(b128.variable(0), b128.variable(1)));
